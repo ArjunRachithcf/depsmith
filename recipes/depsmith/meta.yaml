@@ -1,0 +1,29 @@
+{% set version = "0.1.0" %}
+package:
+  name: depsmith-cli
+  version: {{ version }}
+source:
+  path: ../..
+build:
+  number: 0
+  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -v
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - {{ compiler('rust') }}
+  host:
+    - python >=3.10
+    - pip
+    - maturin >=1.8,<2
+  run:
+    - python >=3.10
+test:
+  imports:
+    - depsmith
+  commands:
+    - depsmith --version
+    - python -c "from depsmith import UpdateOptions; assert UpdateOptions().upgrade is None"
+about:
+  license: MIT
+  license_file: LICENSE
+  summary: Review and apply repository dependency updates through Rust and Python

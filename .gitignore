@@ -1,0 +1,12 @@
+/target/
+/.venv/
+/.depsmith/
+__pycache__/
+*.pyc
+*.so
+*.pyd
+/dist/
+.claude/settings.local.json
+# Local working notes (not published)
+/HANDOFF.md
+/docs/progress.md

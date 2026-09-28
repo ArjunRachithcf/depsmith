@@ -1,0 +1,18 @@
+[package]
+name = "depsmith-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "depsmith"
+path = "src/main.rs"
+
+[dependencies]
+depsmith-core = { path = "../core" }
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true

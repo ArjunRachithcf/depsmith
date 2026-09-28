@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "depsmith"
+version = "0.1.0"
+description = "Review and apply dependency updates with a shared Rust CLI and Python API"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Rust", "Programming Language :: Python :: 3", "Typing :: Typed"]
+
+[project.scripts]
+depsmith = "depsmith.cli:main"
+
+[tool.maturin]
+manifest-path = "crates/python/Cargo.toml"
+python-source = "python"
+module-name = "depsmith._native"
+features = ["pyo3/extension-module"]
