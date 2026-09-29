@@ -28,9 +28,9 @@ The CLI and Python API are thin layers; all behaviour lives in the core.
    and scan baseline and candidate with one Grype database snapshot.
 6. **Propose:** the engine diffs the candidate files against the repository into
    a **proposal**, with dependency changes and per-target failures.
-7. **Apply:** check the fingerprints are unchanged, take the repository lock,
+7. **Apply:** take the repository lock, check the fingerprints are unchanged,
    journal the writes, and write exactly the proposed files; **recover**
-   completes or undoes an interrupted apply.
+   restores the original files of an interrupted apply.
 
 ## Adapter contract
 

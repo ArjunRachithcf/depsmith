@@ -10,7 +10,8 @@ expressions, script contents, runner labels and action inputs are left alone.
   the repository with `--upgrade --package owner/name` to move to one.
 - **Style:** exact tags stay exact tags, major tags such as `v4` stay major
   tags, and full commit SHAs stay SHAs. A trailing `# vX.Y.Z` comment equal to
-  the old tag is updated with the reference.
+  the old tag is updated with the reference; an updated SHA gets a
+  `# vX.Y.Z` comment naming its new release, replacing any existing comment.
 - **Unresolved references:** branches such as `@main`, SHAs that match no
   release, and missing alias tags stay unchanged and are listed under
   `unresolved` with the reason.

@@ -5,7 +5,7 @@ versions have been tested, and what each adapter supports.
 
 | Message or symptom | Cause and fix |
 |---|---|
-| Exit 2, "not supported by the … adapter" / "not applicable" | The requested option is unsupported for that target. Remove it, or follow the hint. `--cooldown-days` is rejected rather than ignored; use Pixi's `exclude-newer`. |
+| Exit 2, "not supported by the … adapter" / "cannot be enforced by the … adapter" | The requested option is unsupported for that target. Remove it, or follow the hint. `--cooldown-days` is rejected rather than ignored; use Pixi's `exclude-newer`. Other options that do not apply to a target (for example `--install` on a workflow) are only noted under validation. |
 | Exit 2, "not a direct dependency of any selected target" | `--package`/`--accept` names must be declared directly by a selected target. Check spelling; conda names are case-insensitive but distinguish `-` and `_`. |
 | "proposal is stale" | The repository changed after preparing (files, tags or the index). Prepare again. |
 | "another depsmith operation is in progress in this repository" | Another apply or recover holds `.depsmith/lock`. Wait for it; the lock is released automatically if that process died. |
