@@ -1,3 +1,6 @@
+//! Vulnerability scanning: inventories become CycloneDX SBOMs with verified
+//! identities, Grype scans the baseline and candidate with one database
+//! snapshot, and findings are classified and checked against policy.
 use crate::{process::run_env, Error, Package, Result, UpdateOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -6,12 +9,18 @@ use std::{collections::BTreeSet, fs, path::Path};
 /// Grype releases exercised by the native acceptance test.
 pub const GRYPE_TESTED_VERSIONS: &[&str] = &["0.119.0"];
 
+/// A reviewed statement that a package in one ecosystem is the same software
+/// as an upstream identity, used when no verifiable identity can be derived.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityMapping {
+    /// Ecosystem of the mapped package, such as `conda`.
     pub ecosystem: String,
+    /// Package name in that ecosystem.
     pub name: String,
+    /// Upstream identity as an unversioned Package URL, such as `pkg:pypi/urllib3`.
     pub purl: String,
+    /// HTTPS link to the provenance that establishes the mapping.
     pub evidence: String,
 }
 /// A documented, scoped exception for one advisory. Suppressed findings stay
@@ -27,45 +36,78 @@ pub struct Suppression {
     /// Target ID, e.g. `pixi:pixi.toml`.
     #[serde(default)]
     pub target: Option<String>,
+    /// Why the finding is acceptable; required.
     pub reason: String,
     /// Last day (`YYYY-MM-DD`, UTC) the suppression applies.
     #[serde(default)]
     pub expires: Option<String>,
 }
+/// One advisory matched to one inventory package.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
+    /// Advisory identifier, such as `GHSA-…` or `CVE-…`.
     pub id: String,
+    /// Advisory namespace reported by the scanner.
     pub namespace: String,
+    /// Name of the affected package.
     pub package: String,
+    /// Version of the affected package.
     pub version: String,
+    /// Severity as reported, such as `High`.
     pub severity: String,
+    /// The scanner's match details, kept verbatim.
     pub evidence: Value,
+    /// Package identity `ecosystem:name:platform`, used to compare baseline and
+    /// candidate findings and to scope suppressions.
     pub identity: String,
     /// `upstream`, or why the advisory's applicability to this build is unknown.
     pub applicability: String,
     /// Resolved artifact (for conda: channel, subdir and build).
     pub artifact: String,
+    /// The suppression that covers this finding, if any.
     pub suppression: Option<Suppression>,
 }
+/// Vulnerability findings for one target, classified against the baseline,
+/// with the coverage that could not be assessed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanReport {
+    /// Identifier of the scanned target.
     pub target: String,
+    /// Whether a baseline lock existed to compare against.
     pub baseline_available: bool,
     /// `baseline`, or `candidate-only` when no baseline lock exists.
     pub comparison: String,
+    /// Status of the vulnerability database snapshot used for both scans.
     pub database: Value,
     /// Every candidate finding; the lists below classify them against a baseline.
     pub findings: Vec<Finding>,
+    /// Findings in the candidate but not the baseline.
     pub introduced: Vec<Finding>,
+    /// Findings in the baseline but not the candidate.
     pub resolved: Vec<Finding>,
+    /// Findings in both.
     pub remaining: Vec<Finding>,
+    /// Baseline packages that could not be assessed (unassessed, not clean).
     pub unknown_before: Vec<Package>,
+    /// Candidate packages that could not be assessed (unassessed, not clean).
     pub unknown_after: Vec<Package>,
+    /// What the findings do and do not establish about applicability.
     pub applicability: String,
+    /// Configured suppressions that had expired and were not applied.
     pub expired_suppressions: Vec<Suppression>,
+    /// Whether the configured policy accepted the findings.
     pub policy_passed: bool,
 }
 
+/// Build a CycloneDX SBOM from an inventory. Packages get an upstream identity
+/// from a reviewed mapping, a PyPI artifact URL on files.pythonhosted.org, or
+/// an exact GitHub Actions release tag; anything else, and packages without a
+/// version, is returned as unassessed instead of being guessed.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] for mappings without an unversioned PURL and
+/// HTTPS evidence, or with duplicate entries.
 pub fn inventory_sbom(
     packages: &[Package],
     mappings: &[IdentityMapping],
@@ -219,6 +261,8 @@ fn findings(output: &str, sbom: &Value) -> Result<Vec<Finding>> {
 fn key(f: &Finding) -> (&str, &str, &str) {
     (&f.id, &f.namespace, &f.identity)
 }
+/// Order of a severity name from `negligible` (0) to `critical` (4), ignoring
+/// case; `None` for an unknown name.
 pub fn severity_rank(severity: &str) -> Option<u8> {
     match severity.to_ascii_lowercase().as_str() {
         "negligible" => Some(0),
@@ -278,6 +322,17 @@ impl Suppression {
     }
 }
 
+/// Scan the baseline (`before`, when a baseline lock exists) and the
+/// candidate (`after`) with one vulnerability database snapshot, classify the
+/// findings, apply suppressions and evaluate the `fail_on` policy. Without a
+/// baseline the report is `candidate-only` and nothing is classified as
+/// introduced.
+///
+/// # Errors
+///
+/// Returns [`Error::Operation`] when the scanner fails, its output is not
+/// valid JSON, or a finding cannot be traced to an inventory package, and
+/// [`Error::Invalid`] for invalid identity mappings.
 pub fn scan_pair(
     target: &str,
     before: Option<&[Package]>,

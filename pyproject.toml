@@ -25,3 +25,14 @@ python-source = "python"
 module-name = "depsmith._native"
 features = ["pyo3/extension-module"]
 include = [{ path = "LICENSE", format = "sdist" }, { path = "tests/python/*.py", format = "sdist" }]
+
+[tool.ruff.lint]
+# Docstrings are required on the public Python API (Google style).
+extend-select = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+"scripts/**" = ["D"]

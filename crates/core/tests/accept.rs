@@ -1,3 +1,5 @@
+//! Suggestion acceptance (`--accept`): validation of names and requirements
+//! before any package manager or network access.
 use depsmith_core::{Engine, Error, Proposal, UpdateOptions};
 use std::fs;
 use tempfile::tempdir;

@@ -1,3 +1,5 @@
+//! Repository configuration: the saved target selection and default options
+//! in `depsmith.toml`.
 use crate::{Error, Result, UpdateOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -5,11 +7,21 @@ use std::{fs, path::Path};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// Repository configuration read from `depsmith.toml`.
 pub struct Config {
+    /// Saved target selection, used when no targets are given explicitly.
     pub targets: Vec<String>,
+    /// Default options, overridden by explicit CLI or API options.
     pub options: UpdateOptions,
 }
 
+/// Read `depsmith.toml` under `root` (if present) and apply `overrides`, a
+/// JSON object of [`UpdateOptions`] fields that take precedence.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] for an invalid file, unknown fields or options
+/// that fail [`UpdateOptions::validate`].
 pub fn settings(root: &Path, overrides: &Value) -> Result<Config> {
     let path = root.join("depsmith.toml");
     let mut config: Config = if path.exists() {

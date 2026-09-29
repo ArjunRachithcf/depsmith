@@ -1,3 +1,6 @@
+//! Running package managers and scanners without a shell: timeouts,
+//! cancellation of whole process trees, and diagnostics with credentials
+//! redacted.
 use crate::{Error, Result};
 use regex::Regex;
 use std::{
@@ -21,6 +24,7 @@ pub fn cancel() {
     CANCELLED.store(true, Ordering::SeqCst);
 }
 
+/// Whether [`cancel`] has been requested.
 pub fn cancelled() -> bool {
     CANCELLED.load(Ordering::SeqCst)
 }
@@ -155,6 +159,8 @@ pub fn run(program: &str, args: &[String], cwd: &Path, timeout: u64) -> Result<S
     run_env(program, args, cwd, timeout, &[])
 }
 
+/// Like [`run`], with extra environment variables whose values are also
+/// redacted from diagnostics.
 pub fn run_env(
     program: &str,
     args: &[String],

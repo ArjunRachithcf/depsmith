@@ -1,3 +1,5 @@
+//! The GitHub Actions adapter with fixed releases: reference rewriting,
+//! major-line handling and unresolved-reference reporting.
 use depsmith_core::actions::{rewrite, rewrite_explained, Actions, Release, ReleaseSource};
 use depsmith_core::{Engine, UpdateOptions};
 

@@ -1,3 +1,4 @@
+//! Inventory identities for scanning and scanning without a lock.
 use depsmith_core::{
     actions::workflow_inventory,
     scan::{inventory_sbom, IdentityMapping},

@@ -1,3 +1,5 @@
+//! CLI behaviour through the built executable: JSON output, noninteractive
+//! selection errors, backend environment isolation and interrupt handling.
 use std::{fs, process::Command};
 use tempfile::tempdir;
 #[test]

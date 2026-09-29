@@ -1,3 +1,5 @@
+//! Running backends: environment, timeouts that kill whole process trees,
+//! and briefly busy executables.
 #[cfg(unix)]
 #[test]
 fn progress_environment_uses_the_boolean_value_accepted_by_pixi() {

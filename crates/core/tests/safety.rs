@@ -1,3 +1,5 @@
+//! Safety of preparing: discovery boundaries and never modifying the
+//! original repository.
 use depsmith_core::{discover, Engine, UpdateOptions};
 use std::fs;
 use tempfile::tempdir;

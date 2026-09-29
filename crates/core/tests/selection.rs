@@ -1,3 +1,4 @@
+//! Selecting direct dependencies (`--package`) against declared names.
 use depsmith_core::{Engine, Error, UpdateOptions};
 use std::fs;
 use tempfile::tempdir;

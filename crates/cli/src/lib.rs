@@ -1,3 +1,6 @@
+//! The `depsmith` command line: argument parsing, interactive target
+//! selection and confirmation, and human, Markdown or JSON reports with the
+//! documented exit statuses.
 use clap::{Parser, Subcommand};
 use depsmith_core::{self as core, Error, Result};
 use serde_json::{json, Value};
@@ -381,6 +384,13 @@ fn render(value: &Value, markdown: bool) -> String {
         serde_json::to_string_pretty(value).unwrap()
     }
 }
+/// Run the CLI with `args` (including the program name) and return the exit
+/// status: 0 success or no pending changes, 1 pending changes found by
+/// `check`, 2 invalid request, 3 tool or scanner failure, 4 policy rejection,
+/// 5 partial success, 130 interrupted.
+///
+/// Installs interrupt handlers that cancel running package managers, so call
+/// it only from a process the CLI owns, never from a library host.
 pub fn run_from(args: Vec<String>) -> u8 {
     // The CLI owns its process, so interrupts may cancel backend process trees.
     core::process::install_cancellation_handlers();

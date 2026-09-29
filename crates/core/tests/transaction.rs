@@ -1,3 +1,5 @@
+//! Applying proposals: stale inputs, shared files, partial application,
+//! locking and recovery of interrupted writes.
 use depsmith_core::{
     adapter::{Adapter, Candidate},
     apply, recover, Engine, Error, Proposal, Result, Target, UpdateOptions,

@@ -1,6 +1,14 @@
+//! Reading resolved packages from lockfiles.
 use crate::{Error, Package, Result};
 use serde_yaml::Value;
 
+/// The resolved packages of every environment and platform in a `pixi.lock`.
+/// Packages whose lock record has no version keep an empty version and are
+/// later reported as unassessed.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Invalid`] when the lock cannot be parsed.
 pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
     let value: Value = serde_yaml::from_str(text)
         .map_err(|e| Error::Operation(format!("invalid Pixi lockfile: {e}")))?;

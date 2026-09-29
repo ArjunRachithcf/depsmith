@@ -1,3 +1,7 @@
+//! The GitHub Actions adapter: updates remote `uses:` references (actions and
+//! reusable workflows) within their current major release line, preserving
+//! tag or commit-pin style, and suggests newer major lines separately. Local
+//! actions, Docker references and expressions are left unchanged.
 use crate::{
     adapter::{Adapter, Candidate, Capabilities, Support},
     Error, Result, Suggestion, Target, UpdateOptions,
@@ -13,9 +17,12 @@ use std::{
     time::Duration,
 };
 
+/// A published release of an action repository.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Release {
+    /// The release's tag, such as `v4.2.1`.
     pub tag: String,
+    /// Full commit SHA the tag points to.
     pub sha: String,
 }
 fn version(tag: &str) -> Option<Version> {
@@ -80,6 +87,14 @@ fn mutate_refs(value: &mut Value, replacements: &BTreeMap<String, String>) {
     }
 }
 
+/// Rewrite every remote reference to `repository` in workflow `source` to the
+/// newest release in its major line, or across major lines when `major` is set.
+/// Only the reference text changes; the rest of the YAML is kept byte for byte.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the YAML cannot be edited without changing
+/// unrelated content.
 pub fn rewrite(
     source: &str,
     repository: &str,
@@ -239,9 +254,14 @@ pub fn rewrite_explained(
     Ok((result, unresolved.into_iter().collect()))
 }
 
+/// Where release information comes from; replaceable in tests.
 pub trait ReleaseSource: Send + Sync {
+    /// Stable releases of `repository` (`owner/name`), with the commit each tag
+    /// points to.
     fn releases(&self, repository: &str, timeout: u64) -> Result<Vec<Release>>;
 }
+/// Releases from the GitHub REST API, authenticated with `GITHUB_TOKEN` or
+/// `GH_TOKEN` when set.
 pub struct GitHub;
 impl ReleaseSource for GitHub {
     fn releases(&self, repository: &str, timeout: u64) -> Result<Vec<Release>> {
@@ -313,7 +333,9 @@ impl ReleaseSource for GitHub {
             .collect())
     }
 }
+/// The GitHub Actions adapter.
 pub struct Actions {
+    /// Where releases are looked up.
     pub source: Box<dyn ReleaseSource>,
 }
 impl Default for Actions {
@@ -430,6 +452,12 @@ impl Adapter for Actions {
     }
 }
 
+/// The remote actions and reusable workflows a workflow file references, as
+/// packages of the `github-actions` ecosystem.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the workflow is not valid YAML.
 pub fn workflow_inventory(content: &str) -> Result<Vec<crate::Package>> {
     let parsed: Value = serde_yaml::from_str(content).map_err(|e| Error::Invalid(e.to_string()))?;
     Ok(refs(&parsed)

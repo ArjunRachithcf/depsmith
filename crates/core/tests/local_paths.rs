@@ -1,3 +1,4 @@
+//! Local path dependencies must stay inside the repository when staged.
 use depsmith_core::{Engine, UpdateOptions};
 use std::fs;
 use tempfile::tempdir;

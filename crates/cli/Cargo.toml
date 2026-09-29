@@ -22,3 +22,6 @@ tempfile.workspace = true
 [[test]]
 name = "e2e"
 harness = false
+
+[lints]
+workspace = true

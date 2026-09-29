@@ -1,3 +1,4 @@
+//! Capability declarations and their enforcement before any work starts.
 use depsmith_core::{
     adapter::{tool_status, Adapter, Candidate, Support},
     Engine, Error, Result, Target, UpdateOptions,

@@ -14,3 +14,6 @@ depsmith-core = { path = "../core" }
 serde_json.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 depsmith-cli = { path = "../cli" }
+
+[lints]
+workspace = true

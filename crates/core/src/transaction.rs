@@ -1,3 +1,5 @@
+//! Applying proposals: stale-input checks, an operation lock, and a journal
+//! that makes multi-file writes recoverable.
 use crate::{working_tree, ApplyResult, Error, FileChange, Proposal, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -86,6 +88,32 @@ fn write_journal(root: &Path, journal: &Journal) -> Result<()> {
     Ok(())
 }
 
+/// Write exactly the files of a reviewed proposal, without resolving again.
+///
+/// Every file must still hold the content the proposal was prepared from, and
+/// the repository's recorded inputs must be unchanged; otherwise nothing is
+/// written and the proposal is stale. Writes are journaled so that an
+/// interrupted apply can be completed or undone with [`recover`]. A proposal
+/// with failures is applied only when `allow_partial` is set, and then only
+/// for the targets that succeeded.
+///
+/// ```
+/// use depsmith_core::{apply, Engine, Error, UpdateOptions};
+///
+/// let repo = tempfile::tempdir()?;
+/// std::fs::write(repo.path().join("pixi.toml"), "[workspace]\nname = 'demo'\n")?;
+/// let options = UpdateOptions { pixi: "no-such-pixi".into(), ..Default::default() };
+/// let proposal = Engine::default().prepare(repo.path(), &["pixi:pixi.toml".into()], options)?;
+/// // A proposal with failed targets needs explicit partial application.
+/// assert!(matches!(apply(&proposal, false), Err(Error::Operation(_))));
+/// # Ok::<(), Error>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Stale`] when the repository changed since preparation,
+/// [`Error::Operation`] for failed targets without `allow_partial` or when
+/// another operation holds the repository lock, and I/O errors from writing.
 pub fn apply(proposal: &Proposal, allow_partial: bool) -> Result<ApplyResult> {
     if !proposal.failures.is_empty() && !allow_partial {
         return Err(Error::Operation(

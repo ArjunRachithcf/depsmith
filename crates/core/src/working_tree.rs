@@ -1,3 +1,6 @@
+//! The repository's working tree: listing files while respecting ignore
+//! rules, fingerprinting inputs, copying them into a stage, and rejecting
+//! paths that escape the repository.
 use crate::{Error, Result};
 use sha2::{Digest, Sha256};
 use std::{

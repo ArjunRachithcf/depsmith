@@ -1,3 +1,6 @@
+//! The Pixi adapter: resolves `pixi.toml` and Pixi-managed `pyproject.toml`
+//! targets with Pixi inside the stage, preserves Git pins, reports constraint
+//! suggestions with availability evidence, and rewrites accepted constraints.
 use crate::constraint::Excluded;
 use crate::{
     adapter::{pypi_key, Adapter, Candidate, Capabilities, NativeTool, Support},
@@ -6,6 +9,8 @@ use crate::{
 };
 use std::{collections::BTreeMap, fs, path::Path};
 
+/// The Pixi adapter. Targets are `pixi.toml` files and `pyproject.toml` files
+/// with a `[tool.pixi]` table; Pixi itself resolves in the stage.
 pub struct Pixi;
 impl Adapter for Pixi {
     fn manager(&self) -> &'static str {

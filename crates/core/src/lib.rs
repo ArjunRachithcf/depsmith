@@ -1,13 +1,42 @@
+//! depsmith's engine: discover targets in a repository, prepare a reviewable
+//! proposal by resolving each target inside a stage with its native package
+//! manager, optionally scan it for vulnerabilities, and apply it exactly as
+//! reviewed.
+//!
+//! The CLI and the Python API are thin layers over this crate. Terms follow
+//! the project glossary (`CONTEXT.md`).
+//!
+//! ```no_run
+//! use depsmith_core::{apply, discover, Engine, UpdateOptions};
+//!
+//! let repo = tempfile::tempdir()?;
+//! std::fs::write(repo.path().join("pixi.toml"), "[workspace]\nname = 'demo'\n")?;
+//! let targets: Vec<String> = discover(repo.path())?.into_iter().map(|t| t.id).collect();
+//!
+//! let options = UpdateOptions { pixi: "pixi".into(), ..Default::default() };
+//! let proposal = Engine::default().prepare(repo.path(), &targets, options)?;
+//! // Review proposal.changes, .dependencies and .suggestions, then write it:
+//! if proposal.failures.is_empty() && !proposal.changes.is_empty() {
+//!     apply(&proposal, false)?;
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+/// The adapter contract implemented by each package manager integration.
 pub mod adapter;
 mod conda_version;
 mod constraint;
 mod cutoff;
+/// Reading resolved packages from lockfiles.
 pub mod inventory;
 mod model;
 mod pep440;
+/// The Pixi adapter: `pixi.toml` and Pixi-managed `pyproject.toml` targets.
 pub mod pixi;
+/// Running package managers and scanners: timeouts, cancellation of whole
+/// process trees, and redacted diagnostics.
 pub mod process;
 mod pypi;
+/// Vulnerability scanning of inventories.
 pub mod scan;
 mod scm;
 mod working_tree;
@@ -15,6 +44,8 @@ use adapter::Adapter;
 pub use model::*;
 use std::{fs, path::Path};
 
+/// Discovers targets and prepares proposals with a set of adapters. The
+/// default engine has the Pixi and GitHub Actions adapters.
 pub struct Engine {
     adapters: Vec<Box<dyn Adapter>>,
 }
@@ -26,13 +57,29 @@ impl Default for Engine {
         ])
     }
 }
+/// Discover targets under `root` with the default adapters, skipping ignored,
+/// environment and cache directories.
+///
+/// ```
+/// let repo = tempfile::tempdir()?;
+/// std::fs::write(repo.path().join("pixi.toml"), "[workspace]\nname = 'demo'\n")?;
+/// let targets = depsmith_core::discover(repo.path())?;
+/// assert_eq!(targets[0].id, "pixi:pixi.toml");
+/// # Ok::<(), depsmith_core::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns an error when `root` cannot be read.
 pub fn discover(root: &Path) -> Result<Vec<Target>> {
     Engine::default().discover(root)
 }
 impl Engine {
+    /// An engine with exactly these adapters.
     pub fn new(adapters: Vec<Box<dyn Adapter>>) -> Self {
         Self { adapters }
     }
+    /// Declared capabilities of every adapter.
     pub fn capabilities(&self) -> Vec<adapter::Capabilities> {
         self.adapters.iter().map(|a| a.capabilities()).collect()
     }
@@ -118,6 +165,11 @@ impl Engine {
             .map(Box::as_ref)
             .expect("discovered targets always have a registered adapter")
     }
+    /// Discover targets under `root` with this engine's adapters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `root` cannot be read.
     pub fn discover(&self, root: &Path) -> Result<Vec<Target>> {
         let root = working_tree::canonical(root)?;
         let mut targets = vec![];
@@ -145,6 +197,32 @@ impl Engine {
         }
         Ok(targets)
     }
+    /// Prepare a proposal for the `selected` target identifiers under `root`.
+    ///
+    /// Options are validated and checked against each adapter's capabilities, and
+    /// `--package`/`--accept` names against the declared direct dependencies,
+    /// before any package manager runs. Each target is then resolved in its own
+    /// stage; the repository is not modified. A target that cannot be prepared is
+    /// recorded in [`Proposal::failures`] instead of failing the whole call.
+    ///
+    /// ```
+    /// use depsmith_core::{Engine, UpdateOptions};
+    ///
+    /// let repo = tempfile::tempdir()?;
+    /// std::fs::write(repo.path().join("pixi.toml"), "[workspace]\nname = 'demo'\n")?;
+    /// let options = UpdateOptions { pixi: "no-such-pixi".into(), ..Default::default() };
+    /// let proposal = Engine::default().prepare(repo.path(), &["pixi:pixi.toml".into()], options)?;
+    /// // The missing package manager is a per-target failure, not an error.
+    /// assert_eq!(proposal.failures.len(), 1);
+    /// assert_eq!(proposal.exit_code(true), 3);
+    /// # Ok::<(), depsmith_core::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] for invalid options, no or unknown targets,
+    /// unsupported requested capabilities, or selected packages that are not
+    /// direct dependencies of any selected target.
     pub fn prepare(
         &self,
         root: &Path,
@@ -379,9 +457,13 @@ impl Engine {
 mod transaction;
 pub use transaction::{apply, recover};
 
+/// The GitHub Actions adapter: remote `uses:` references in workflow files.
 pub mod actions;
+/// Repository configuration in `depsmith.toml`.
 pub mod config;
 
+/// Report adapter capabilities and whether each native tool is available and
+/// a tested version, for troubleshooting an installation.
 pub fn doctor(options: &UpdateOptions) -> serde_json::Value {
     let capabilities = Engine::default().capabilities();
     let mut tools = vec![];
@@ -434,6 +516,15 @@ fn tool_report(
     }
 }
 
+/// Scan the current locks of the `selected` targets under `root` without
+/// preparing an update. There is no baseline to compare against, so every
+/// report is `candidate-only`.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] for invalid options, no or unknown targets, or a
+/// target without a lock to scan, and scanner errors as described for
+/// [`scan::scan_pair`].
 pub fn scan_existing(
     root: &Path,
     selected: &[String],

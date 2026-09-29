@@ -1,3 +1,4 @@
+//! Saving a target selection to `depsmith.toml`.
 use depsmith_core::config::{save_targets, settings};
 use depsmith_core::Error;
 use std::fs;
