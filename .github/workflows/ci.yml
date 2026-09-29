@@ -3,6 +3,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
 permissions:
   contents: read
 jobs:
@@ -14,6 +19,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -24,12 +31,14 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked --no-fail-fast
       - run: cargo build --release --locked -p depsmith-cli
+      - run: python -c "import shutil; shutil.copyfile('LICENSE', 'target/release/LICENSE')"
       - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.os }}
           path: |
             target/release/depsmith
             target/release/depsmith.exe
+            target/release/LICENSE
           if-no-files-found: error
   wheels:
     strategy:
@@ -39,6 +48,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -51,6 +62,7 @@ jobs:
         run: python -c "import glob, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', *glob.glob('dist/*.whl')])"
       - run: python -m unittest discover -s tests/python -v
       - run: depsmith --version
+      - run: python scripts/check-distributions.py dist
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.os }}
@@ -60,6 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -69,6 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
@@ -77,3 +93,32 @@ jobs:
         with:
           name: sdist
           path: dist/*.tar.gz
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install from the sdist
+        run: python -c "import glob, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', *glob.glob('dist/*.tar.gz')])"
+      - run: python -m unittest discover -s tests/python -v
+      - run: depsmith --version
+      - run: python scripts/check-distributions.py dist
+  conda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          conda-build-version: '*'
+          python-version: '3.12'
+      - name: Build and install-test conda package
+        shell: bash -el {0}
+        run: conda build --override-channels -c conda-forge --no-anaconda-upload --output-folder conda-dist recipes/depsmith
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conda-linux-64
+          path: conda-dist/linux-64/*.conda
+          if-no-files-found: error

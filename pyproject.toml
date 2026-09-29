@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.8,<2"]
+requires = ["maturin>=1.9.3,<2"]
 build-backend = "maturin"
 
 [project]
@@ -9,7 +9,12 @@ description = "Review and apply dependency updates with a shared Rust CLI and Py
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+license-files = ["LICENSE"]
 classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Rust", "Programming Language :: Python :: 3", "Typing :: Typed"]
+
+[project.urls]
+Repository = "https://github.com/ArjunRachithcf/depsmith"
+Issues = "https://github.com/ArjunRachithcf/depsmith/issues"
 
 [project.scripts]
 depsmith = "depsmith.cli:main"
@@ -19,3 +24,4 @@ manifest-path = "crates/python/Cargo.toml"
 python-source = "python"
 module-name = "depsmith._native"
 features = ["pyo3/extension-module"]
+include = [{ path = "LICENSE", format = "sdist" }, { path = "tests/python/*.py", format = "sdist" }]

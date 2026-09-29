@@ -14,16 +14,21 @@ requirements:
   host:
     - python >=3.10
     - pip
-    - maturin >=1.8,<2
+    - maturin >=1.9.3,<2
   run:
     - python >=3.10
 test:
+  source_files:
+    - tests/python
   imports:
     - depsmith
   commands:
     - depsmith --version
+    - python -m unittest discover -s tests/python -v
     - python -c "from depsmith import UpdateOptions; assert UpdateOptions().upgrade is None"
 about:
+  home: https://github.com/ArjunRachithcf/depsmith
+  dev_url: https://github.com/ArjunRachithcf/depsmith
   license: MIT
   license_file: LICENSE
   summary: Review and apply repository dependency updates through Rust and Python

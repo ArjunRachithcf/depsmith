@@ -230,14 +230,15 @@ GRYPE=/path/to/grype cargo test -p depsmith-core --test grype_live -- --ignored
 Python tests require the built package installed in the active interpreter.
 Set `PIXI=/path/to/pixi` to enable the native Python update/apply test.
 
-[CI](.github/workflows/ci.yml) builds CLI artifacts and wheels for Linux/Windows
-x86-64 and macOS Intel/ARM, plus an sdist. Its wheel job follows
-[the Maturin action](https://github.com/PyO3/maturin-action). These remote jobs
-have not yet run. The [local conda recipe](recipes/depsmith/README.md)
-is a starting point for conda-forge packaging, not a published feedstock.
+[CI](.github/workflows/ci.yml) builds and tests CLI artifacts and wheels for
+Linux/Windows x86-64 and macOS Intel/ARM, checks Rust 1.89, installs from the
+sdist, and builds/tests the local Linux conda package. The initial platform
+matrix passed; native integration tests remain opt-in. See the
+[release guide](docs/releasing.md) for validation scope, manual publication
+setup, and GitHub Actions/provider-neutral update-job examples.
 
-See the [design plan](docs/plan.md). Remaining release work: running the CI
-matrix (including Windows process-tree and locking behaviour, which is only
-verified on Linux so far), validating release wheels and conda installation,
-constraint suggestions for `[project]` dependencies in `pyproject.toml`, and an
-interactive prompt for accepting suggestions.
+The [local conda recipe](recipes/depsmith/README.md) is a starting point for
+conda-forge packaging, not a published feedstock. See the [design plan](docs/plan.md).
+Remaining first-release work includes constraint suggestions for `[project]`
+dependencies in `pyproject.toml`, Windows process-tree acceptance, and conda-forge
+release prerequisites. Interactive suggestion prompts are deferred.

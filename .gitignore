@@ -10,3 +10,4 @@ __pycache__/
 # Local working notes (not published)
 /HANDOFF.md
 /docs/progress.md
+/conda-dist/

@@ -1,0 +1,102 @@
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (for example v0.1.0)
+        required: true
+        type: string
+      publish:
+        description: Publish to PyPI and create a draft GitHub release after validation
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate tag and package versions
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, tomllib
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:[a-zA-Z0-9.+-]*)', tag):
+              raise SystemExit('Expected a version tag such as v0.1.0')
+          sha = subprocess.check_output(['git', 'rev-parse', '--verify', f'refs/tags/{tag}^{{commit}}'], text=True).strip()
+          def manifest(path):
+              return tomllib.loads(subprocess.check_output(['git', 'show', f'{sha}:{path}'], text=True))
+          recipe = subprocess.check_output(['git', 'show', f'{sha}:recipes/depsmith/meta.yaml'], text=True)
+          match = re.search(r'^\{% set version = "([^"]+)" %\}$', recipe, re.MULTILINE)
+          if not match:
+              raise SystemExit('Cannot read conda recipe version')
+          versions = [manifest('Cargo.toml')['workspace']['package']['version'], manifest('pyproject.toml')['project']['version'], match.group(1)]
+          if versions != [tag[1:]] * 3:
+              raise SystemExit(f'Tag {tag} disagrees with Rust/Python/conda versions: {versions}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'sha={sha}\n')
+          PY
+  build:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
+  pypi:
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+  github-release:
+    if: inputs.publish
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Bundle standalone executables
+        run: |
+          mkdir assets
+          for directory in artifacts/cli-*; do
+            name="${directory##*/}"
+            chmod +x "$directory"/depsmith*
+            tar -czf "assets/depsmith-${name#cli-}.tar.gz" -C "$directory" .
+          done
+          find artifacts -type f \( -name '*.whl' -o -name '*.conda' -o -name '*.tar.gz' \) -exec cp {} assets/ \;
+          (cd assets && sha256sum * > SHA256SUMS)
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release create "$RELEASE_TAG" assets/* --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
