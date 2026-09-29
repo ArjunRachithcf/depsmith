@@ -1,7 +1,7 @@
 # depsmith
 
 [![CI](https://github.com/ArjunRachithcf/depsmith/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ArjunRachithcf/depsmith/actions/workflows/ci.yml?query=branch%3Amain)
-[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FArjunRachithcf%2Fdepsmith%2Fbadges%2Fcoverage.json)](https://github.com/ArjunRachithcf/depsmith/actions/workflows/coverage.yml?query=branch%3Amain)
+[![Coverage](https://codecov.io/gh/ArjunRachithcf/depsmith/graph/badge.svg?branch=main)](https://codecov.io/gh/ArjunRachithcf/depsmith)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Prepare, review, and apply repository dependency updates with a Rust CLI and a
