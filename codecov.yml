@@ -1,0 +1,32 @@
+# Codecov policy (https://docs.codecov.com/docs/codecov-yaml). Reviewed like code.
+coverage:
+  status:
+    # Whole-project coverage may not drop more than 1 point below the base commit.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    # Lines changed by a pull request must be at least 80% covered.
+    patch:
+      default:
+        target: 80%
+flags:
+  rust:
+    carryforward: true
+  python:
+    carryforward: true
+component_management:
+  individual_components:
+    - component_id: core
+      paths: [crates/core/**]
+    - component_id: cli
+      paths: [crates/cli/**]
+    - component_id: python
+      name: python bindings
+      paths: [crates/python/**, python/**]
+# coverage.py reports the installed package path; map it to the source tree.
+fixes:
+  - "depsmith/::python/depsmith/"
+comment:
+  layout: "condensed_header, diff, flags, components, condensed_files"
+  require_changes: false
