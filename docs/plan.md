@@ -158,3 +158,13 @@ After this release, add **conda-family**, then **uv** adapters. Conda locking us
 **C. Release.** Tag `v0.1.0` on `main`, run the Release workflow without publishing, review the artifacts, then publish only with explicit approval. PyPI trusted publishing and the `pypi`/`release` environments are configured beforehand. Submit the conda-forge feedstock afterwards.
 
 **Later (0.2 and beyond).** Configured post-install project checks, commit-pin conversion suggestions, interactive per-suggestion acceptance prompts, shared scanner database downloads, then conda-family and uv adapters.
+
+## 7. Documentation automation
+
+Documentation is kept consistent with the code by reviewed sources plus AI passes that can only edit documentation.
+
+- **Vocabulary:** `CONTEXT.md` is the glossary every document and prompt follows.
+- **API docs:** public Rust items and the public Python API are documented (`missing_docs`, Ruff `D`, `cargo doc` with warnings as errors); examples on the main entry points run as tests. On each same-repository pull request, the Docstrings workflow finds changed symbols with codebase-memory-mcp and lets Claude (Sonnet 5) update only their doc comments and docstrings. A docs-only guard, the doc build and Ruff must pass before a docs GitHub App commits the change to the PR branch (GitHub-signed, re-running CI); `docs-guard` re-checks every such commit.
+- **Wiki:** `docs/wiki/` is reviewed in pull requests and mirrored to the GitHub wiki on every push to `main`. The CLI and Python API reference pages are generated from `--help` and docstrings; `docs-reference` fails when they are stale or a wiki link is broken.
+- **README and wiki drift:** a nightly job has Claude (Opus 5.5) audit `README.md` and `docs/wiki/` against the code and opens or updates one pull request when something drifted; failures open a tracking issue.
+- **Credentials:** a Claude subscription token and the docs GitHub App's key are repository secrets; fork pull requests never receive them.

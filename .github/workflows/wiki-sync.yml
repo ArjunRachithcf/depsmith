@@ -1,0 +1,37 @@
+# Mirrors docs/wiki/ (reviewed in pull requests) to the GitHub wiki.
+name: Wiki sync
+on:
+  push:
+    branches: [main]
+    paths: ['docs/wiki/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/create-github-app-token@v3
+        id: app
+        with:
+          app-id: ${{ vars.DOCS_APP_ID }}
+          private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+      - name: Mirror docs/wiki to the wiki repository
+        env:
+          TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          git clone --quiet "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" "$RUNNER_TEMP/wiki"
+          rsync -a --delete --exclude .git docs/wiki/ "$RUNNER_TEMP/wiki/"
+          cd "$RUNNER_TEMP/wiki"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git -c user.name='depsmith-docs-bot[bot]' -c user.email='depsmith-docs-bot[bot]@users.noreply.github.com' \
+            commit --quiet -m "Sync from ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+          git push --quiet origin HEAD

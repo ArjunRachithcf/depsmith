@@ -1,0 +1,104 @@
+# Nightly: Claude (Opus 5.5) audits README.md and docs/wiki/ against the code
+# (.github/prompts/docs-drift.md) after regenerating the references, and opens
+# or updates one pull request from branch docs/nightly-drift when anything
+# drifted. Failures open or update a docs-drift issue.
+name: Docs drift
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: docs-drift
+  cancel-in-progress: false
+env:
+  CBM_VERSION: v0.11.0
+  BRANCH: docs/nightly-drift
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install codebase-memory-mcp (checksum-verified)
+        run: |
+          base="https://github.com/DeusData/codebase-memory-mcp/releases/download/${CBM_VERSION}"
+          archive=codebase-memory-mcp-linux-amd64-portable.tar.gz
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$base/$archive"
+          curl -fsSLO "$base/checksums.txt"
+          sha256sum --check --ignore-missing checksums.txt
+          mkdir -p cbm && tar -xzf "$archive" -C cbm codebase-memory-mcp
+          echo "$RUNNER_TEMP/cbm" >> "$GITHUB_PATH"
+      - name: Build the package and regenerate references
+        run: |
+          python -m pip install .
+          python scripts/gen-reference.py
+          codebase-memory-mcp cli --quiet index_repository "{\"repo_path\":\"$PWD\"}" > /dev/null
+          {
+            echo 'prompt<<PROMPT_EOF'
+            cat .github/prompts/docs-drift.md
+            echo 'PROMPT_EOF'
+          } >> "$GITHUB_ENV"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: ${{ env.prompt }}
+          claude_args: >-
+            --model claude-opus-5-5
+            --max-turns 80
+            --allowedTools "Read,Edit,MultiEdit,Glob,Grep,mcp__codebase-memory-mcp"
+            --mcp-config '{"mcpServers":{"codebase-memory-mcp":{"command":"codebase-memory-mcp"}}}'
+      - name: Keep edits within the documentation it may change
+        run: |
+          python scripts/gen-reference.py --check
+          if git status --porcelain | awk '{print $2}' | grep -Ev '^(README\.md|docs/wiki/[^/]+\.md|docs/[^/]+\.md)$'; then
+            echo "::error::The drift pass changed files outside README.md and docs/"
+            exit 1
+          fi
+      - uses: actions/create-github-app-token@v3
+        id: app
+        with:
+          app-id: ${{ vars.DOCS_APP_ID }}
+          private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+      - name: Open or update the drift pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No drift."
+            exit 0
+          fi
+          base=$(git rev-parse HEAD)
+          # Point the branch at main, then add one GitHub-signed commit.
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" -f sha="$base" -F force=true \
+            || gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$base"
+          python scripts/commit-via-api.py "$GITHUB_REPOSITORY" "$BRANCH" "$base" "Fix documentation drift"
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create --head "$BRANCH" --base main --title "Fix documentation drift" \
+              --body "Nightly audit of README.md and docs/wiki/ against the code (.github/prompts/docs-drift.md). Review before merging."
+          fi
+  alert:
+    needs: audit
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Open or update the tracking issue
+        run: |
+          label=docs-drift
+          gh label create "$label" --color FBCA04 --description "Nightly docs drift job failures" --force
+          body="Nightly docs drift job failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          issue=$(gh issue list --label "$label" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$issue" ]; then gh issue comment "$issue" --body "$body"; else gh issue create --label "$label" --title "Nightly docs drift job is failing" --body "$body"; fi
