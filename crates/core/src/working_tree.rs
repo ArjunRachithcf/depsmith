@@ -13,7 +13,7 @@ pub(crate) fn relative(path: &Path) -> Result<()> {
             .any(|c| !matches!(c, Component::Normal(_)))
     {
         return Err(Error::Invalid(format!(
-            "expected a relative path inside workspace: {}",
+            "expected a relative path inside the repository: {}",
             path.display()
         )));
     }

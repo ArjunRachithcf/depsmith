@@ -185,7 +185,7 @@ fn run_with_env(
 ) -> Result<String> {
     // Keep authentication (e.g. GIT_ASKPASS/GIT_SSH_COMMAND), but do not let a
     // caller's repository context redirect build-hook Git operations out of
-    // the disposable workspace. Git config injection can set core.worktree too.
+    // the stage. Git config injection can set core.worktree too.
     for key in [
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_CONFIG",

@@ -10,7 +10,7 @@ pub mod process;
 mod pypi;
 pub mod scan;
 mod scm;
-mod workspace;
+mod working_tree;
 use adapter::Adapter;
 pub use model::*;
 use std::{fs, path::Path};
@@ -119,9 +119,9 @@ impl Engine {
             .expect("discovered targets always have a registered adapter")
     }
     pub fn discover(&self, root: &Path) -> Result<Vec<Target>> {
-        let root = workspace::canonical(root)?;
+        let root = working_tree::canonical(root)?;
         let mut targets = vec![];
-        for path in workspace::files(&root)? {
+        for path in working_tree::files(&root)? {
             if !matches!(
                 path.extension().and_then(|e| e.to_str()),
                 Some("toml" | "yml" | "yaml")
@@ -151,7 +151,7 @@ impl Engine {
         selected: &[String],
         options: UpdateOptions,
     ) -> Result<Proposal> {
-        let root = workspace::canonical(root)?;
+        let root = working_tree::canonical(root)?;
         options.validate()?;
         let found = self.discover(&root)?;
         if selected.is_empty() {
@@ -229,7 +229,7 @@ impl Engine {
                 unmatched.join(", ")
             )));
         }
-        let inputs = workspace::fingerprint(&root)?;
+        let inputs = working_tree::fingerprint(&root)?;
         let mut proposal = Proposal {
             schema_version: 1,
             root: root.clone(),
@@ -265,7 +265,7 @@ impl Engine {
                 None => options.clone(),
             };
             let stage = tempfile::tempdir()?;
-            workspace::stage(&root, stage.path(), &proposal.inputs)?;
+            working_tree::stage(&root, stage.path(), &proposal.inputs)?;
             let mut conflict = false;
             let prepared = adapter
                 .prepare(stage.path(), &target, &options)
@@ -290,8 +290,8 @@ impl Engine {
                     }
                     let mut changes = vec![];
                     for path in candidate.files {
-                        workspace::output_path(stage.path(), &path)?;
-                        workspace::output_path(&root, &path)?;
+                        working_tree::output_path(stage.path(), &path)?;
+                        working_tree::output_path(&root, &path)?;
                         let after = fs::read_to_string(stage.path().join(&path))?;
                         let before = if root.join(&path).exists() {
                             Some(fs::read_to_string(root.join(&path))?)

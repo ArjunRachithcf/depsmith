@@ -98,14 +98,14 @@ pub struct Candidate {
     pub validation: Vec<String>,
 }
 
-/// Adapters only receive a disposable workspace. All source writes belong to the engine.
+/// Adapters only prepare inside a disposable stage. All source writes belong to the engine.
 pub trait Adapter: Send + Sync {
     fn manager(&self) -> &'static str;
     fn detects(&self, relative: &Path, content: &str) -> bool;
     fn capabilities(&self) -> Capabilities {
         Capabilities::undeclared(self.manager())
     }
-    fn inventory(&self, _workspace: &Path, _target: &Target) -> Result<Vec<Package>> {
+    fn inventory(&self, _root: &Path, _target: &Target) -> Result<Vec<Package>> {
         Err(crate::Error::Invalid(
             "inventory not supported by this adapter".into(),
         ))
@@ -124,10 +124,5 @@ pub trait Adapter: Send + Sync {
             self.manager()
         )))
     }
-    fn prepare(
-        &self,
-        workspace: &Path,
-        target: &Target,
-        options: &UpdateOptions,
-    ) -> Result<Candidate>;
+    fn prepare(&self, stage: &Path, target: &Target, options: &UpdateOptions) -> Result<Candidate>;
 }

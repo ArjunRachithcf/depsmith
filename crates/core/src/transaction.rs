@@ -1,4 +1,4 @@
-use crate::{workspace, ApplyResult, Error, FileChange, Proposal, Result};
+use crate::{working_tree, ApplyResult, Error, FileChange, Proposal, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
@@ -14,7 +14,7 @@ struct Journal {
 }
 
 fn safe_path(root: &Path, path: &Path) -> Result<()> {
-    workspace::relative(path)?;
+    working_tree::relative(path)?;
     let mut current = root.to_path_buf();
     for part in path.components() {
         current.push(part);
@@ -61,7 +61,7 @@ fn operation_lock(root: &Path) -> Result<fs::File> {
     match file.try_lock() {
         Ok(()) => Ok(file),
         Err(fs::TryLockError::WouldBlock) => Err(Error::Operation(
-            "another depsmith operation is in progress on this workspace".into(),
+            "another depsmith operation is in progress in this repository".into(),
         )),
         Err(fs::TryLockError::Error(error)) => Err(error.into()),
     }
@@ -95,14 +95,14 @@ pub fn apply(proposal: &Proposal, allow_partial: bool) -> Result<ApplyResult> {
     let root = &proposal.root;
     let _lock = operation_lock(root)?;
     for change in &proposal.changes {
-        workspace::output_path(root, &change.path)?;
+        working_tree::output_path(root, &change.path)?;
         if content(&root.join(&change.path))? != change.before {
             return Err(Error::Stale(change.path.display().to_string()));
         }
     }
-    if workspace::fingerprint(root)? != proposal.inputs {
+    if working_tree::fingerprint(root)? != proposal.inputs {
         return Err(Error::Stale(
-            "workspace inputs changed since preparation".into(),
+            "repository inputs changed since preparation".into(),
         ));
     }
     if proposal.changes.is_empty() {
@@ -122,7 +122,7 @@ pub fn apply(proposal: &Proposal, allow_partial: bool) -> Result<ApplyResult> {
         },
     )?;
     for change in &proposal.changes {
-        workspace::output_path(root, &change.path)?;
+        working_tree::output_path(root, &change.path)?;
         if content(&root.join(&change.path))? != change.before {
             return Err(Error::Stale(
                 "file changed during apply; recover before retrying".into(),
@@ -144,7 +144,7 @@ pub fn apply(proposal: &Proposal, allow_partial: bool) -> Result<ApplyResult> {
 
 /// Restore an interrupted operation only if all files still contain old or proposed bytes.
 pub fn recover(root: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let root = workspace::canonical(root)?;
+    let root = working_tree::canonical(root)?;
     let _lock = operation_lock(&root)?;
     safe_path(&root, Path::new(".depsmith/journal.json"))?;
     let journal_path = root.join(".depsmith/journal.json");
@@ -161,7 +161,7 @@ pub fn recover(root: &Path) -> Result<Vec<std::path::PathBuf>> {
         return Err(Error::Invalid("unknown journal version".into()));
     }
     for change in &journal.changes {
-        workspace::output_path(&root, &change.path)?;
+        working_tree::output_path(&root, &change.path)?;
         if change.path.starts_with(".depsmith") || change.path.starts_with(".git") {
             return Err(Error::Invalid("journal targets internal metadata".into()));
         }

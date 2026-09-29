@@ -39,9 +39,9 @@ impl Adapter for Pixi {
                     .and_then(|v| v.get("tool")?.get("pixi").cloned())
                     .is_some())
     }
-    fn inventory(&self, workspace: &Path, target: &Target) -> Result<Vec<crate::Package>> {
+    fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<crate::Package>> {
         let relative = target.manifest.parent().unwrap().join("pixi.lock");
-        let text = match fs::read_to_string(workspace.join(&relative)) {
+        let text = match fs::read_to_string(root.join(&relative)) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::Invalid(format!(
                     "{}: no {} to scan; create it with `pixi lock` or `depsmith update`",
@@ -90,28 +90,23 @@ impl Adapter for Pixi {
         }
         Ok(selected)
     }
-    fn prepare(
-        &self,
-        workspace: &Path,
-        target: &Target,
-        options: &UpdateOptions,
-    ) -> Result<Candidate> {
-        let manifest = workspace.join(&target.manifest);
+    fn prepare(&self, stage: &Path, target: &Target, options: &UpdateOptions) -> Result<Candidate> {
+        let manifest = stage.join(&target.manifest);
         let content = fs::read_to_string(&manifest)?;
         let parsed: toml::Value = content
             .parse()
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-        validate_paths(&parsed, manifest.parent().unwrap(), workspace)?;
-        for relative in crate::workspace::files(workspace)? {
+        validate_paths(&parsed, manifest.parent().unwrap(), stage)?;
+        for relative in crate::working_tree::files(stage)? {
             if relative
                 .file_name()
                 .is_some_and(|n| n == "pyproject.toml" || n == "pixi.toml")
             {
-                let path = workspace.join(relative);
+                let path = stage.join(relative);
                 let value: toml::Value = fs::read_to_string(&path)?
                     .parse()
                     .map_err(|e| Error::Invalid(format!("invalid staged manifest: {e}")))?;
-                validate_paths(&value, path.parent().unwrap(), workspace)?;
+                validate_paths(&value, path.parent().unwrap(), stage)?;
             }
         }
         if options.upgrade && options.packages.is_empty() {
@@ -127,7 +122,7 @@ impl Adapter for Pixi {
         };
         let availability = Availability {
             manifest: &manifest,
-            workspace,
+            stage,
             options,
             indexes: crate::pypi::index_urls(pixi),
             exclude_newer: ["workspace", "project"]
@@ -146,14 +141,14 @@ impl Adapter for Pixi {
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
         let constraints = manifest_constraints(&edited, pyproject);
         let lock = target.manifest.parent().unwrap().join("pixi.lock");
-        let before_text = fs::read_to_string(workspace.join(&lock)).ok();
+        let before_text = fs::read_to_string(stage.join(&lock)).ok();
         let before = before_text
             .as_deref()
             .map(crate::inventory::pixi_inventory)
             .transpose()?
             .unwrap_or_default();
         // Source metadata can require a solve environment even for a lock-only
-        // update. Let Pixi create it inside this disposable workspace; forcing
+        // update. Let Pixi create it inside this disposable stage; forcing
         // --no-install rejects editable/dynamic PyPI dependencies.
         let mut args = vec![
             if options.upgrade { "upgrade" } else { "update" }.into(),
@@ -161,8 +156,8 @@ impl Adapter for Pixi {
             manifest.to_string_lossy().into(),
         ];
         args.extend(options.packages.clone());
-        run(&options.pixi, &args, workspace, options.timeout_seconds)?;
-        let after_text = fs::read_to_string(workspace.join(&lock))?;
+        run(&options.pixi, &args, stage, options.timeout_seconds)?;
+        let after_text = fs::read_to_string(stage.join(&lock))?;
         let after = crate::inventory::pixi_inventory(&after_text)?;
         if !options.refresh_git
             && git_artifacts(&before) != git_artifacts(&after)
@@ -185,10 +180,10 @@ impl Adapter for Pixi {
                 manifest.to_string_lossy().into(),
                 "--check".into(),
             ],
-            workspace,
+            stage,
             options.timeout_seconds,
         )?;
-        if fs::read_to_string(workspace.join(&lock))? != after_text {
+        if fs::read_to_string(stage.join(&lock))? != after_text {
             return Err(Error::Operation(
                 "lock consistency check changed the candidate".into(),
             ));
@@ -204,7 +199,7 @@ impl Adapter for Pixi {
                     manifest.to_string_lossy().into(),
                     "--locked".into(),
                 ],
-                workspace,
+                stage,
                 options.timeout_seconds,
             )?;
             validation.push(format!(
@@ -472,7 +467,7 @@ const REVIEW: &str =
 /// `pixi search`) and PyPI indexes.
 struct Availability<'a> {
     manifest: &'a Path,
-    workspace: &'a Path,
+    stage: &'a Path,
     options: &'a UpdateOptions,
     indexes: Vec<String>,
     /// The manifest's native release-age policy, applied to every lookup.
@@ -491,7 +486,7 @@ impl Availability<'_> {
         let output = run(
             &self.options.pixi,
             &args,
-            self.workspace,
+            self.stage,
             self.options.timeout_seconds,
         )?;
         serde_json::from_str(&output)
@@ -854,35 +849,35 @@ fn rewrite_requirements(
     Ok((document.to_string(), edits))
 }
 
-fn validate_paths(value: &toml::Value, base: &Path, workspace: &Path) -> Result<()> {
+fn validate_paths(value: &toml::Value, base: &Path, stage: &Path) -> Result<()> {
     // Compare canonical spellings on both sides (e.g. macOS /var -> /private/var).
-    let workspace = &crate::workspace::canonical(workspace)?;
+    let stage = &crate::working_tree::canonical(stage)?;
     match value {
         toml::Value::Table(t) => {
             for (key, v) in t {
                 if key == "path" {
                     if let Some(p) = v.as_str() {
                         let resolved =
-                            crate::workspace::canonical(&base.join(p)).map_err(|_| {
+                            crate::working_tree::canonical(&base.join(p)).map_err(|_| {
                                 Error::Invalid(format!("local path unavailable in stage: {p}"))
                             })?;
-                        if !resolved.starts_with(workspace) {
+                        if !resolved.starts_with(stage) {
                             return Err(Error::Invalid(format!(
-                                "local dependency escapes workspace: {p}"
+                                "local dependency escapes the repository: {p}"
                             )));
                         }
                     }
                 }
-                validate_paths(v, base, workspace)?;
+                validate_paths(v, base, stage)?;
             }
         }
         toml::Value::Array(a) => {
             for v in a {
-                validate_paths(v, base, workspace)?;
+                validate_paths(v, base, stage)?;
             }
         }
         toml::Value::String(s) if s.contains("file:") => {
-            return Err(Error::Invalid("file: dependency URLs are not relocatable; use a workspace-relative path declaration".into()));
+            return Err(Error::Invalid("file: dependency URLs are not relocatable; use a repository-relative path declaration".into()));
         }
         toml::Value::String(s) => {
             if let Some((_, location)) = s.split_once(" @ ") {
@@ -891,10 +886,10 @@ fn validate_paths(value: &toml::Value, base: &Path, workspace: &Path) -> Result<
                     || location.as_bytes().get(1) == Some(&b':')
                 {
                     let resolved =
-                        crate::workspace::canonical(&base.join(location)).map_err(|_| {
+                        crate::working_tree::canonical(&base.join(location)).map_err(|_| {
                             Error::Invalid("dependency reference is unavailable in stage".into())
                         })?;
-                    if !resolved.starts_with(workspace) {
+                    if !resolved.starts_with(stage) {
                         return Err(Error::Invalid("dependency reference escapes stage".into()));
                     }
                 }

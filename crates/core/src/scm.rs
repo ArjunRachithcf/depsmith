@@ -55,7 +55,7 @@ fn no_symlinks(path: &Path) -> Result<()> {
 
 impl Snapshot {
     pub fn read(root: &Path) -> Result<Option<Self>> {
-        Self::read_canonical(&crate::workspace::canonical(root)?)
+        Self::read_canonical(&crate::working_tree::canonical(root)?)
     }
 
     fn read_canonical(root: &Path) -> Result<Option<Self>> {
@@ -65,7 +65,7 @@ impl Snapshot {
                 let marker = parent.join(".git");
                 marker.is_file() || marker.join("HEAD").exists()
             }) {
-                return Err(Error::Invalid("workspace is inside a Git repository; select its repository root for SCM staging".into()));
+                return Err(Error::Invalid("the selected root is inside a Git repository; select the repository root for SCM staging".into()));
             }
             return Ok(None);
         }
@@ -78,11 +78,11 @@ impl Snapshot {
                 .ok_or_else(|| Error::Invalid("invalid Git worktree pointer".into()))?;
             let path = root.join(path);
             no_symlinks(&path)?;
-            crate::workspace::canonical(&path)?
+            crate::working_tree::canonical(&path)?
         } else {
             marker
         };
-        // Some managed workspaces expose an empty .git mount.
+        // Some managed development environments expose an empty .git mount.
         if !git_dir.join("HEAD").try_exists()? {
             return Ok(None);
         }
@@ -91,7 +91,7 @@ impl Snapshot {
             no_symlinks(&common_file)?;
             let path = git_dir.join(fs::read_to_string(&common_file)?.trim());
             no_symlinks(&path)?;
-            crate::workspace::canonical(&path)?
+            crate::working_tree::canonical(&path)?
         } else {
             git_dir.clone()
         };
@@ -180,7 +180,7 @@ impl Snapshot {
                     .ok_or_else(|| Error::Invalid("Git directory must be UTF-8".into()))?,
                 "--work-tree",
                 root.to_str()
-                    .ok_or_else(|| Error::Invalid("workspace must be UTF-8".into()))?,
+                    .ok_or_else(|| Error::Invalid("repository root must be UTF-8".into()))?,
                 "ls-files",
                 "--cached",
                 "--stage",
@@ -198,8 +198,8 @@ impl Snapshot {
                 ));
             }
             let path = PathBuf::from(path);
-            crate::workspace::relative(&path)?;
-            crate::workspace::output_path(root, &path)?;
+            crate::working_tree::relative(&path)?;
+            crate::working_tree::output_path(root, &path)?;
             if root.join(&path).try_exists()? {
                 paths.push(path);
             }

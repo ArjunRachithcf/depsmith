@@ -378,16 +378,11 @@ impl Adapter for Actions {
             })
             .collect())
     }
-    fn inventory(&self, workspace: &Path, target: &Target) -> Result<Vec<crate::Package>> {
-        workflow_inventory(&fs::read_to_string(workspace.join(&target.manifest))?)
+    fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<crate::Package>> {
+        workflow_inventory(&fs::read_to_string(root.join(&target.manifest))?)
     }
-    fn prepare(
-        &self,
-        workspace: &Path,
-        target: &Target,
-        options: &UpdateOptions,
-    ) -> Result<Candidate> {
-        let file = workspace.join(&target.manifest);
+    fn prepare(&self, stage: &Path, target: &Target, options: &UpdateOptions) -> Result<Candidate> {
+        let file = stage.join(&target.manifest);
         let mut content = fs::read_to_string(&file)?;
         let before = workflow_inventory(&content)?;
         let parsed: Value =
