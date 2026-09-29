@@ -93,7 +93,7 @@ jobs:
             tar -czf "assets/depsmith-${name#cli-}.tar.gz" -C "$directory" .
           done
           find artifacts -type f \( -name '*.whl' -o -name '*.conda' -o -name '*.tar.gz' \) -exec cp {} assets/ \;
-          (cd assets && sha256sum * > SHA256SUMS)
+          (cd assets && sha256sum -- * > SHA256SUMS)
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
