@@ -33,3 +33,38 @@ pub fn settings(root: &Path, overrides: &Value) -> Result<Config> {
     config.options.validate()?;
     Ok(config)
 }
+
+/// Save a target selection as `targets` in `depsmith.toml`, creating the file if
+/// needed and keeping its other content and comments. An existing non-empty
+/// selection is never replaced.
+pub fn save_targets(root: &Path, targets: &[String]) -> Result<()> {
+    let path = root.join("depsmith.toml");
+    let text = if path.exists() {
+        fs::read_to_string(&path)?
+    } else {
+        String::new()
+    };
+    let mut document: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| Error::Invalid(format!("invalid depsmith.toml: {e}")))?;
+    let existing = document.get("targets").and_then(|t| t.as_array());
+    if existing.is_some_and(|t| !t.is_empty()) {
+        return Err(Error::Invalid(
+            "depsmith.toml already selects targets; edit it to change the selection".into(),
+        ));
+    }
+    let array: toml_edit::Array = targets.iter().map(String::as_str).collect();
+    match document.get_mut("targets").and_then(|t| t.as_value_mut()) {
+        // Keep the comment/whitespace around an existing empty selection.
+        Some(value) => {
+            let decor = value.decor().clone();
+            *value = array.into();
+            *value.decor_mut() = decor;
+        }
+        None => {
+            document.insert("targets", toml_edit::value(array));
+        }
+    }
+    fs::write(path, document.to_string())?;
+    Ok(())
+}

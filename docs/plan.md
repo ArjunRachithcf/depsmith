@@ -46,7 +46,7 @@ Store optional repository configuration in `depsmith.toml`. Explicit command/API
 
 Discover supported projects beneath the selected root, respecting ignored directories and avoiding environment/cache directories. Show nested projects, overlapping ownership, and untracked candidate manifests explicitly.
 
-Interactive users confirm targets and are asked whether to save the selection as `targets` in `depsmith.toml` (default no; formatting preserved; overwriting an existing selection needs a second confirmation). JSON, noninteractive and Python use never save. CI and Python callers supply targets or use saved configuration; ambiguity is an error.
+Interactive users confirm targets and are asked whether to save the selection as `targets` in `depsmith.toml` (default no; formatting preserved). Prompting happens only when no selection is saved, so an existing selection is never replaced. JSON, noninteractive and Python use never save. CI and Python callers supply targets or use saved configuration; ambiguity is an error.
 
 Support whole-project updates and selected direct dependencies. Show all resulting transitive changes.
 

@@ -159,6 +159,10 @@ timeout_seconds = 300
 upgrade = false
 ```
 
+When no targets are configured, an interactive CLI run asks about each
+discovered target and then offers to save the selection as `targets` (default
+no). The rest of the file and its comments are kept; an existing selection is
+never replaced. JSON, `--non-interactive` and Python use never prompt or save.
 Explicit API/CLI settings override repository settings. Native Pixi project
 configuration is staged even when `.pixi/` is ignored. The common cooldown flag
 currently returns an unsupported error; configure Pixi's native policy instead.

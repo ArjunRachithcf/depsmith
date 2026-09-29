@@ -3,7 +3,7 @@ use depsmith_core::{self as core, Error, Result};
 use serde_json::{json, Value};
 use std::{
     io::{self, IsTerminal, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 #[derive(Parser)]
@@ -118,6 +118,24 @@ fn confirm(message: &str) -> Result<bool> {
         "y" | "yes"
     ))
 }
+/// Ask about each discovered target, then offer to save a non-empty selection
+/// as `targets` in `depsmith.toml`.
+fn select_interactively(
+    root: &Path,
+    targets: &[core::Target],
+    prompt: &mut dyn FnMut(&str) -> Result<bool>,
+) -> Result<Vec<String>> {
+    let mut selected = vec![];
+    for target in targets {
+        if prompt(&format!("Select {}?", target.id))? {
+            selected.push(target.id.clone());
+        }
+    }
+    if !selected.is_empty() && prompt("Save this selection to depsmith.toml?")? {
+        core::config::save_targets(root, &selected)?;
+    }
+    Ok(selected)
+}
 fn execute(cli: &Cli) -> Result<(Value, u8)> {
     if cli.json && cli.markdown {
         return Err(Error::Invalid("choose JSON or Markdown output".into()));
@@ -148,11 +166,7 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
     };
     let interactive = io::stdin().is_terminal() && !cli.non_interactive && !cli.json;
     if selected.is_empty() && interactive {
-        for target in &targets {
-            if confirm(&format!("Select {}?", target.id))? {
-                selected.push(target.id.clone());
-            }
-        }
+        selected = select_interactively(&cli.root, &targets, &mut confirm)?;
     }
     if selected.is_empty() {
         return Err(Error::Invalid(
@@ -401,4 +415,81 @@ pub fn run_from(args: Vec<String>) -> u8 {
         return 130;
     }
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn targets(ids: &[&str]) -> Vec<core::Target> {
+        ids.iter()
+            .map(|id| core::Target {
+                id: id.to_string(),
+                manager: "pixi".into(),
+                manifest: id.split_once(':').unwrap().1.into(),
+            })
+            .collect()
+    }
+
+    /// Answers prompts in order and records the questions asked.
+    fn scripted<'a>(
+        answers: &'a [bool],
+        asked: &'a mut Vec<String>,
+    ) -> impl FnMut(&str) -> Result<bool> + 'a {
+        let mut answers = answers.iter();
+        move |question| {
+            asked.push(question.to_owned());
+            Ok(*answers.next().expect("unexpected prompt"))
+        }
+    }
+
+    #[test]
+    fn interactive_selection_is_saved_only_when_confirmed() {
+        let root = tempfile::tempdir().unwrap();
+        let found = targets(&["pixi:a/pixi.toml", "pixi:b/pixi.toml"]);
+        let mut asked = vec![];
+        let selected = select_interactively(
+            root.path(),
+            &found,
+            &mut scripted(&[false, true, true], &mut asked),
+        )
+        .unwrap();
+        assert_eq!(selected, ["pixi:b/pixi.toml"]);
+        assert_eq!(
+            asked,
+            [
+                "Select pixi:a/pixi.toml?",
+                "Select pixi:b/pixi.toml?",
+                "Save this selection to depsmith.toml?",
+            ]
+        );
+        let saved = core::config::settings(root.path(), &json!({})).unwrap();
+        assert_eq!(saved.targets, ["pixi:b/pixi.toml"]);
+
+        let other = tempfile::tempdir().unwrap();
+        let mut asked = vec![];
+        select_interactively(
+            other.path(),
+            &found,
+            &mut scripted(&[true, false, false], &mut asked),
+        )
+        .unwrap();
+        assert!(!other.path().join("depsmith.toml").exists());
+    }
+
+    #[test]
+    fn declining_every_target_asks_nothing_about_saving() {
+        let root = tempfile::tempdir().unwrap();
+        let mut asked = vec![];
+        let selected = select_interactively(
+            root.path(),
+            &targets(&["pixi:pixi.toml"]),
+            &mut scripted(&[false], &mut asked),
+        )
+        .unwrap();
+        assert!(selected.is_empty());
+        assert_eq!(asked.len(), 1);
+        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+    }
 }
