@@ -9,8 +9,16 @@ A native tool that owns a kind of dependency declaration and resolves it, such a
 _Avoid_: Backend (except for the running process), tool
 
 **Ecosystem**:
-The namespace a package identity belongs to, such as conda, PyPI or GitHub Actions; one package manager can resolve several ecosystems.
+The namespace a package identity belongs to, such as conda, PyPI, crates or GitHub Actions, with its own version scheme, registries and upstream identities; one package manager can resolve several ecosystems, and several managers can share one.
 _Avoid_: Manager, registry
+
+**Registry**:
+A source of an ecosystem's published releases, such as a conda channel, a PyPI index, the crates.io index or an action's GitHub releases.
+_Avoid_: Repository, feed, index (except in an ecosystem's own terms)
+
+**Version scheme**:
+An ecosystem's rules for ordering versions and matching requirements, such as PEP 440, conda version ordering or semantic versioning.
+_Avoid_: Version format
 
 **Target**:
 One manifest or workflow file that depsmith updates, identified as `manager:path`, together with the files its package manager owns.
@@ -74,6 +82,10 @@ _Avoid_: Unknown action
 A declared version requirement for a direct dependency, such as a pin or an upper bound.
 _Avoid_: Spec, range
 
+**Declaration**:
+The place in a target's files where a direct dependency and its constraint are written, which acceptance rewrites.
+_Avoid_: Entry, line
+
 **Suggestion**:
 An evidence-backed report that a constraint excludes a newer release or is otherwise worth revisiting, naming the affected declaration.
 _Avoid_: Recommendation, warning
@@ -92,6 +104,10 @@ _Avoid_: Quarantine, delay
 
 **Git pin**:
 A dependency resolved from a specific Git commit, preserved unless a Git refresh is explicitly requested.
+
+**Commit pin**:
+A workflow reference to an action by its full commit SHA, usually with a comment naming the release it corresponds to.
+_Avoid_: SHA tag, hash reference
 
 ## Applying
 
