@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "check-docs-only.py"
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "check-docs-only.py"
 spec = importlib.util.spec_from_file_location("check_docs_only", SCRIPT)
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
