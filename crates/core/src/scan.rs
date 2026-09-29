@@ -133,40 +133,14 @@ pub fn inventory_sbom(
             return Err(Error::Invalid("duplicate identity mapping".into()));
         }
     }
-    let normalized_name = regex::Regex::new("[-_.]+").unwrap();
-    let exact_tag = regex::Regex::new(r"^v?[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
     for (index, package) in packages.iter().enumerate() {
         let mapping = mappings
             .iter()
             .find(|m| m.ecosystem == package.ecosystem && m.name == package.name);
         let identity = if let Some(mapping) = mapping {
             Some((mapping.purl.clone(), mapping.evidence.clone()))
-        } else if package.ecosystem == "pypi"
-            && reqwest::Url::parse(&package.artifact)
-                .ok()
-                .is_some_and(|url| {
-                    url.scheme() == "https" && url.host_str() == Some("files.pythonhosted.org")
-                })
-        {
-            let name = normalized_name
-                .replace_all(&package.name.to_ascii_lowercase(), "-")
-                .into_owned();
-            Some((
-                format!("pkg:pypi/{name}"),
-                "native lockfile PyPI identity".into(),
-            ))
-        } else if package.ecosystem == "github-actions"
-            && package
-                .artifact
-                .starts_with(&format!("https://github.com/{}@", package.name))
-            && exact_tag.is_match(&package.version)
-        {
-            Some((
-                format!("pkg:github/{}", package.name),
-                "GitHub workflow uses repository and exact release tag".into(),
-            ))
         } else {
-            None
+            crate::ecosystem::native_identity(package)
         };
         let Some((identity, evidence)) = identity else {
             unknown.push(package.clone());
@@ -184,7 +158,7 @@ pub fn inventory_sbom(
             "name":package.name, "version":package.version, "purl":format!("{identity}@{}", package.version),
             "properties":[{"name":"depsmith:identity-evidence", "value":evidence},
                 {"name":"depsmith:original", "value":serde_json::to_string(package).unwrap()},
-                {"name":"depsmith:build-applicability", "value": if package.ecosystem == "conda" {"unknown: upstream advisory does not establish conda build/backport status"} else {"upstream package"}}]}));
+                {"name":"depsmith:build-applicability", "value": crate::ecosystem::build_caveat(&package.ecosystem).unwrap_or("upstream package")}]}));
     }
     Ok((
         json!({"bomFormat":"CycloneDX", "specVersion":"1.5", "version":1, "components":components}),
@@ -234,12 +208,9 @@ fn findings(output: &str, sbom: &Value) -> Result<Vec<Finding>> {
                 package: package.name.clone(),
                 version: package.version,
                 evidence: m["matchDetails"].clone(),
-                applicability: if package.ecosystem == "conda" {
-                    "unknown: upstream advisory does not establish conda build/backport status"
-                        .into()
-                } else {
-                    "upstream".into()
-                },
+                applicability: crate::ecosystem::build_caveat(&package.ecosystem)
+                    .unwrap_or("upstream")
+                    .into(),
                 artifact: package.artifact.clone(),
                 suppression: None,
                 identity: format!(

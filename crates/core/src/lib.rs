@@ -26,7 +26,9 @@ pub mod adapter;
 mod conda_version;
 pub mod conformance;
 mod constraint;
+pub mod constraints;
 mod cutoff;
+mod ecosystem;
 /// Reading resolved packages from lockfiles.
 pub mod inventory;
 mod model;
@@ -383,7 +385,32 @@ impl Engine {
             working_tree::stage(&root, stage.path(), &proposal.inputs, &proposal.layout)?;
             let mut conflict = false;
             let prepared = adapter
-                .prepare(stage.path(), &target, &options)
+                .availability(stage.path(), &target)
+                .and_then(|config| {
+                    // Acceptance edits the staged declarations before the
+                    // adapter resolves; suggestions describe the result.
+                    let lookup = constraints::Lookup::new(stage.path(), &options, config);
+                    let accepted = constraints::accept(
+                        adapter,
+                        stage.path(),
+                        &target,
+                        &options.accept,
+                        &lookup,
+                    )?;
+                    let resolve = UpdateOptions {
+                        accept: vec![],
+                        ..options.clone()
+                    };
+                    let mut candidate = adapter.prepare(stage.path(), &target, &resolve)?;
+                    candidate.validation.splice(0..0, accepted);
+                    candidate.suggestions.extend(constraints::suggest(
+                        adapter,
+                        stage.path(),
+                        &target,
+                        &lookup,
+                    )?);
+                    Ok(candidate)
+                })
                 .and_then(|candidate| {
                     if options.scan {
                         let report = scan::scan_pair(

@@ -6,7 +6,8 @@
 //! offline.
 use crate::{
     adapter::{Adapter, AdapterSpec, Support},
-    working_tree, Engine, Error, UpdateOptions,
+    constraints::Edit,
+    ecosystem, working_tree, Engine, Error, UpdateOptions,
 };
 use std::{collections::BTreeSet, fs, path::Path};
 
@@ -37,6 +38,7 @@ pub fn check(make: &dyn Fn() -> Box<dyn Adapter>, fixture: &Fixture) -> Result<(
     };
     check_discovery_and_staging(make, &spec, fixture, root.path(), &mut problems);
     check_selection(make, &spec, fixture, root.path(), &mut problems);
+    check_declarations(make, &spec, fixture, &mut problems);
     check_capability_enforcement(make, &spec, fixture, root.path(), &mut problems);
     if problems.is_empty() {
         Ok(())
@@ -172,6 +174,102 @@ fn check_selection(
             }
             Err(error) => problems.push(format!("select({requested}) failed: {error}")),
         }
+    }
+}
+
+/// Declarations must name existing files and round-trip through rewrite: an
+/// identity edit leaves every file byte-identical, and a new requirement is
+/// what the adapter then declares at the same place. Required of adapters
+/// that support `--accept`; the fixture must declare a versioned dependency.
+fn check_declarations(
+    make: &dyn Fn() -> Box<dyn Adapter>,
+    spec: &AdapterSpec,
+    fixture: &Fixture,
+    problems: &mut Vec<String>,
+) {
+    if spec.capabilities.suggestion_acceptance != Support::Supported {
+        return;
+    }
+    let adapter = make();
+    let fresh = || -> Result<_, String> {
+        let root = write_fixture(fixture).map_err(|e| format!("cannot write fixture: {e}"))?;
+        let targets = Engine::new(vec![make()])
+            .discover(root.path())
+            .map_err(|e| format!("discovery failed: {e}"))?;
+        let target = targets
+            .into_iter()
+            .find(|t| t.id == fixture.target)
+            .ok_or_else(|| format!("discovery did not find {}", fixture.target))?;
+        let declarations = adapter
+            .declarations(root.path(), &target)
+            .map_err(|e| format!("declarations failed: {e}"))?;
+        Ok((root, target, declarations))
+    };
+    let snapshot = |root: &Path| -> Vec<(String, Option<Vec<u8>>)> {
+        fixture
+            .files
+            .iter()
+            .map(|(path, _)| (path.clone(), fs::read(root.join(path)).ok()))
+            .collect()
+    };
+    let (root, target, declarations) = match fresh() {
+        Ok(found) => found,
+        Err(problem) => return problems.push(problem),
+    };
+    for declaration in &declarations {
+        if !root.path().join(&declaration.file).is_file() {
+            problems.push(format!(
+                "declaration of {} names a missing file {}",
+                declaration.package,
+                declaration.file.display()
+            ));
+        }
+    }
+    let versioned: Vec<_> = declarations
+        .iter()
+        .filter(|d| !d.requirement.is_empty())
+        .collect();
+    let Some(first) = versioned.first() else {
+        return problems
+            .push("--accept is supported but the fixture declares no versioned dependency".into());
+    };
+    let before = snapshot(root.path());
+    let identity: Vec<Edit> = versioned
+        .iter()
+        .map(|d| Edit {
+            declaration: (*d).clone(),
+            requirement: d.requirement.clone(),
+        })
+        .collect();
+    match adapter.rewrite(root.path(), &target, &identity) {
+        Ok(()) if snapshot(root.path()) == before => {}
+        Ok(()) => problems.push("rewriting declarations unchanged changed the files".into()),
+        Err(error) => problems.push(format!("rewrite failed: {error}")),
+    }
+    let (root, target, _) = match fresh() {
+        Ok(found) => found,
+        Err(problem) => return problems.push(problem),
+    };
+    let requirement = ecosystem::scheme(&first.ecosystem)
+        .and_then(|scheme| scheme.restyle(&first.requirement, "999999"))
+        .unwrap_or_else(|| "==999999".into());
+    let edit = Edit {
+        declaration: (*first).clone(),
+        requirement: requirement.clone(),
+    };
+    if let Err(error) = adapter.rewrite(root.path(), &target, &[edit]) {
+        return problems.push(format!("rewrite failed: {error}"));
+    }
+    let mut expected = declarations.clone();
+    let index = declarations.iter().position(|d| d == *first).unwrap();
+    expected[index].requirement = requirement;
+    match adapter.declarations(root.path(), &target) {
+        Ok(after) if after == expected => {}
+        Ok(after) => problems.push(format!(
+            "after rewriting {} to {}, declarations were {after:?}; expected {expected:?}",
+            first.package, expected[index].requirement
+        )),
+        Err(error) => problems.push(format!("declarations failed after rewrite: {error}")),
     }
 }
 

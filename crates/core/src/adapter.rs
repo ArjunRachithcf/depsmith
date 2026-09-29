@@ -1,7 +1,10 @@
 //! The adapter contract: how a package manager integration declares its
 //! capabilities, selects direct dependencies, and prepares a candidate inside
 //! a stage for the engine to review and apply.
-use crate::{Package, Result, Suggestion, Target, Unresolved, UpdateOptions};
+use crate::{
+    constraints::{AvailabilityConfig, Declaration, Edit},
+    Package, Result, Suggestion, Target, Unresolved, UpdateOptions,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -203,6 +206,26 @@ pub trait Adapter: Send + Sync {
             "package selection is not supported by the {} adapter",
             self.manager()
         )))
+    }
+    /// Where the target declares its direct dependencies and their
+    /// constraints, read from `root` (the repository or a stage). The engine
+    /// derives suggestions and `--accept` edits from these. The default
+    /// declares nothing.
+    fn declarations(&self, _root: &Path, _target: &Target) -> Result<Vec<Declaration>> {
+        Ok(vec![])
+    }
+    /// Apply accepted requirements to the target's files in `stage`, keeping
+    /// everything else (comments, layout, other declarations) unchanged.
+    fn rewrite(&self, _stage: &Path, _target: &Target, _edits: &[Edit]) -> Result<()> {
+        Err(crate::Error::Invalid(format!(
+            "the {} adapter cannot rewrite declarations",
+            self.manager()
+        )))
+    }
+    /// Where the target's packages are published and which release-age policy
+    /// applies, for availability evidence. The default consults no registry.
+    fn availability(&self, _root: &Path, _target: &Target) -> Result<AvailabilityConfig> {
+        Ok(AvailabilityConfig::default())
     }
     /// Resolve `target` inside `stage`, a disposable copy of the repository, and
     /// return the candidate. Must not write outside `stage`.

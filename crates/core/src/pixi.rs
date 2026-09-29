@@ -1,13 +1,13 @@
 //! The Pixi adapter: resolves `pixi.toml` and Pixi-managed `pyproject.toml`
 //! targets with Pixi inside the stage, preserves Git pins, reports constraint
 //! suggestions with availability evidence, and rewrites accepted constraints.
-use crate::constraint::Excluded;
 use crate::{
     adapter::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
     },
+    constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
     process::run,
-    Error, Result, Suggestion, Target, UpdateOptions,
+    Error, Result, Target, UpdateOptions,
 };
 use std::{collections::BTreeMap, fs, path::Path};
 
@@ -76,36 +76,77 @@ impl Adapter for Pixi {
         target: &Target,
         requested: &[String],
     ) -> Result<BTreeMap<String, String>> {
-        let parsed: toml::Value = fs::read_to_string(root.join(&target.manifest))?
-            .parse()
-            .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-        let mut declared = vec![];
-        if target
-            .manifest
-            .file_name()
-            .is_some_and(|n| n == "pyproject.toml")
-        {
-            if let Some(pixi) = parsed.get("tool").and_then(|t| t.get("pixi")) {
-                dependency_names(pixi, &mut declared);
-            }
-            project_names(&parsed, &mut declared);
-        } else {
-            dependency_names(&parsed, &mut declared);
-        }
+        let declared = self.declarations(root, target)?;
         let mut selected = BTreeMap::new();
         for request in requested {
-            let found = declared.iter().find(|(name, pypi)| {
-                if *pypi {
-                    pypi_key(name) == pypi_key(request)
+            let found = declared.iter().find(|d| {
+                if d.ecosystem == "pypi" {
+                    pypi_key(&d.package) == pypi_key(request)
                 } else {
-                    name.eq_ignore_ascii_case(request.trim())
+                    d.package.eq_ignore_ascii_case(request.trim())
                 }
             });
-            if let Some((name, _)) = found {
-                selected.insert(request.clone(), name.clone());
+            if let Some(declaration) = found {
+                selected.insert(request.clone(), declaration.package.clone());
             }
         }
         Ok(selected)
+    }
+    fn declarations(&self, root: &Path, target: &Target) -> Result<Vec<Declaration>> {
+        let text = fs::read_to_string(root.join(&target.manifest))?;
+        manifest_declarations(&text, is_pyproject(target), &target.manifest)
+    }
+    fn rewrite(&self, stage: &Path, target: &Target, edits: &[Edit]) -> Result<()> {
+        if edits.is_empty() {
+            return Ok(());
+        }
+        if let Some(edit) = edits.iter().find(|e| e.declaration.file != target.manifest) {
+            return Err(Error::Invalid(format!(
+                "{}: {} is not this target's manifest",
+                target.id,
+                edit.declaration.file.display()
+            )));
+        }
+        let path = stage.join(&target.manifest);
+        let text = rewrite_manifest(&fs::read_to_string(&path)?, is_pyproject(target), edits)?;
+        fs::write(path, text)?;
+        Ok(())
+    }
+    /// Conda packages are looked up with `pixi search` against the manifest's
+    /// channels, PyPI packages on its indexes, both under its `exclude-newer`.
+    fn availability(&self, root: &Path, target: &Target) -> Result<AvailabilityConfig> {
+        let parsed: toml::Value = fs::read_to_string(root.join(&target.manifest))?
+            .parse()
+            .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
+        let pixi = if is_pyproject(target) {
+            parsed
+                .get("tool")
+                .and_then(|v| v.get("pixi"))
+                .ok_or_else(|| Error::Invalid(format!("{}: no [tool.pixi] table", target.id)))?
+        } else {
+            &parsed
+        };
+        let registries = BTreeMap::from([
+            (
+                "conda".to_owned(),
+                RegistryConfig::PixiSearch {
+                    manifest: target.manifest.clone(),
+                },
+            ),
+            (
+                "pypi".to_owned(),
+                RegistryConfig::PypiSimple {
+                    indexes: crate::pypi::index_urls(pixi),
+                },
+            ),
+        ]);
+        Ok(AvailabilityConfig {
+            registries,
+            exclude_newer: ["workspace", "project"]
+                .iter()
+                .find_map(|table| pixi.get(table)?.get("exclude-newer"))
+                .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned)),
+        })
     }
     fn prepare(&self, stage: &Path, target: &Target, options: &UpdateOptions) -> Result<Candidate> {
         let manifest = stage.join(&target.manifest);
@@ -132,32 +173,6 @@ impl Adapter for Pixi {
                 "constraint changes require explicitly selected direct packages".into(),
             ));
         }
-        let pyproject = target.manifest.file_name().unwrap() == "pyproject.toml";
-        let pixi = if pyproject {
-            parsed.get("tool").and_then(|v| v.get("pixi")).unwrap()
-        } else {
-            &parsed
-        };
-        let availability = Availability {
-            manifest: &manifest,
-            stage,
-            options,
-            indexes: crate::pypi::index_urls(pixi),
-            exclude_newer: ["workspace", "project"]
-                .iter()
-                .find_map(|table| pixi.get(table)?.get("exclude-newer"))
-                .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned)),
-        };
-        let (content, accepted) =
-            accept_suggestions(&content, pyproject, target, options, &availability)?;
-        if !accepted.is_empty() {
-            fs::write(&manifest, &content)?;
-        }
-        // Suggestions describe the manifest as it will be after acceptance.
-        let edited: toml::Value = content
-            .parse()
-            .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-        let constraints = manifest_constraints(&edited, pyproject);
         let lock = target.manifest.parent().unwrap().join("pixi.lock");
         let before_text = fs::read_to_string(stage.join(&lock)).ok();
         let before = before_text
@@ -206,8 +221,7 @@ impl Adapter for Pixi {
                 "lock consistency check changed the candidate".into(),
             ));
         }
-        let mut validation = accepted;
-        validation.push(format!("{}: resolved and lock-consistent", target.id));
+        let mut validation = vec![format!("{}: resolved and lock-consistent", target.id)];
         if options.install {
             run(
                 &options.tool("pixi"),
@@ -225,10 +239,9 @@ impl Adapter for Pixi {
                 target.id
             ));
         }
-        let suggestions = suggest(constraints, target, &availability);
         Ok(Candidate {
             files: vec![target.manifest.clone(), lock],
-            suggestions,
+            suggestions: vec![],
             unresolved: vec![],
             before,
             baseline_available: before_text.is_some(),
@@ -237,6 +250,13 @@ impl Adapter for Pixi {
         })
     }
 }
+fn is_pyproject(target: &Target) -> bool {
+    target
+        .manifest
+        .file_name()
+        .is_some_and(|n| n == "pyproject.toml")
+}
+
 fn git_artifacts(packages: &[crate::Package]) -> std::collections::BTreeSet<String> {
     packages
         .iter()
@@ -244,126 +264,106 @@ fn git_artifacts(packages: &[crate::Package]) -> std::collections::BTreeSet<Stri
         .map(|p| p.artifact.clone())
         .collect()
 }
-/// Whether a conda or PEP 440 requirement can exclude a newer release. Every `|`
-/// alternative needs a `,` clause other than a lower bound or exclusion.
-fn caps_newer_releases(requirement: &str) -> bool {
-    requirement.split('|').all(|alternative| {
-        alternative.split(',').map(str::trim).any(|clause| {
-            !(clause.is_empty()
-                || clause == "*"
-                || clause.starts_with('>')
-                || clause.starts_with("!="))
-        })
-    })
+
+/// The ecosystem of the entries of a Pixi dependency table named `key`.
+fn table_ecosystem(key: &str) -> Option<&'static str> {
+    match key {
+        "dependencies" | "host-dependencies" | "build-dependencies" => Some("conda"),
+        "pypi-dependencies" => Some("pypi"),
+        _ => None,
+    }
 }
 
-/// Compare `pixi search --json` output for a package with the output for its
-/// declared requirement. Each entry cites the newest record the requirement
-/// excludes; empty means no newer release is blocked on any subdir.
-/// Whether a conda record predates the release-age cutoff. (Pre-releases are
-/// filtered separately and never cited as the newer release.) Undated records
-/// cannot be shown eligible; second-resolution timestamps are normalised as
-/// conda does (values up to year 9999 in seconds).
-fn eligible(record: &serde_json::Value, cutoff: Option<i64>) -> bool {
-    let Some(cutoff) = cutoff else {
-        return true;
-    };
-    record["timestamp"]
-        .as_i64()
-        .map(|t| if t <= 253_402_300_799 { t * 1000 } else { t })
-        .is_some_and(|t| t <= cutoff)
-}
-
-fn blocked_evidence(
-    all: &serde_json::Value,
-    allowed: &serde_json::Value,
-    cutoff: Option<i64>,
-) -> Vec<Excluded> {
-    let newest = |records: Option<&serde_json::Value>| -> Option<serde_json::Value> {
-        records?
-            .as_array()?
-            .iter()
-            .filter(|r| {
-                r["version"]
-                    .as_str()
-                    .is_some_and(|v| !crate::conda_version::is_prerelease(v))
-                    && eligible(r, cutoff)
-            })
-            .max_by(|a, b| {
-                crate::conda_version::compare(
-                    a["version"].as_str().unwrap(),
-                    b["version"].as_str().unwrap(),
-                )
-            })
-            .cloned()
-    };
-    let mut evidence = vec![];
-    for (subdir, records) in all.as_object().into_iter().flatten() {
-        let Some(latest) = newest(Some(records)) else {
+/// Declarations in Pixi dependency tables, including features and platform
+/// targets, in key order. `path` is the table path of `value`. Path, Git and
+/// other specs without a version string have an empty requirement.
+fn table_declarations(value: &toml::Value, path: &str, file: &Path, output: &mut Vec<Declaration>) {
+    for (key, val) in value.as_table().into_iter().flatten() {
+        let location = format!("{path}{key}");
+        let Some(ecosystem) = table_ecosystem(key) else {
+            table_declarations(val, &format!("{location}."), file, output);
             continue;
         };
-        let version = latest["version"].as_str().unwrap();
-        let allowed_record = newest(allowed.get(subdir));
-        let allowed_version = allowed_record.as_ref().and_then(|r| r["version"].as_str());
-        if allowed_version.is_none_or(|a| crate::conda_version::compare(version, a).is_gt()) {
-            evidence.push(Excluded {
-                policy: None,
-                scope: subdir.clone(),
-                version: version.into(),
-                allowed: allowed_version.map(Into::into),
-                url: latest["url"].as_str().unwrap_or("unknown artifact").into(),
-                sha256: latest["sha256"].as_str().unwrap_or("unknown").into(),
+        for (name, spec) in val.as_table().into_iter().flatten() {
+            let version = spec.as_str().or_else(|| spec.get("version")?.as_str());
+            output.push(Declaration {
+                ecosystem: ecosystem.into(),
+                package: name.clone(),
+                requirement: version.unwrap_or_default().into(),
+                file: file.into(),
+                location: location.clone(),
             });
         }
     }
-    evidence
 }
 
-/// Declared direct dependency names as (name, is_pypi), including features and
-/// platform targets.
-fn dependency_names(value: &toml::Value, output: &mut Vec<(String, bool)>) {
-    for (key, val) in value.as_table().into_iter().flatten() {
-        match key.as_str() {
-            "dependencies" | "host-dependencies" | "build-dependencies" | "pypi-dependencies" => {
-                for name in val.as_table().into_iter().flatten().map(|(n, _)| n) {
-                    output.push((name.clone(), key == "pypi-dependencies"));
-                }
-            }
-            _ => dependency_names(val, output),
+/// PEP 508 requirement lists of `[project]` and `[dependency-groups]`, by
+/// location. Tables such as `{include-group = ...}` are not requirements.
+fn project_lists(parsed: &toml::Value) -> Vec<(String, &Vec<toml::Value>)> {
+    let project = parsed.get("project");
+    let mut lists: Vec<_> = project
+        .and_then(|p| p.get("dependencies")?.as_array())
+        .map(|a| ("project.dependencies".to_owned(), a))
+        .into_iter()
+        .collect();
+    for (name, list) in project
+        .and_then(|p| p.get("optional-dependencies")?.as_table())
+        .into_iter()
+        .flatten()
+    {
+        lists.extend(
+            list.as_array()
+                .map(|a| (format!("project.optional-dependencies.{name}"), a)),
+        );
+    }
+    for (name, list) in parsed
+        .get("dependency-groups")
+        .and_then(|g| g.as_table())
+        .into_iter()
+        .flatten()
+    {
+        lists.extend(
+            list.as_array()
+                .map(|a| (format!("dependency-groups.{name}"), a)),
+        );
+    }
+    lists
+}
+
+/// Every direct dependency declared in the manifest `text`: Pixi tables
+/// first, then the standard `[project]` and `[dependency-groups]` requirements
+/// of a `pyproject.toml` target. Direct URLs count as unversioned.
+fn manifest_declarations(text: &str, pyproject: bool, file: &Path) -> Result<Vec<Declaration>> {
+    let parsed: toml::Value = text
+        .parse()
+        .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
+    let mut output = vec![];
+    if !pyproject {
+        table_declarations(&parsed, "", file, &mut output);
+        return Ok(output);
+    }
+    if let Some(pixi) = parsed.get("tool").and_then(|t| t.get("pixi")) {
+        table_declarations(pixi, "tool.pixi.", file, &mut output);
+    }
+    for (list, items) in project_lists(&parsed) {
+        for (index, text) in items.iter().enumerate() {
+            let Some(requirement) = text.as_str().and_then(Pep508::parse) else {
+                continue;
+            };
+            let text = text.as_str().unwrap();
+            output.push(Declaration {
+                ecosystem: "pypi".into(),
+                package: requirement.name,
+                requirement: requirement
+                    .specifier
+                    .map(|range| text[range].to_owned())
+                    .unwrap_or_default(),
+                file: file.into(),
+                location: format!("{list}[{index}]"),
+            });
         }
     }
-}
-
-/// PEP 508 requirement strings from `[project]` and `[dependency-groups]`.
-/// Tables such as `{include-group = ...}` are not requirements.
-fn project_requirements(parsed: &toml::Value) -> impl Iterator<Item = &str> {
-    let project = parsed.get("project");
-    project
-        .and_then(|p| p.get("dependencies"))
-        .into_iter()
-        .chain(
-            project
-                .and_then(|p| p.get("optional-dependencies"))
-                .and_then(|o| o.as_table())
-                .into_iter()
-                .flat_map(|t| t.values()),
-        )
-        .chain(
-            parsed
-                .get("dependency-groups")
-                .and_then(|g| g.as_table())
-                .into_iter()
-                .flat_map(|t| t.values()),
-        )
-        .filter_map(|l| l.as_array())
-        .flatten()
-        .filter_map(|r| r.as_str())
-}
-
-fn project_names(parsed: &toml::Value, output: &mut Vec<(String, bool)>) {
-    for requirement in project_requirements(parsed).filter_map(Pep508::parse) {
-        output.push((requirement.name, true));
-    }
+    Ok(output)
 }
 
 /// The parts of a PEP 508 requirement this tool reads or rewrites.
@@ -410,291 +410,6 @@ impl Pep508 {
     }
 }
 
-/// Constraints declared in the manifest, including `[project]` and
-/// `[dependency-groups]` requirements of a `pyproject.toml` target.
-fn manifest_constraints(parsed: &toml::Value, pyproject: bool) -> Vec<Constraint> {
-    let mut output = vec![];
-    if !pyproject {
-        collect_constraints(parsed, &mut output);
-        return output;
-    }
-    if let Some(pixi) = parsed.get("tool").and_then(|v| v.get("pixi")) {
-        collect_constraints(pixi, &mut output);
-    }
-    for text in project_requirements(parsed) {
-        let Some(requirement) = Pep508::parse(text) else {
-            continue;
-        };
-        let Some(range) = requirement.specifier else {
-            continue;
-        };
-        let constraint = Constraint {
-            package: requirement.name,
-            requirement: text[range].to_owned(),
-            pypi: true,
-        };
-        if caps_newer_releases(&constraint.requirement) && !output.contains(&constraint) {
-            output.push(constraint);
-        }
-    }
-    output
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct Constraint {
-    package: String,
-    requirement: String,
-    pypi: bool,
-}
-
-fn collect_constraints(value: &toml::Value, output: &mut Vec<Constraint>) {
-    if let Some(table) = value.as_table() {
-        for (key, val) in table {
-            if matches!(
-                key.as_str(),
-                "dependencies" | "pypi-dependencies" | "host-dependencies" | "build-dependencies"
-            ) {
-                if let Some(deps) = val.as_table() {
-                    for (name, spec) in deps {
-                        let version = spec
-                            .as_str()
-                            .or_else(|| spec.get("version").and_then(|s| s.as_str()));
-                        if let Some(version) = version.filter(|v| caps_newer_releases(v)) {
-                            let constraint = Constraint {
-                                package: name.clone(),
-                                requirement: version.into(),
-                                pypi: key == "pypi-dependencies",
-                            };
-                            if !output.contains(&constraint) {
-                                output.push(constraint);
-                            }
-                        }
-                    }
-                }
-            } else {
-                collect_constraints(val, output);
-            }
-        }
-    }
-}
-
-const REVIEW: &str =
-    "Preserve intentional pins; select this direct package with --upgrade to review a newly resolved constraint.";
-
-/// Newer-release lookups against the staged manifest's conda channels (via
-/// `pixi search`) and PyPI indexes.
-struct Availability<'a> {
-    manifest: &'a Path,
-    stage: &'a Path,
-    options: &'a UpdateOptions,
-    indexes: Vec<String>,
-    /// The manifest's native release-age policy, applied to every lookup.
-    exclude_newer: Option<String>,
-}
-
-impl Availability<'_> {
-    fn search(&self, spec: &str) -> Result<serde_json::Value> {
-        let args = [
-            "search".into(),
-            "--json".into(),
-            "--manifest-path".into(),
-            self.manifest.to_string_lossy().into(),
-            spec.into(),
-        ];
-        let output = run(
-            &self.options.tool("pixi"),
-            &args,
-            self.stage,
-            self.options.timeout_seconds,
-        )?;
-        serde_json::from_str(&output)
-            .map_err(|e| Error::Operation(format!("unreadable pixi search output: {e}")))
-    }
-
-    /// Releases the requirement excludes, plus failed-lookup notes for indexes
-    /// that could not be consulted.
-    fn excluded(
-        &self,
-        package: &str,
-        requirement: &str,
-        pypi: bool,
-    ) -> Result<(Vec<Excluded>, Vec<String>)> {
-        let cutoff = match &self.exclude_newer {
-            None => None,
-            Some(text) => {
-                Some(crate::cutoff::parse(text, crate::cutoff::now_ms()).ok_or_else(|| {
-                    Error::Operation(format!(
-                        "exclude-newer = {text:?} is not a form this tool understands; availability not established"
-                    ))
-                })?)
-            }
-        };
-        let policy = self
-            .exclude_newer
-            .as_ref()
-            .map(|t| format!("exclude-newer {t}"));
-        let label = |mut excluded: Vec<Excluded>| {
-            for e in &mut excluded {
-                e.policy = policy.clone();
-            }
-            excluded
-        };
-        if !pypi {
-            let all = self.search(package)?;
-            let allowed = self.search(&format!("{package} {requirement}"))?;
-            return Ok((label(blocked_evidence(&all, &allowed, cutoff)), vec![]));
-        }
-        let mut pages = vec![];
-        let mut failures = vec![];
-        for index in &self.indexes {
-            match crate::pypi::fetch(index, package, self.options.timeout_seconds) {
-                Ok(page) => pages.push((index.clone(), page)),
-                Err(error) => {
-                    failures.push(format!("availability lookup failed: {index}: {error}"))
-                }
-            }
-        }
-        crate::pypi::evidence(package, &pages, requirement, cutoff)
-            .map(|evidence| (label(evidence), failures))
-    }
-}
-
-/// Keep a constraint only when the manifest's conda channels or PyPI indexes
-/// hold a newer release it excludes. Failed lookups stay as unestablished
-/// suggestions, never as clean results.
-fn suggest(
-    constraints: Vec<Constraint>,
-    target: &Target,
-    availability: &Availability,
-) -> Vec<Suggestion> {
-    let mut suggestions = vec![];
-    for constraint in constraints {
-        let lookup = availability.excluded(
-            &constraint.package,
-            &constraint.requirement,
-            constraint.pypi,
-        );
-        let unestablished = format!("Declared pin or upper bound can exclude newer releases. {REVIEW} Newer availability has not been established.");
-        let (reason, evidence) = match lookup {
-            Ok((excluded, failures)) if excluded.is_empty() && failures.is_empty() => continue,
-            Ok((excluded, failures)) if excluded.is_empty() => (unestablished, failures),
-            Ok((excluded, failures)) => (
-                format!("Declared pin or upper bound excludes a newer release. {REVIEW}"),
-                excluded
-                    .iter()
-                    .map(ToString::to_string)
-                    .chain(failures)
-                    .collect(),
-            ),
-            Err(error) => (
-                unestablished,
-                vec![format!("availability lookup failed: {error}")],
-            ),
-        };
-        suggestions.push(Suggestion {
-            target: target.id.clone(),
-            package: constraint.package,
-            requirement: constraint.requirement,
-            reason,
-            evidence,
-        });
-    }
-    suggestions
-}
-/// One rewritten declaration: (old requirement, new requirement, is PyPI).
-type Edit = (String, String, bool);
-
-/// Any version newer than a declared one; restyling it succeeds exactly when
-/// the requirement's style is unambiguous.
-const PROBE_VERSION: &str = "999999";
-
-/// Apply `--accept` to the staged manifest. Every acceptance is checked before
-/// any lookup, so ambiguous styles or malformed explicit requirements fail
-/// without network access. Returns the edited text and validation notes.
-fn accept_suggestions(
-    content: &str,
-    pyproject: bool,
-    target: &Target,
-    options: &UpdateOptions,
-    availability: &Availability,
-) -> Result<(String, Vec<String>)> {
-    use crate::constraint::{parse_accept, restyle};
-    use crate::pep440::{satisfies, Version};
-    let acceptances = options
-        .accept
-        .iter()
-        .map(|a| parse_accept(a))
-        .collect::<Result<Vec<_>>>()?;
-    for acceptance in &acceptances {
-        let name = &acceptance.name;
-        rewrite_requirements(content, pyproject, name, &mut |old, pypi| {
-            match &acceptance.requirement {
-                Some(requirement)
-                    if pypi && satisfies(requirement, &Version::parse("0").unwrap()).is_none() =>
-                {
-                    Err(Error::Invalid(format!(
-                        "{name}={requirement} is not a PEP 440 requirement; the first `=` separates the name, so pin exactly with --accept {name}===VERSION"
-                    )))
-                }
-                Some(requirement) => Ok(requirement.clone()),
-                None if restyle(old, PROBE_VERSION).is_some() => Ok(old.to_owned()),
-                None => Err(Error::Invalid(format!(
-                    "{name} {old}: the requirement style is ambiguous; pass --accept {name}=REQUIREMENT"
-                ))),
-            }
-        })?;
-    }
-    let mut text = content.to_owned();
-    let mut notes = vec![];
-    for acceptance in &acceptances {
-        let name = &acceptance.name;
-        let mut cited = vec![];
-        let (next, edits) = rewrite_requirements(&text, pyproject, name, &mut |old, pypi| {
-            if let Some(requirement) = &acceptance.requirement {
-                cited.push("explicit replacement".to_owned());
-                return Ok(requirement.clone());
-            }
-            let (excluded, failures) = availability.excluded(name, old, pypi)?;
-            let newest = excluded
-                .iter()
-                .max_by(|a, b| {
-                    if pypi {
-                        Version::parse(&a.version).cmp(&Version::parse(&b.version))
-                    } else {
-                        crate::conda_version::compare(&a.version, &b.version)
-                    }
-                })
-                .ok_or_else(|| {
-                    if failures.is_empty() {
-                        Error::Invalid(format!(
-                            "{name} {old}: no newer release is excluded; nothing to accept"
-                        ))
-                    } else {
-                        Error::Operation(format!(
-                            "{name} {old}: newer availability could not be established: {}",
-                            failures.join("; ")
-                        ))
-                    }
-                })?;
-            cited.push(newest.to_string());
-            restyle(old, &newest.version).ok_or_else(|| {
-                Error::Invalid(format!(
-                    "{name} {old}: cannot restyle to {}; pass --accept {name}=REQUIREMENT",
-                    newest.version
-                ))
-            })
-        })?;
-        text = next;
-        for ((old, new, _), evidence) in edits.iter().zip(cited) {
-            notes.push(format!(
-                "{}: accepted {name} {old} -> {new} ({evidence})",
-                target.id
-            ));
-        }
-    }
-    Ok((text, notes))
-}
-
 /// Replace a string value, keeping its surrounding comments/whitespace and its
 /// literal (single-quoted) style when the new text allows it.
 fn replace_string(value: &mut toml_edit::Value, new: &str) {
@@ -714,35 +429,21 @@ fn replace_string(value: &mut toml_edit::Value, new: &str) {
     *value.decor_mut() = decor;
 }
 
-fn rewrite_tables(
-    table: &mut dyn toml_edit::TableLike,
-    name: &str,
-    change: &mut dyn FnMut(&str, bool) -> Result<String>,
-    edits: &mut Vec<Edit>,
-    unversioned: &mut bool,
-) -> Result<()> {
+/// Replaces the requirement of the declaration at (location, package, old
+/// requirement), or keeps it when `None`.
+type Change<'a> = dyn FnMut(&str, &str, &str) -> Option<String> + 'a;
+
+fn rewrite_tables(table: &mut dyn toml_edit::TableLike, path: &str, change: &mut Change) {
     for (key, item) in table.iter_mut() {
-        let pypi = match key.get() {
-            "dependencies" | "host-dependencies" | "build-dependencies" => Some(false),
-            "pypi-dependencies" => Some(true),
-            _ => None,
-        };
+        let location = format!("{path}{}", key.get());
         let Some(children) = item.as_table_like_mut() else {
             continue;
         };
-        let Some(pypi) = pypi else {
-            rewrite_tables(children, name, change, edits, unversioned)?;
+        if table_ecosystem(key.get()).is_none() {
+            rewrite_tables(children, &format!("{location}."), change);
             continue;
-        };
+        }
         for (dependency, spec) in children.iter_mut() {
-            let matches = if pypi {
-                pypi_key(dependency.get()) == pypi_key(name)
-            } else {
-                dependency.get().eq_ignore_ascii_case(name)
-            };
-            if !matches {
-                continue;
-            }
             let value = if spec.is_str() {
                 spec.as_value_mut()
             } else {
@@ -752,119 +453,116 @@ fn rewrite_tables(
                     .filter(|v| v.is_str())
             };
             let Some(value) = value else {
-                *unversioned = true;
                 continue;
             };
             let old = value.as_str().unwrap().to_owned();
-            let new = change(&old, pypi)?;
-            replace_string(value, &new);
-            edits.push((old, new, pypi));
+            if let Some(new) = change(&location, dependency.get(), &old) {
+                replace_string(value, &new);
+            }
         }
     }
-    Ok(())
 }
 
-/// Rewrite the version specifier of `name` in `[project]` and
-/// `[dependency-groups]` requirement strings. Extras, markers, parentheses and
-/// spacing around the specifier are kept; direct URLs count as unversioned.
-fn rewrite_project(
-    document: &mut toml_edit::DocumentMut,
-    name: &str,
-    change: &mut dyn FnMut(&str, bool) -> Result<String>,
-    edits: &mut Vec<Edit>,
-    unversioned: &mut bool,
-) -> Result<()> {
-    let mut arrays: Vec<&mut toml_edit::Array> = vec![];
-    let (project, groups) = {
-        let table = document.as_table_mut();
-        let mut project = None;
-        let mut groups = None;
-        for (key, item) in table.iter_mut() {
-            match key.get() {
-                "project" => project = item.as_table_like_mut(),
-                "dependency-groups" => groups = item.as_table_like_mut(),
-                _ => {}
+/// Rewrite version specifiers in `[project]` and `[dependency-groups]`
+/// requirement strings. Extras, markers, parentheses and spacing around the
+/// specifier are kept.
+fn rewrite_project(document: &mut toml_edit::DocumentMut, change: &mut Change) {
+    let mut lists: Vec<(String, &mut toml_edit::Array)> = vec![];
+    for (key, item) in document.as_table_mut().iter_mut() {
+        let Some(table) = item.as_table_like_mut() else {
+            continue;
+        };
+        match key.get() {
+            "project" => {
+                for (key, item) in table.iter_mut() {
+                    match key.get() {
+                        "dependencies" => lists.extend(
+                            item.as_array_mut()
+                                .map(|a| ("project.dependencies".to_owned(), a)),
+                        ),
+                        "optional-dependencies" => {
+                            lists.extend(item.as_table_like_mut().into_iter().flat_map(|t| {
+                                t.iter_mut().filter_map(|(name, list)| {
+                                    Some((
+                                        format!("project.optional-dependencies.{}", name.get()),
+                                        list.as_array_mut()?,
+                                    ))
+                                })
+                            }))
+                        }
+                        _ => {}
+                    }
+                }
             }
+            "dependency-groups" => lists.extend(table.iter_mut().filter_map(|(name, list)| {
+                Some((
+                    format!("dependency-groups.{}", name.get()),
+                    list.as_array_mut()?,
+                ))
+            })),
+            _ => {}
         }
-        (project, groups)
-    };
-    if let Some(project) = project {
-        for (key, item) in project.iter_mut() {
-            match key.get() {
-                "dependencies" => arrays.extend(item.as_array_mut()),
-                "optional-dependencies" => arrays.extend(
-                    item.as_table_like_mut()
-                        .into_iter()
-                        .flat_map(|t| t.iter_mut().filter_map(|(_, v)| v.as_array_mut())),
-                ),
-                _ => {}
+    }
+    for (list, array) in lists {
+        for (index, value) in array.iter_mut().enumerate() {
+            let Some(text) = value.as_str().map(str::to_owned) else {
+                continue;
+            };
+            let Some(Pep508 {
+                name,
+                specifier: Some(range),
+            }) = Pep508::parse(&text)
+            else {
+                continue;
+            };
+            let location = format!("{list}[{index}]");
+            if let Some(new) = change(&location, &name, &text[range.clone()]) {
+                let spliced = format!("{}{new}{}", &text[..range.start], &text[range.end..]);
+                replace_string(value, &spliced);
             }
         }
     }
-    if let Some(groups) = groups {
-        arrays.extend(groups.iter_mut().filter_map(|(_, v)| v.as_array_mut()));
-    }
-    for array in arrays {
-        for value in array.iter_mut() {
-            let Some(text) = value.as_str() else {
-                continue;
-            };
-            let Some(requirement) = Pep508::parse(text) else {
-                continue;
-            };
-            if pypi_key(&requirement.name) != pypi_key(name) {
-                continue;
-            }
-            let Some(range) = requirement.specifier else {
-                *unversioned = true;
-                continue;
-            };
-            let old = text[range.clone()].to_owned();
-            let new = change(&old, true)?;
-            let spliced = format!("{}{new}{}", &text[..range.start], &text[range.end..]);
-            replace_string(value, &spliced);
-            edits.push((old, new, true));
-        }
-    }
-    Ok(())
 }
 
-/// Rewrite every versioned declaration of `name` in the dependency tables,
-/// keeping comments and layout. `change` receives the old requirement and
-/// whether the declaration is a PyPI one. Returns (old, new, pypi) per edit.
-fn rewrite_requirements(
-    text: &str,
-    pyproject: bool,
-    name: &str,
-    change: &mut dyn FnMut(&str, bool) -> Result<String>,
-) -> Result<(String, Vec<Edit>)> {
+/// Apply `edits` to the manifest `text`, keeping comments and layout. Every
+/// edit must name a declaration [`manifest_declarations`] reports for `text`.
+fn rewrite_manifest(text: &str, pyproject: bool, edits: &[Edit]) -> Result<String> {
     let mut document: toml_edit::DocumentMut = text
         .parse()
         .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-    let root = if pyproject {
-        document
-            .get_mut("tool")
-            .and_then(|t| t.get_mut("pixi"))
-            .and_then(|p| p.as_table_like_mut())
-    } else {
-        Some(document.as_table_mut() as &mut dyn toml_edit::TableLike)
-    };
-    let mut edits = vec![];
-    let mut unversioned = false;
-    if let Some(root) = root {
-        rewrite_tables(root, name, change, &mut edits, &mut unversioned)?;
-    }
-    if pyproject {
-        rewrite_project(&mut document, name, change, &mut edits, &mut unversioned)?;
-    }
-    if edits.is_empty() {
-        return Err(Error::Invalid(if unversioned {
-            format!("{name} is declared with no version requirement to accept")
+    let mut pending: Vec<&Edit> = edits.iter().collect();
+    {
+        let mut change = |location: &str, package: &str, old: &str| {
+            let index = pending.iter().position(|e| {
+                let d = &e.declaration;
+                d.location == location && d.package == package && d.requirement == old
+            })?;
+            Some(pending.swap_remove(index).requirement.clone())
+        };
+        if !pyproject {
+            rewrite_tables(document.as_table_mut(), "", &mut change);
         } else {
-            format!("{name} is not a declared dependency")
-        }));
+            if let Some(pixi) = document
+                .get_mut("tool")
+                .and_then(|t| t.get_mut("pixi"))
+                .and_then(|p| p.as_table_like_mut())
+            {
+                rewrite_tables(pixi, "tool.pixi.", &mut change);
+            }
+            rewrite_project(&mut document, &mut change);
+        }
     }
-    Ok((document.to_string(), edits))
+    if let Some(edit) = pending.first() {
+        let d = &edit.declaration;
+        return Err(Error::Invalid(format!(
+            "{} {} is not declared at {} in {}",
+            d.package,
+            d.requirement,
+            d.location,
+            d.file.display()
+        )));
+    }
+    Ok(document.to_string())
 }
 
 fn validate_paths(value: &toml::Value, base: &Path, stage: &Path) -> Result<()> {
@@ -921,48 +619,48 @@ fn validate_paths(value: &toml::Value, base: &Path, stage: &Path) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn suggested(manifest: &str) -> Vec<String> {
-        let mut output = vec![];
-        collect_constraints(&manifest.parse().unwrap(), &mut output);
-        output.into_iter().map(|c| c.package).collect()
+    fn declared(file: &str, manifest: &str) -> Vec<Declaration> {
+        manifest_declarations(manifest, file == "pyproject.toml", Path::new(file)).unwrap()
     }
 
-    fn records(versions: &[(&str, &[&str])]) -> serde_json::Value {
-        let map: serde_json::Map<_, _> = versions
-            .iter()
-            .map(|(subdir, list)| {
-                let rows = list
-                    .iter()
-                    .map(|v| serde_json::json!({"version": v, "url": format!("https://example.invalid/{subdir}/pkg-{v}.conda"), "sha256": format!("sha-{v}")}))
-                    .collect();
-                (subdir.to_string(), serde_json::Value::Array(rows))
+    /// Declarations whose requirement can exclude newer releases, as
+    /// (package, requirement, ecosystem), without duplicates.
+    fn capped(file: &str, manifest: &str) -> Vec<(String, String, String)> {
+        let mut output = vec![];
+        for d in declared(file, manifest) {
+            let scheme = crate::ecosystem::scheme(&d.ecosystem).unwrap();
+            let key = (d.package, d.requirement, d.ecosystem);
+            if !key.1.is_empty() && scheme.caps_newer(&key.1) && !output.contains(&key) {
+                output.push(key);
+            }
+        }
+        output
+    }
+
+    /// Rewrite every versioned declaration of `name` with `change`.
+    fn rewritten(
+        file: &str,
+        manifest: &str,
+        name: &str,
+        change: impl Fn(&str) -> String,
+    ) -> (String, Vec<Declaration>) {
+        let edits: Vec<Edit> = declared(file, manifest)
+            .into_iter()
+            .filter(|d| {
+                !d.requirement.is_empty()
+                    && if d.ecosystem == "pypi" {
+                        pypi_key(&d.package) == pypi_key(name)
+                    } else {
+                        d.package.eq_ignore_ascii_case(name)
+                    }
+            })
+            .map(|d| Edit {
+                requirement: change(&d.requirement),
+                declaration: d,
             })
             .collect();
-        serde_json::Value::Object(map)
-    }
-
-    #[test]
-    fn evidence_names_newest_excluded_record_per_subdir() {
-        // Unordered on purpose: availability must not depend on backend ordering.
-        let all = records(&[
-            ("linux-64", &["0.15.22", "0.16.9", "0.9.0"]),
-            ("win-64", &["0.15.22"]),
-            ("noarch", &["2.39"]),
-        ]);
-        let allowed = records(&[("linux-64", &["0.15.22"]), ("win-64", &["0.15.22"])]);
-        let evidence: Vec<String> = blocked_evidence(&all, &allowed, None)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(
-            evidence,
-            [
-                "linux-64: 0.16.9 is excluded (newest allowed 0.15.22): https://example.invalid/linux-64/pkg-0.16.9.conda sha256:sha-0.16.9",
-                "noarch: 2.39 is excluded (newest allowed none): https://example.invalid/noarch/pkg-2.39.conda sha256:sha-2.39",
-            ]
-        );
-        assert!(blocked_evidence(&allowed, &allowed, None).is_empty());
+        let text = rewrite_manifest(manifest, file == "pyproject.toml", &edits).unwrap();
+        (text, edits.into_iter().map(|e| e.declaration).collect())
     }
 
     #[test]
@@ -975,31 +673,32 @@ ruff = { version = "==0.15.22", channel = "conda-forge" }
 Six = "==1.15.0" # keep
 local = { path = "local", editable = true }
 "#;
-        let mut seen = vec![];
-        let (text, edits) = rewrite_requirements(manifest, false, "RUFF", &mut |old, pypi| {
-            seen.push(pypi);
-            Ok(format!("{old}.1"))
-        })
-        .unwrap();
-        assert_eq!(seen, [false, false]);
-        assert_eq!(edits.len(), 2);
+        let (text, edited) = rewritten("pixi.toml", manifest, "RUFF", |old| format!("{old}.1"));
+        let places: Vec<_> = edited
+            .iter()
+            .map(|d| (d.ecosystem.as_str(), d.location.as_str()))
+            .collect();
+        assert_eq!(
+            places,
+            [
+                ("conda", "dependencies"),
+                ("conda", "feature.lint.dependencies")
+            ]
+        );
         assert_eq!(
             text,
             manifest
                 .replace(r#"ruff = "==0.15.22"  "#, r#"ruff = "==0.15.22.1"  "#)
                 .replace(r#"version = "==0.15.22""#, r#"version = "==0.15.22.1""#)
         );
-        let (text, edits) =
-            rewrite_requirements(manifest, false, "six", &mut |_, _| Ok("==1.17.0".into()))
-                .unwrap();
-        assert_eq!(edits, [("==1.15.0".into(), "==1.17.0".into(), true)]);
+        let (text, edited) = rewritten("pixi.toml", manifest, "six", |_| "==1.17.0".into());
+        assert_eq!(edited[0].ecosystem, "pypi");
         assert!(text.contains("Six = \"==1.17.0\" # keep\n"), "{text}");
-        let error =
-            rewrite_requirements(manifest, false, "local", &mut |_, _| Ok("1".into())).unwrap_err();
-        assert!(
-            matches!(&error, Error::Invalid(m) if m.contains("no version")),
-            "{error}"
-        );
+        let local = declared("pixi.toml", manifest)
+            .into_iter()
+            .find(|d| d.package == "local")
+            .unwrap();
+        assert_eq!(local.requirement, "");
         let pyproject = r#"[project]
 dependencies = [
   "Six[socks] (==1.15.0) ; python_version < '3.12'", # keep
@@ -1011,60 +710,47 @@ extra = ["six==1.15.0"]
 [dependency-groups]
 dev = ["six ==1.15.0", { include-group = "extra" }]
 "#;
-        let (text, edits) = rewrite_requirements(pyproject, true, "six", &mut |old, pypi| {
-            assert!(pypi);
+        let (text, edited) = rewritten("pyproject.toml", pyproject, "six", |old| {
             assert_eq!(old, "==1.15.0");
-            Ok("==1.17.0".into())
-        })
-        .unwrap();
-        assert_eq!(edits.len(), 3);
-        assert_eq!(text, pyproject.replace("==1.15.0", "==1.17.0"));
-        let (text, _) =
-            rewrite_requirements(pyproject, true, "urllib3", &mut |_, _| Ok("<3".into())).unwrap();
-        assert!(text.contains("'urllib3<3',"), "{text}");
-        let error = rewrite_requirements(pyproject, true, "direct", &mut |_, _| Ok("1".into()))
-            .unwrap_err();
-        assert!(
-            matches!(&error, Error::Invalid(m) if m.contains("no version")),
-            "{error}"
+            "==1.17.0".into()
+        });
+        let locations: Vec<_> = edited.iter().map(|d| d.location.as_str()).collect();
+        assert_eq!(
+            locations,
+            [
+                "project.dependencies[0]",
+                "project.optional-dependencies.extra[0]",
+                "dependency-groups.dev[0]"
+            ]
         );
+        assert_eq!(text, pyproject.replace("==1.15.0", "==1.17.0"));
+        let (text, _) = rewritten("pyproject.toml", pyproject, "urllib3", |_| "<3".into());
+        assert!(text.contains("'urllib3<3',"), "{text}");
+        let direct = declared("pyproject.toml", pyproject)
+            .into_iter()
+            .find(|d| d.package == "direct")
+            .unwrap();
+        assert_eq!(direct.requirement, "");
         let pyproject = "[tool.pixi.dependencies]\nruff = '==1' # c\n";
-        let (text, _) =
-            rewrite_requirements(pyproject, true, "ruff", &mut |_, _| Ok("==2".into())).unwrap();
+        let (text, edited) = rewritten("pyproject.toml", pyproject, "ruff", |_| "==2".into());
+        assert_eq!(edited[0].location, "tool.pixi.dependencies");
         assert_eq!(text, "[tool.pixi.dependencies]\nruff = '==2' # c\n");
     }
 
     #[test]
-    fn release_age_cutoff_limits_candidates_on_both_sides() {
-        let record = |v: &str, ts: Option<i64>| {
-            let mut r = serde_json::json!({"version": v, "url": format!("u-{v}"), "sha256": "x"});
-            if let Some(ts) = ts {
-                r["timestamp"] = ts.into();
-            }
-            r
+    fn edits_must_name_a_declaration_of_the_manifest() {
+        let manifest = "[dependencies]\nruff = \"==1\"\n";
+        let mut declaration = declared("pixi.toml", manifest).remove(0);
+        declaration.requirement = "==0".into();
+        let edit = Edit {
+            declaration,
+            requirement: "==2".into(),
         };
-        let all = serde_json::json!({"linux-64": [
-            record("0.15.22", Some(1_000_000_000_000)),
-            record("0.16.0", Some(2_000_000_000)), // seconds, as in older repodata
-            record("0.16.9", Some(3_000_000_000_000)),
-            record("0.17.0", None),
-        ]});
-        let allowed = serde_json::json!({"linux-64": [record("0.15.22", Some(1_000_000_000_000))]});
-        let versions = |cutoff| -> Vec<String> {
-            blocked_evidence(&all, &allowed, cutoff)
-                .into_iter()
-                .map(|e| e.version)
-                .collect()
-        };
-        assert_eq!(versions(None), ["0.17.0"]);
-        // Pre-releases are never cited as the newer release.
-        let with_rc = serde_json::json!({"linux-64": [
-            record("0.15.22", Some(1_000_000_000_000)),
-            record("0.18.0rc1", Some(1_000_000_000_000)),
-        ]});
-        assert!(blocked_evidence(&with_rc, &allowed, None).is_empty());
-        assert_eq!(versions(Some(2_500_000_000_000)), ["0.16.0"]);
-        assert!(versions(Some(1_500_000_000_000)).is_empty());
+        let error = rewrite_manifest(manifest, false, &[edit]).unwrap_err();
+        assert!(
+            matches!(&error, Error::Invalid(m) if m.contains("is not declared at dependencies")),
+            "{error}"
+        );
     }
 
     /// macOS temp directories sit behind a symlink (/var -> /private/var), so the
@@ -1106,21 +792,16 @@ lint = ["ruff==0.15.22", { include-group = "extra" }]
 [tool.pixi.dependencies]
 python = "3.12.*"
 "#;
-        let parsed: toml::Value = manifest.parse().unwrap();
-        let found: Vec<(String, String, bool)> = manifest_constraints(&parsed, true)
-            .into_iter()
-            .map(|c| (c.package, c.requirement, c.pypi))
-            .collect();
         let expected = [
-            ("python", "3.12.*", false),
-            ("requests", ">=2,<3", true),
-            ("six", "==1.15.0", true),
-            ("urllib3", "<2", true),
-            ("compatible", "~=1.4", true),
-            ("ruff", "==0.15.22", true),
+            ("python", "3.12.*", "conda"),
+            ("requests", ">=2,<3", "pypi"),
+            ("six", "==1.15.0", "pypi"),
+            ("urllib3", "<2", "pypi"),
+            ("compatible", "~=1.4", "pypi"),
+            ("ruff", "==0.15.22", "pypi"),
         ]
-        .map(|(n, r, p)| (n.to_owned(), r.to_owned(), p));
-        assert_eq!(found, expected);
+        .map(|(n, r, e)| (n.to_owned(), r.to_owned(), e.to_owned()));
+        assert_eq!(capped("pyproject.toml", manifest), expected);
     }
 
     #[test]
@@ -1144,7 +825,10 @@ compatible = "~=1.4"
 table-floor = { version = ">=3.8" }
 table-ceiling = { version = "<2" }
 "#;
-        let mut names = suggested(manifest);
+        let mut names: Vec<String> = capped("pixi.toml", manifest)
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
         names.sort();
         assert_eq!(
             names,
