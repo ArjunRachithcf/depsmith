@@ -139,3 +139,23 @@ fn duplicate_or_unproven_mappings_are_rejected() {
         assert!(inventory_sbom(&[], &mappings).is_err(), "{mappings:?}");
     }
 }
+
+#[test]
+fn scanning_a_pixi_target_without_a_lock_names_the_missing_file() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("pixi.toml"),
+        "[workspace]\nname = 'demo'\n",
+    )
+    .unwrap();
+    let options = depsmith_core::UpdateOptions {
+        scan: true,
+        ..Default::default()
+    };
+    let error = depsmith_core::scan_existing(root.path(), &["pixi:pixi.toml".into()], &options)
+        .unwrap_err();
+    assert!(
+        matches!(&error, depsmith_core::Error::Invalid(m) if m.contains("pixi.lock") && m.contains("pixi lock")),
+        "{error}"
+    );
+}

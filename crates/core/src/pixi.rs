@@ -40,10 +40,18 @@ impl Adapter for Pixi {
                     .is_some())
     }
     fn inventory(&self, workspace: &Path, target: &Target) -> Result<Vec<crate::Package>> {
-        let lock = workspace
-            .join(target.manifest.parent().unwrap())
-            .join("pixi.lock");
-        crate::inventory::pixi_inventory(&fs::read_to_string(lock)?)
+        let relative = target.manifest.parent().unwrap().join("pixi.lock");
+        let text = match fs::read_to_string(workspace.join(&relative)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Error::Invalid(format!(
+                    "{}: no {} to scan; create it with `pixi lock` or `depsmith update`",
+                    target.id,
+                    relative.display()
+                )))
+            }
+            result => result?,
+        };
+        crate::inventory::pixi_inventory(&text)
     }
     fn select(
         &self,
