@@ -237,6 +237,9 @@ impl Error {
     }
 }
 impl Proposal {
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty() && self.failures.is_empty() && self.suggestions.is_empty()
+    }
     /// CLI exit status for this proposal. `check` selects check semantics,
     /// where pending changes give 1.
     ///
