@@ -6,6 +6,8 @@ Build a Rust package updater with a consistent local and CI workflow, plus a typ
 
 **The first release targets a representative Pixi project:** update `pixi.lock`, suggest dependency-health improvements in `pixi.toml` and `pyproject.toml`, update GitHub Actions references, and optionally compare vulnerabilities before and after updates.
 
+Release 0.1.0 is a public alpha on PyPI plus a draft GitHub release with standalone executables. The conda-forge recipe is prepared and validated in CI; feedstock submission follows the release and does not block it.
+
 Conda-family and uv adapters follow this first release. The broader roadmap includes npm, vcpkg, prek/pre-commit, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
 
 ## 2. Architecture and public interfaces
@@ -44,7 +46,7 @@ Store optional repository configuration in `depsmith.toml`. Explicit command/API
 
 Discover supported projects beneath the selected root, respecting ignored directories and avoiding environment/cache directories. Show nested projects, overlapping ownership, and untracked candidate manifests explicitly.
 
-Interactive users confirm targets and may save their selection. CI and Python callers supply targets or use saved configuration; ambiguity is an error.
+Interactive users confirm targets and are asked whether to save the selection as `targets` in `depsmith.toml` (default no; formatting preserved; overwriting an existing selection needs a second confirmation). JSON, noninteractive and Python use never save. CI and Python callers supply targets or use saved configuration; ambiguity is an error.
 
 Support whole-project updates and selected direct dependencies. Show all resulting transitive changes.
 
@@ -62,7 +64,7 @@ Support whole-project updates and selected direct dependencies. Show all resulti
 
 Initially update remote `uses:` references in workflow files, including remote reusable workflows. Leave local actions, Docker references, script contents, runner labels, and action inputs unchanged.
 
-Stay within the current major release line by default. Offer major upgrades separately. Preserve existing tag or commit-pinning style; conversion to full commit pins is an explicit suggestion. Unresolvable custom references remain unchanged with an explanation.
+Stay within the current major release line by default. Offer major upgrades separately. Preserve existing tag or commit-pinning style; a suggestion to convert tags to full commit pins is deferred to 0.2. Unresolvable custom references remain unchanged with an explanation.
 
 **Staging and application**
 
@@ -72,7 +74,7 @@ Preview semantic dependency changes and exact file diffs. Apply the reviewed can
 
 Use an application journal and backups for recoverable multi-file writes. Refuse stale proposals; never overwrite concurrent edits. Shared-file conflicts block affected targets. Independent successful targets may still be applied after explicit partial-success selection.
 
-Default validation checks resolution and manifest/lock consistency. Optional validation installs into a disposable environment and runs configured project checks. Report exactly which validation levels completed.
+Default validation checks resolution and manifest/lock consistency. Optional validation installs into a disposable environment. Configured project checks after installation are deferred to 0.2. Report exactly which validation levels completed.
 
 ## 4. Vulnerability scanning, CI, and distribution
 
@@ -91,6 +93,8 @@ Use Grype as the initial integration candidate, with an explicit identity-enrich
 - If no baseline lock exists, report a candidate-only scan; do not invent a resolved baseline.
 
 Validate the integration against known vulnerable, fixed, misleading-name, and unmapped fixtures. Unsupported coverage remains unknown, never “clean.” If the candidate fails these requirements, scanner integration blocks release pending a revised technical design.
+
+Each target downloads its own database snapshot; sharing one download across targets is a later optimization.
 
 Reports distinguish introduced, resolved, and remaining findings. Default behavior reports findings; optional policies block by severity across all candidate findings or newly introduced findings. Allow scoped, documented suppressions while retaining suppressed findings in reports.
 
@@ -137,4 +141,20 @@ Release tests must cover:
 - Equivalent CLI/Python outcomes, noninteractive behavior, exit statuses, and installation from built wheels/conda packages.
 - Representative project fixtures and an integration run in a disposable copy. Production execution must not depend on a local checkout or private credentials.
 
+Tests run in three layers, in priority order:
+
+1. **Offline CLI end-to-end** (every CI run, all four hosts, required): the built executable against disposable fixtures with a cross-platform scripted backend stand-in — check/apply/recheck exit codes, JSON stdout, stale proposals, and cancellation killing a backend's descendants on Unix and Windows.
+2. **Native integration** (pull requests to and pushes on `main`, nightly, and as a gate in the Release workflow; informational on pull requests): real Pixi 0.80.0 and Grype 0.119.0, pinned, plus pypi.org and the GitHub API — `[project]` suggestion acceptance, mixed conda/PyPI across two platforms, preserved Git pins, Actions tags/SHA pins/reusable workflows/major suggestions, and scanner comparisons. Linux runs everything; Windows and macOS run the Pixi tests.
+3. **CLI/Python parity**: one fixture through both interfaces yields equal proposals.
+
 After this release, add **conda-family**, then **uv** adapters. Conda locking uses an established artifact-exact YAML format, preferring `environment.conda-lock.yml` when required for native compatibility. Reproduce any reported conda environment-creation failure before adding an ordering workaround; preserve it as a regression test if recovered.
+
+## 6. Path to 0.1.0
+
+**A. Repository gates and merge.** `main` is protected by a ruleset (signed commits, linear history, pull requests, required checks, CodeQL, 75% coverage). Changes land through pull requests using a *local signed fast-forward*: rebase and sign locally, push the branch, wait for required checks, then fast-forward `main` from the verified branch (GitHub's server-side rebase-merge cannot sign commits). Repository administrators bypass the update restriction for this step only. Required checks cover every offline job (Rust ×4, MSRV, wheels ×4, sdist, conda, prek hooks, CLI end-to-end, coverage); native integration is not required on pull requests. Repository hooks run through prek locally and in CI.
+
+**B. Remaining release scope.** Saved interactive selection; offline CLI end-to-end tests including Windows process-tree termination; the native integration workflow; CLI/Python parity.
+
+**C. Release.** Tag `v0.1.0` on `main`, run the Release workflow without publishing, review the artifacts, then publish only with explicit approval. PyPI trusted publishing and the `pypi`/`release` environments are configured beforehand. Submit the conda-forge feedstock afterwards.
+
+**Later (0.2 and beyond).** Configured post-install project checks, commit-pin conversion suggestions, interactive per-suggestion acceptance prompts, shared scanner database downloads, then conda-family and uv adapters.
