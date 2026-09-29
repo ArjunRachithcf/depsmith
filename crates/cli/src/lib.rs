@@ -18,58 +18,85 @@ use std::{
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Repository root to work in.
     #[arg(long, global = true, default_value = ".")]
     root: PathBuf,
+    /// Print a JSON report on stdout; diagnostics go to stderr.
     #[arg(long, global = true)]
     json: bool,
+    /// Print a Markdown summary, for example for a CI job summary.
     #[arg(long, global = true)]
     markdown: bool,
+    /// Never prompt; fail when a choice would be needed.
     #[arg(long, global = true)]
     non_interactive: bool,
+    /// Target to work on, as `manager:path` (repeatable); see `discover`.
     #[arg(long, global = true)]
     target: Vec<String>,
+    /// Select every discovered target.
     #[arg(long, global = true)]
     all: bool,
+    /// Update only this direct dependency (repeatable).
     #[arg(long, global = true)]
     package: Vec<String>,
     /// Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT.
     #[arg(long, global = true, value_name = "NAME[=REQUIREMENT]")]
     accept: Vec<String>,
+    /// Allow the selected packages' declared constraints to change (requires --package).
     #[arg(long, global = true)]
     upgrade: bool,
+    /// Allow Git pins to move to newer commits.
     #[arg(long, global = true)]
     refresh_git: bool,
+    /// Scan the baseline and candidate for known vulnerabilities with Grype.
     #[arg(long, global = true)]
     scan: bool,
+    /// Also install the candidate's default environment on this host.
     #[arg(long, global = true)]
     install: bool,
+    /// Reject the proposal on findings of at least this severity
+    /// (negligible, low, medium, high, critical); requires --scan.
     #[arg(long, global = true)]
     fail_on: Option<String>,
+    /// Apply --fail-on only to findings the update introduces.
     #[arg(long, global = true)]
     only_new: bool,
+    /// Minimum release age in days; rejected where the package manager cannot enforce it.
     #[arg(long, global = true)]
     cooldown_days: Option<u32>,
+    /// Time limit for each package manager or scanner process [default: 300].
     #[arg(long, global = true)]
     timeout_seconds: Option<u64>,
+    /// Pixi executable to run [default: pixi].
     #[arg(long, global = true)]
     pixi: Option<String>,
+    /// Grype executable to run [default: grype].
     #[arg(long, global = true)]
     grype: Option<String>,
 }
 #[derive(Subcommand)]
 enum Command {
+    /// List the targets found under the root.
     Discover,
+    /// Report adapter capabilities and whether native tools are available.
     Doctor,
+    /// Prepare a proposal without writing; exit 1 when updates are pending.
     Check,
+    /// Prepare a proposal, preview it, and apply it when confirmed.
     Update {
+        /// Apply the proposal (noninteractively also needs --yes).
         #[arg(long)]
         apply: bool,
+        /// Confirm applying without a prompt.
         #[arg(long)]
         yes: bool,
+        /// Apply the successful targets even if others failed.
         #[arg(long)]
         allow_partial: bool,
     },
+    /// Scan the current locks for known vulnerabilities without updating.
     Scan,
+    /// Restore the files of an interrupted apply.
     Recover,
 }
 fn overrides(cli: &Cli) -> Value {
