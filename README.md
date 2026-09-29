@@ -113,7 +113,8 @@ rejected.
 
 Backends run with a timeout (`timeout_seconds`) and, on Unix, in their own
 process group, so a timeout or interrupt kills the backend together with the
-processes it started (Windows uses `taskkill /T`, not yet exercised in CI).
+processes it started (Windows uses `taskkill /T`; the end-to-end tests check
+that a timeout kills the backend's child processes on every CI platform).
 Interrupting the CLI exits with status 130. Failures include the last 40 lines
 of the backend's stderr with credentials redacted: URL passwords, token-like
 parameters, authorization headers, GitHub tokens and values of secret-named
@@ -253,12 +254,16 @@ Set `PIXI=/path/to/pixi` to enable the native Python update/apply test.
 
 [CI](.github/workflows/ci.yml) builds and tests CLI artifacts and wheels for
 Linux/Windows x86-64 and macOS Intel/ARM, checks Rust 1.89, installs from the
-sdist, and builds/tests the local Linux conda package. The initial platform
-matrix passed; native integration tests remain opt-in. See the
+sdist, builds/tests the local Linux conda package, runs end-to-end tests of the
+executable, and checks coverage (Codecov patch coverage and a 75% total gate).
+The [Integration](.github/workflows/integration.yml) workflow runs the native
+Pixi, Grype, pypi.org and GitHub API tests on pull requests, `main`, nightly
+and before any release. See the
 [release guide](docs/releasing.md) for validation scope, manual publication
 setup, and GitHub Actions/provider-neutral update-job examples.
 
 The [local conda recipe](recipes/depsmith/README.md) is a starting point for
 conda-forge packaging, not a published feedstock. See the [design plan](docs/plan.md).
-Remaining first-release work includes Windows process-tree acceptance and
-conda-forge release prerequisites. Interactive suggestion prompts are deferred.
+The first release publishes to PyPI and as a draft GitHub release; conda-forge
+submission follows. Interactive suggestion prompts, post-install project
+checks and commit-pin conversion suggestions are deferred.
