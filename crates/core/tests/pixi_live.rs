@@ -14,26 +14,45 @@ fn scm_editable_uses_staged_history_without_a_pretend_version() {
     editable_roundtrip(true);
 }
 
+/// The conda subdir of this machine. Pixi builds editable/source PyPI packages
+/// in an environment for the host, so such projects must declare it.
+fn host_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "aarch64") => "linux-aarch64",
+        ("linux", _) => "linux-64",
+        ("macos", "aarch64") => "osx-arm64",
+        ("macos", _) => "osx-64",
+        ("windows", "aarch64") => "win-arm64",
+        _ => "win-64",
+    }
+}
+
 fn editable_roundtrip(scm: bool) {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("local")).unwrap();
+    let mut platforms = vec!["linux-64", "win-64"];
+    if !platforms.contains(&host_platform()) {
+        platforms.push(host_platform());
+    }
     fs::write(
         root.path().join("pixi.toml"),
-        r#"
+        format!(
+            r#"
 [workspace]
 name = "source-build-fixture"
 channels = ["conda-forge"]
-platforms = ["linux-64", "win-64"]
+platforms = {platforms:?}
 [dependencies]
 python = "3.12.*"
 setuptools = "*"
 setuptools_scm = "*"
 wheel = "*"
 [pypi-dependencies]
-updater-local-fixture = { path = "local", editable = true }
+updater-local-fixture = {{ path = "local", editable = true }}
 [pypi-options]
 no-build-isolation = ["updater-local-fixture"]
-"#,
+"#
+        ),
     )
     .unwrap();
     fs::write(

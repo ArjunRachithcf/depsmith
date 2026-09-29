@@ -58,7 +58,10 @@ the default environment on the current host; it does not install every target
 platform. Lock resolution covers the platforms configured in the project.
 Resolution may install temporary solve/build environments inside the disposable
 workspace, including when `--install` is absent. This is required for some PyPI
-source packages; it does not install into your original checkout. `--install`
+source packages; it does not install into your original checkout. Pixi builds
+editable and other source PyPI packages for the machine running the update, so
+such projects must list that machine's platform (for example `osx-arm64` on
+Apple Silicon) in `platforms`; otherwise Pixi's error is reported with its hint. `--install`
 adds an explicit locked installation check of the default host environment.
 
 Pixi suggestions are limited to pins and upper bounds that exclude a newer final
