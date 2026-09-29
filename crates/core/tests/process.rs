@@ -83,3 +83,28 @@ exit 1
         "output must be limited to the tail: {error}"
     );
 }
+
+/// A freshly written executable can be briefly busy (ETXTBSY) while any
+/// process still holds a write handle, e.g. a concurrently forked child that
+/// inherited it. Starting the tool must wait that out rather than fail.
+#[cfg(unix)]
+#[test]
+fn a_briefly_busy_executable_still_starts() {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("tool");
+    let mut writer = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o755)
+        .open(&script)
+        .unwrap();
+    writer.write_all(b"#!/bin/sh\necho started\n").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        drop(writer);
+    });
+    let result = depsmith_core::process::run(script.to_str().unwrap(), &[], dir.path(), 5);
+    release.join().unwrap();
+    assert_eq!(result.unwrap().trim(), "started");
+}

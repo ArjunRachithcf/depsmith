@@ -227,14 +227,26 @@ fn run_with_env(
         command.process_group(0);
     }
     RUNNING.fetch_add(1, Ordering::SeqCst);
-    let spawned = command
+    command
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
         .stderr(errors.try_clone()?)
         .env("NO_COLOR", "1")
-        .env("PIXI_NO_PROGRESS", "true")
-        .spawn();
+        .env("PIXI_NO_PROGRESS", "true");
+    // A just-written executable is busy (ETXTBSY) while any process still holds
+    // a write handle, such as a child forked concurrently that inherited it
+    // until its own exec. That clears within moments; retry for up to ~2 s.
+    let mut spawned = command.spawn();
+    for _ in 0..40 {
+        match &spawned {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(50));
+                spawned = command.spawn();
+            }
+            _ => break,
+        }
+    }
     let result = match spawned {
         Ok(mut child) => wait(&mut child, program, timeout, output, errors, env),
         Err(e) => Err(Error::Operation(format!("cannot start {program}: {e}"))),
