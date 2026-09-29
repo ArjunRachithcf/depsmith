@@ -1,6 +1,7 @@
-# Coverage for the code-coverage ruleset: the main baseline plus each pull request.
-# Separate from ci.yml because uploads need code-quality: write, which the Release
-# workflow's reusable call to ci.yml does not grant.
+# Combined Rust and Python line coverage: a required check on pull requests (fails
+# below 75%) and the README badge on main. Separate from ci.yml because the badge
+# job needs contents: write, which the Release workflow's reusable call to ci.yml
+# does not grant.
 name: Coverage
 on:
   push:
@@ -14,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      code-quality: write
     outputs:
       lines: ${{ steps.total.outputs.lines }}
     steps:
@@ -48,18 +48,11 @@ jobs:
           roots = [ET.parse(f).getroot() for f in ('rust-coverage.xml', 'python-coverage.xml')]
           covered = sum(int(r.get('lines-covered')) for r in roots)
           valid = sum(int(r.get('lines-valid')) for r in roots)
-          print(f'lines={100 * covered / valid:.1f}')
+          lines = 100 * covered / valid
+          print(f'lines={lines:.1f}')
+          if lines < 75:
+              raise SystemExit(f'Line coverage {lines:.1f}% is below the required 75%')
           PY
-      - uses: actions/upload-code-coverage@v1.4.3
-        with:
-          file: rust-coverage.xml
-          language: Rust
-          label: code-coverage/llvm-cov
-      - uses: actions/upload-code-coverage@v1.4.3
-        with:
-          file: python-coverage.xml
-          language: Python
-          label: code-coverage/coverage-py
   # README badge data: on main only, publish a shields.io endpoint file to the
   # orphan `badges` branch (outside the main-branch ruleset).
   badge:
