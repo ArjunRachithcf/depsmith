@@ -31,14 +31,14 @@ impl NativeProposal {
     }
     #[pyo3(signature = (allow_partial=false))]
     fn apply(&self, py: Python<'_>, allow_partial: bool) -> PyResult<String> {
-        py.allow_threads(|| core::apply(&self.inner, allow_partial))
+        py.detach(|| core::apply(&self.inner, allow_partial))
             .map(|r| serde_json::to_string(&r).unwrap())
             .map_err(error)
     }
 }
 #[pyfunction]
 fn discover_json(py: Python<'_>, root: String) -> PyResult<String> {
-    py.allow_threads(|| core::discover(Path::new(&root)))
+    py.detach(|| core::discover(Path::new(&root)))
         .map(|r| serde_json::to_string(&r).unwrap())
         .map_err(error)
 }
@@ -49,7 +49,7 @@ fn prepare(
     targets: Vec<String>,
     options: String,
 ) -> PyResult<NativeProposal> {
-    py.allow_threads(|| {
+    py.detach(|| {
         let settings = config(&root, &options)?;
         let selected = if targets.is_empty() {
             settings.targets
@@ -68,7 +68,7 @@ fn scan_json(
     targets: Vec<String>,
     options: String,
 ) -> PyResult<String> {
-    py.allow_threads(|| {
+    py.detach(|| {
         let settings = config(&root, &options)?;
         let selected = if targets.is_empty() {
             settings.targets
@@ -82,19 +82,19 @@ fn scan_json(
 }
 #[pyfunction]
 fn doctor_json(py: Python<'_>, root: String, options: String) -> PyResult<String> {
-    py.allow_threads(|| config(&root, &options).map(|settings| core::doctor(&settings.options)))
+    py.detach(|| config(&root, &options).map(|settings| core::doctor(&settings.options)))
         .map(|r| serde_json::to_string(&r).unwrap())
         .map_err(error)
 }
 #[pyfunction]
 fn recover_json(py: Python<'_>, root: String) -> PyResult<String> {
-    py.allow_threads(|| core::recover(Path::new(&root)))
+    py.detach(|| core::recover(Path::new(&root)))
         .map(|r| serde_json::to_string(&r).unwrap())
         .map_err(error)
 }
 #[pyfunction]
 fn cli(py: Python<'_>, args: Vec<String>) -> u8 {
-    py.allow_threads(|| depsmith_cli::run_from(args))
+    py.detach(|| depsmith_cli::run_from(args))
 }
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
