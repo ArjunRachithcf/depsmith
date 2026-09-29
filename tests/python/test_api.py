@@ -1,5 +1,8 @@
+import json
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -107,6 +110,44 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(proposal.unresolved, ())
             with self.assertRaises(updater.OperationError):
                 proposal.apply()
+
+    def test_recover_without_an_interrupted_operation_raises(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(updater.ConfigurationError, "no interrupted"),
+        ):
+            updater.recover(directory)
+
+    def test_scan_rejects_unknown_targets(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(updater.ConfigurationError, "unknown target"),
+        ):
+            updater.scan(directory, targets=["missing"])
+
+    def test_console_script_reports_json(self):
+        # A subprocess: the CLI installs process-wide interrupt handlers.
+        with tempfile.TemporaryDirectory() as directory:
+            pathlib.Path(directory, "pixi.toml").write_text(
+                '[workspace]\nname="demo"\n'
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "depsmith",
+                    "discover",
+                    "--root",
+                    directory,
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            targets = json.loads(result.stdout)["targets"]
+            self.assertEqual([t["id"] for t in targets], ["pixi:pixi.toml"])
 
 
 if __name__ == "__main__":
