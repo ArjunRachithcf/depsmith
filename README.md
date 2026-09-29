@@ -222,6 +222,12 @@ expires = "2026-12-31"
 
 ## Development and release status
 
+Repository hooks run through [prek](https://github.com/j178/prek): run
+`prek install --hook-type pre-commit --hook-type pre-push` once. Formatting,
+Ruff, YAML/TOML and workflow checks run on commit and Clippy on push;
+`prek run --all-files` checks everything, as CI does. Changes reach `main`
+through pull requests with signed commits.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings

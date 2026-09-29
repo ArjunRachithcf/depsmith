@@ -11,6 +11,18 @@ on:
 permissions:
   contents: read
 jobs:
+  prek:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: j178/prek-action@v3.0.0
+        with:
+          prek-version: 0.5.4
   rust:
     strategy:
       fail-fast: false
