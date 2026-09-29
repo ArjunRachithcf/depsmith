@@ -1,0 +1,85 @@
+# Native integration: real Pixi and Grype plus conda-forge, pypi.org and the GitHub
+# API. Informational on pull requests; blocking as a gate in the Release workflow.
+# Nightly failures open or update a tracking issue (integration-alert.yml).
+name: Integration
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+permissions:
+  contents: read
+env:
+  PIXI_VERSION: v0.80.0
+  GRYPE_VERSION: 0.119.0
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            tests: --workspace
+            python: true
+          - os: windows-latest
+            tests: -p depsmith-core --test pixi_live
+            python: false
+          - os: macos-latest
+            tests: -p depsmith-core --test pixi_live
+            python: false
+    runs-on: ${{ matrix.os }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          run-install: false
+      - name: Install Grype (checksum-verified)
+        if: runner.os == 'Linux'
+        run: |
+          base="https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$base/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "$base/grype_${GRYPE_VERSION}_checksums.txt"
+          sha256sum --check --ignore-missing "grype_${GRYPE_VERSION}_checksums.txt"
+          tar -xzf "grype_${GRYPE_VERSION}_linux_amd64.tar.gz" grype
+          echo "GRYPE=$RUNNER_TEMP/grype" >> "$GITHUB_ENV"
+      - name: Native Rust tests (one retry for network flakes)
+        shell: bash
+        run: |
+          PIXI="$(command -v pixi)"
+          export PIXI
+          run() { cargo test ${{ matrix.tests }} --locked -- --ignored --test-threads 1; }
+          if ! run; then
+            echo "::warning::Native tests failed; retrying once to rule out a transient network error"
+            run
+          fi
+      - name: Native Python test (one retry)
+        if: matrix.python
+        shell: bash
+        run: |
+          PIXI="$(command -v pixi)"
+          export PIXI
+          python -m pip install .
+          run() { python -m unittest discover -s tests/python -v; }
+          if ! run; then
+            echo "::warning::Python tests failed; retrying once"
+            run
+          fi

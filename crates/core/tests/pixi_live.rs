@@ -309,3 +309,115 @@ six = "==1.15.0"
         accepted.failures[0].message
     );
 }
+
+#[test]
+#[ignore = "runs native Pixi and queries pypi.org"]
+fn project_requirement_accept_round_trip() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("pyproject.toml"),
+        r#"[project]
+name = "project-accept-fixture"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "six==1.15.0 ; python_version >= '3.8'", # pinned for reasons
+]
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+[tool.pixi.dependencies]
+python = "3.12.*"
+"#,
+    )
+    .unwrap();
+    let pixi = std::env::var("PIXI").unwrap_or_else(|_| "pixi".into());
+    let options = |accept: &[&str]| UpdateOptions {
+        pixi: pixi.clone(),
+        accept: accept.iter().map(|a| a.to_string()).collect(),
+        ..Default::default()
+    };
+    let targets = ["pixi:pyproject.toml".to_string()];
+    let engine = Engine::default();
+    let proposal = engine.prepare(root.path(), &targets, options(&[])).unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    let six = proposal
+        .suggestions
+        .iter()
+        .find(|s| s.package == "six")
+        .expect("[project] pin suggested");
+    assert_eq!(six.requirement, "==1.15.0");
+    assert!(
+        six.evidence
+            .iter()
+            .any(|e| e.starts_with("https://pypi.org/simple: ")),
+        "{:?}",
+        six.evidence
+    );
+    let accepted = engine
+        .prepare(root.path(), &targets, options(&["six"]))
+        .unwrap();
+    assert!(accepted.failures.is_empty(), "{:?}", accepted.failures);
+    let manifest = accepted
+        .changes
+        .iter()
+        .find(|c| c.path.ends_with("pyproject.toml"))
+        .expect("manifest change");
+    let line = manifest
+        .after
+        .lines()
+        .find(|l| l.contains("\"six=="))
+        .unwrap();
+    assert!(
+        !line.contains("1.15.0")
+            && line.ends_with(" ; python_version >= '3.8'\", # pinned for reasons"),
+        "{line}"
+    );
+    apply(&accepted, false).unwrap();
+    let recheck = engine.prepare(root.path(), &targets, options(&[])).unwrap();
+    assert!(recheck.failures.is_empty(), "{:?}", recheck.failures);
+    assert!(recheck.changes.is_empty(), "{:?}", recheck.changes);
+    assert!(!recheck.suggestions.iter().any(|s| s.package == "six"));
+}
+
+#[test]
+#[ignore = "runs native Pixi and downloads conda-forge/PyPI metadata"]
+fn mixed_conda_and_pypi_lock_covers_every_platform() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("pixi.toml"),
+        r#"[workspace]
+name = "mixed-platform-fixture"
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64", "osx-arm64"]
+[dependencies]
+python = "3.12.*"
+zlib = "*"
+[pypi-dependencies]
+six = "*"
+"#,
+    )
+    .unwrap();
+    let options = UpdateOptions {
+        pixi: std::env::var("PIXI").unwrap_or_else(|_| "pixi".into()),
+        ..Default::default()
+    };
+    let proposal = Engine::default()
+        .prepare(root.path(), &["pixi:pixi.toml".into()], options)
+        .unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    let resolved: std::collections::BTreeSet<(String, String, String)> = proposal
+        .dependencies
+        .iter()
+        .filter_map(|d| d.after.as_ref())
+        .map(|p| (p.platform.clone(), p.ecosystem.clone(), p.name.clone()))
+        .collect();
+    for platform in ["linux-64", "win-64", "osx-arm64"] {
+        for (ecosystem, name) in [("conda", "python"), ("conda", "zlib"), ("pypi", "six")] {
+            assert!(
+                resolved.contains(&(platform.into(), ecosystem.into(), name.into())),
+                "{platform} {ecosystem}:{name} missing from {resolved:?}"
+            );
+        }
+    }
+}

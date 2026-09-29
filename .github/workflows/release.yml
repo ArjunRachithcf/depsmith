@@ -55,9 +55,14 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       ref: ${{ needs.validate.outputs.sha }}
+  integration:
+    needs: validate
+    uses: ./.github/workflows/integration.yml
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
   pypi:
     if: inputs.publish
-    needs: build
+    needs: [build, integration]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -75,7 +80,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
   github-release:
     if: inputs.publish
-    needs: [validate, build]
+    needs: [validate, build, integration]
     runs-on: ubuntu-latest
     environment: release
     permissions:

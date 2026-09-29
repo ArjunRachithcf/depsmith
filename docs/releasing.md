@@ -6,8 +6,10 @@ The project is an alpha. A green build is not a published release.
 
 CI builds standalone executables and installs/tests wheels on Linux x86-64,
 Windows x86-64, macOS Intel and Apple Silicon. It checks Rust 1.89, installs
-from the sdist, and builds/tests the local conda recipe on Linux. Native Pixi
-and Grype network tests are opt-in and are not implied by a green default CI.
+from the sdist, and builds/tests the local conda recipe on Linux. Native Pixi,
+Grype, pypi.org and GitHub API tests run in the separate Integration workflow on
+pull requests (informational), on `main`, nightly (failures open a
+`nightly-integration` issue) and as a gate in the Release workflow.
 Windows process-tree termination still needs dedicated native acceptance coverage.
 
 The initial complete platform run passed at
@@ -23,7 +25,8 @@ uses the checkout and downloads Cargo dependencies; it is not a feedstock.
    the matching version tag (`v0.1.0`, for example) through the normal review process.
 2. Run **Release** (`.github/workflows/release.yml`) with that existing tag and
    leave `publish` false. It resolves the tag to a commit, checks all three version
-   declarations, and runs all CI build/test jobs on that exact commit.
+   declarations, and runs all CI build/test jobs and the native integration tests
+   (real Pixi, Grype, conda-forge, pypi.org and GitHub API) on that exact commit.
 3. Review the artifacts. Configure GitHub environments `pypi` and `release`
    with required reviewers before enabling publication. Configure a PyPI
    [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)

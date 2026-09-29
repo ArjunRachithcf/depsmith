@@ -1,0 +1,33 @@
+# Opens or updates one tracking issue when the nightly Integration run fails.
+# Separate from integration.yml so the Release workflow can call that workflow
+# without granting issues: write.
+name: Integration alert
+on:
+  workflow_run:
+    workflows: [Integration]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  alert:
+    if: github.event.workflow_run.event == 'schedule' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Open or update the tracking issue
+        run: |
+          label=nightly-integration
+          gh label create "$label" --color B60205 --description "Nightly native integration failures" --force
+          body="Nightly native integration failed at ${RUN_SHA}: ${RUN_URL}"
+          issue=$(gh issue list --label "$label" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "$body"
+          else
+            gh issue create --label "$label" --title "Nightly native integration is failing" --body "$body"
+          fi
