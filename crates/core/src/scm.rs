@@ -39,6 +39,11 @@ fn no_symlinks(path: &Path) -> Result<()> {
     let mut current = PathBuf::new();
     for part in path.components() {
         current.push(part);
+        // A drive prefix or root cannot be a symlink, and Windows rejects
+        // metadata queries on a bare volume such as `\\?\C:`.
+        if !matches!(part, std::path::Component::Normal(_)) {
+            continue;
+        }
         if fs::symlink_metadata(&current)?.file_type().is_symlink() {
             return Err(Error::Invalid(
                 "symlink in Git metadata is unsupported".into(),
