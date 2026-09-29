@@ -68,9 +68,12 @@ pub struct UpdateOptions {
     pub fail_on: Option<String>,
     /// Apply `fail_on` only to findings the candidate introduces.
     pub only_new: bool,
-    /// Pixi executable to run.
+    /// Executable paths by tool name (see each adapter's tool specs), such as
+    /// `pixi` or `grype`; a tool without an entry runs its default.
+    pub tools: BTreeMap<String, String>,
+    /// Deprecated alias for `tools["pixi"]`.
     pub pixi: String,
-    /// Grype executable to run.
+    /// Deprecated alias for `tools["grype"]`.
     pub grype: String,
     /// Time limit for each package-manager or scanner process, in seconds.
     pub timeout_seconds: u64,
@@ -91,6 +94,7 @@ impl Default for UpdateOptions {
             scan: false,
             fail_on: None,
             only_new: false,
+            tools: BTreeMap::new(),
             pixi: "pixi".into(),
             grype: "grype".into(),
             timeout_seconds: 300,
@@ -211,6 +215,8 @@ pub struct Proposal {
     pub scans: Vec<crate::scan::ScanReport>,
     #[serde(skip)]
     pub(crate) inputs: BTreeMap<PathBuf, String>,
+    #[serde(skip)]
+    pub(crate) layout: crate::working_tree::Layout,
 }
 
 /// What applying a proposal wrote.
@@ -266,6 +272,19 @@ impl Proposal {
 }
 
 impl UpdateOptions {
+    /// The executable to run for the tool named `name`: its `tools` entry,
+    /// else the deprecated `pixi`/`grype` field, else `name` itself.
+    pub fn tool(&self, name: &str) -> String {
+        if let Some(path) = self.tools.get(name) {
+            return path.clone();
+        }
+        match name {
+            "pixi" => self.pixi.clone(),
+            "grype" => self.grype.clone(),
+            _ => name.to_owned(),
+        }
+    }
+
     /// Check the options for consistency before any work starts: a positive
     /// timeout, well-formed acceptances and suppressions, a known `fail_on`
     /// severity used together with scanning, and `only_new` only with
@@ -277,6 +296,15 @@ impl UpdateOptions {
     pub fn validate(&self) -> Result<()> {
         if self.timeout_seconds == 0 {
             return Err(Error::Invalid("timeout must be positive".into()));
+        }
+        if let Some((name, _)) = self
+            .tools
+            .iter()
+            .find(|(name, path)| name.trim().is_empty() || path.trim().is_empty())
+        {
+            return Err(Error::Invalid(format!(
+                "tool {name:?} needs a non-empty name and path"
+            )));
         }
         for accept in &self.accept {
             crate::constraint::parse_accept(accept)?;

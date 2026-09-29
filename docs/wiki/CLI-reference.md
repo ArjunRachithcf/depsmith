@@ -56,10 +56,12 @@ Options:
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
           Time limit for each package manager or scanner process [default: 300]
+      --tool <NAME=PATH>
+          Path of a native tool, as NAME=PATH (repeatable), for example `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names
       --pixi <PIXI>
-          Pixi executable to run [default: pixi]
+          Deprecated: use `--tool pixi=PATH`
       --grype <GRYPE>
-          Grype executable to run [default: grype]
+          Deprecated: use `--tool grype=PATH`
   -h, --help
           Print help
   -V, --version
@@ -106,10 +108,12 @@ Options:
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
           Time limit for each package manager or scanner process [default: 300]
+      --tool <NAME=PATH>
+          Path of a native tool, as NAME=PATH (repeatable), for example `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names
       --pixi <PIXI>
-          Pixi executable to run [default: pixi]
+          Deprecated: use `--tool pixi=PATH`
       --grype <GRYPE>
-          Grype executable to run [default: grype]
+          Deprecated: use `--tool grype=PATH`
   -h, --help
           Print help
 ```
@@ -154,10 +158,12 @@ Options:
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
           Time limit for each package manager or scanner process [default: 300]
+      --tool <NAME=PATH>
+          Path of a native tool, as NAME=PATH (repeatable), for example `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names
       --pixi <PIXI>
-          Pixi executable to run [default: pixi]
+          Deprecated: use `--tool pixi=PATH`
       --grype <GRYPE>
-          Grype executable to run [default: grype]
+          Deprecated: use `--tool grype=PATH`
   -h, --help
           Print help
 ```
@@ -202,10 +208,12 @@ Options:
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
           Time limit for each package manager or scanner process [default: 300]
+      --tool <NAME=PATH>
+          Path of a native tool, as NAME=PATH (repeatable), for example `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names
       --pixi <PIXI>
-          Pixi executable to run [default: pixi]
+          Deprecated: use `--tool pixi=PATH`
       --grype <GRYPE>
-          Grype executable to run [default: grype]
+          Deprecated: use `--tool grype=PATH`
   -h, --help
           Print help
 ```
@@ -256,10 +264,12 @@ Options:
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
           Time limit for each package manager or scanner process [default: 300]
+      --tool <NAME=PATH>
+          Path of a native tool, as NAME=PATH (repeatable), for example `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names
       --pixi <PIXI>
-          Pixi executable to run [default: pixi]
+          Deprecated: use `--tool pixi=PATH`
       --grype <GRYPE>
-          Grype executable to run [default: grype]
+          Deprecated: use `--tool grype=PATH`
   -h, --help
           Print help
 ```
@@ -304,10 +314,12 @@ Options:
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
           Time limit for each package manager or scanner process [default: 300]
+      --tool <NAME=PATH>
+          Path of a native tool, as NAME=PATH (repeatable), for example `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names
       --pixi <PIXI>
-          Pixi executable to run [default: pixi]
+          Deprecated: use `--tool pixi=PATH`
       --grype <GRYPE>
-          Grype executable to run [default: grype]
+          Deprecated: use `--tool grype=PATH`
   -h, --help
           Print help
 ```
@@ -352,10 +364,12 @@ Options:
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
           Time limit for each package manager or scanner process [default: 300]
+      --tool <NAME=PATH>
+          Path of a native tool, as NAME=PATH (repeatable), for example `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names
       --pixi <PIXI>
-          Pixi executable to run [default: pixi]
+          Deprecated: use `--tool pixi=PATH`
       --grype <GRYPE>
-          Grype executable to run [default: grype]
+          Deprecated: use `--tool grype=PATH`
   -h, --help
           Print help
 ```

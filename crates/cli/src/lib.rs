@@ -67,10 +67,14 @@ struct Cli {
     /// Time limit for each package manager or scanner process [default: 300].
     #[arg(long, global = true)]
     timeout_seconds: Option<u64>,
-    /// Pixi executable to run [default: pixi].
+    /// Path of a native tool, as NAME=PATH (repeatable), for example
+    /// `--tool pixi=/opt/pixi/bin/pixi`; `doctor` lists the tool names.
+    #[arg(long = "tool", global = true, value_name = "NAME=PATH")]
+    tools: Vec<String>,
+    /// Deprecated: use `--tool pixi=PATH`.
     #[arg(long, global = true)]
     pixi: Option<String>,
-    /// Grype executable to run [default: grype].
+    /// Deprecated: use `--tool grype=PATH`.
     #[arg(long, global = true)]
     grype: Option<String>,
 }
@@ -99,8 +103,21 @@ enum Command {
     /// Restore the files of an interrupted apply.
     Recover,
 }
-fn overrides(cli: &Cli) -> Value {
+fn overrides(cli: &Cli) -> Result<Value> {
     let mut values = serde_json::Map::new();
+    if !cli.tools.is_empty() {
+        let mut tools = serde_json::Map::new();
+        for entry in &cli.tools {
+            let (name, path) = entry
+                .split_once('=')
+                .filter(|(name, path)| !name.is_empty() && !path.is_empty())
+                .ok_or_else(|| {
+                    Error::Invalid(format!("--tool expects NAME=PATH, got {entry:?}"))
+                })?;
+            tools.insert(name.into(), json!(path));
+        }
+        values.insert("tools".into(), Value::Object(tools));
+    }
     for (name, enabled) in [
         ("upgrade", cli.upgrade),
         ("refresh_git", cli.refresh_git),
@@ -136,7 +153,7 @@ fn overrides(cli: &Cli) -> Value {
     if let Some(value) = cli.timeout_seconds {
         values.insert("timeout_seconds".into(), json!(value));
     }
-    Value::Object(values)
+    Ok(Value::Object(values))
 }
 fn confirm(message: &str) -> Result<bool> {
     eprint!("{message} [y/N] ");
@@ -170,7 +187,7 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
     if cli.json && cli.markdown {
         return Err(Error::Invalid("choose JSON or Markdown output".into()));
     }
-    let config = core::config::settings(&cli.root, &overrides(cli))?;
+    let config = core::config::settings(&cli.root, &overrides(cli)?)?;
     if matches!(cli.command, Command::Doctor) {
         return Ok((core::doctor(&config.options), 0));
     }

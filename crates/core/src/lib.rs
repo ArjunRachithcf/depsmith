@@ -24,6 +24,7 @@
 /// The adapter contract implemented by each package manager integration.
 pub mod adapter;
 mod conda_version;
+pub mod conformance;
 mod constraint;
 mod cutoff;
 /// Reading resolved packages from lockfiles.
@@ -47,7 +48,7 @@ use std::{fs, path::Path};
 /// Discovers targets and prepares proposals with a set of adapters. The
 /// default engine has the Pixi and GitHub Actions adapters.
 pub struct Engine {
-    adapters: Vec<Box<dyn Adapter>>,
+    adapters: Vec<(Box<dyn Adapter>, adapter::AdapterSpec)>,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -77,11 +78,19 @@ pub fn discover(root: &Path) -> Result<Vec<Target>> {
 impl Engine {
     /// An engine with exactly these adapters.
     pub fn new(adapters: Vec<Box<dyn Adapter>>) -> Self {
-        Self { adapters }
+        Self {
+            adapters: adapters
+                .into_iter()
+                .map(|adapter| {
+                    let spec = adapter.spec();
+                    (adapter, spec)
+                })
+                .collect(),
+        }
     }
     /// Declared capabilities of every adapter.
-    pub fn capabilities(&self) -> Vec<adapter::Capabilities> {
-        self.adapters.iter().map(|a| a.capabilities()).collect()
+    pub fn specs(&self) -> Vec<adapter::AdapterSpec> {
+        self.adapters.iter().map(|(_, spec)| spec.clone()).collect()
     }
     /// Unsupported requests fail; restrictive ones (cooldown) also fail when not
     /// applicable, since ignoring them would relax policy. Other inapplicable
@@ -94,7 +103,7 @@ impl Engine {
         use adapter::Support;
         let mut notes = vec![];
         for target in targets {
-            let capabilities = self.adapter(target).capabilities();
+            let capabilities = self.spec(target).capabilities.clone();
             let requested = [
                 (
                     options.cooldown_days.is_some(),
@@ -161,9 +170,19 @@ impl Engine {
     fn adapter(&self, target: &Target) -> &dyn Adapter {
         self.adapters
             .iter()
-            .find(|a| a.manager() == target.manager)
-            .map(Box::as_ref)
+            .find(|(_, spec)| spec.manager == target.manager)
+            .map(|(adapter, _)| adapter.as_ref())
             .expect("discovered targets always have a registered adapter")
+    }
+    fn spec(&self, target: &Target) -> &adapter::AdapterSpec {
+        self.adapters
+            .iter()
+            .find(|(_, spec)| spec.manager == target.manager)
+            .map(|(_, spec)| spec)
+            .expect("discovered targets always have a registered adapter")
+    }
+    fn layout(&self) -> working_tree::Layout {
+        working_tree::Layout::new(self.adapters.iter().map(|(_, spec)| spec))
     }
     /// Discover targets under `root` with this engine's adapters.
     ///
@@ -173,23 +192,39 @@ impl Engine {
     pub fn discover(&self, root: &Path) -> Result<Vec<Target>> {
         let root = working_tree::canonical(root)?;
         let mut targets = vec![];
-        for path in working_tree::files(&root)? {
-            if !matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("toml" | "yml" | "yaml")
-            ) {
-                continue;
-            }
-            let content = fs::read_to_string(root.join(&path))?;
-            for adapter in &self.adapters {
-                if adapter.detects(&path, &content) {
+        for path in working_tree::files(&root, &self.layout())? {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let mut content = None;
+            for (adapter, spec) in &self.adapters {
+                if !spec
+                    .patterns
+                    .iter()
+                    .any(|p| working_tree::matches_pattern(p, name))
+                {
+                    continue;
+                }
+                // Read each candidate once; files that are not UTF-8 text are
+                // not manifests of any supported package manager.
+                let text = content.get_or_insert_with(|| {
+                    fs::read(root.join(&path))
+                        .map(|bytes| String::from_utf8(bytes).ok())
+                        .map_err(Error::from)
+                });
+                let text = match text {
+                    Ok(Some(text)) => text,
+                    Ok(None) => break,
+                    Err(_) => {
+                        return Err(Error::Operation(format!("cannot read {}", path.display())))
+                    }
+                };
+                if adapter.detects(&path, text) {
                     targets.push(Target {
                         id: format!(
                             "{}:{}",
-                            adapter.manager(),
+                            spec.manager,
                             path.to_string_lossy().replace('\\', "/")
                         ),
-                        manager: adapter.manager().into(),
+                        manager: spec.manager.clone(),
                         manifest: path.clone(),
                     });
                 }
@@ -307,7 +342,8 @@ impl Engine {
                 unmatched.join(", ")
             )));
         }
-        let inputs = working_tree::fingerprint(&root)?;
+        let layout = self.layout();
+        let inputs = working_tree::fingerprint(&root, &layout)?;
         let mut proposal = Proposal {
             schema_version: 1,
             root: root.clone(),
@@ -320,6 +356,7 @@ impl Engine {
             validation: vec![],
             scans: vec![],
             inputs,
+            layout,
         };
         proposal.validation.extend(notes);
         for ((target, selection), accept) in targets.into_iter().zip(selections).zip(accepted) {
@@ -343,7 +380,7 @@ impl Engine {
                 None => options.clone(),
             };
             let stage = tempfile::tempdir()?;
-            working_tree::stage(&root, stage.path(), &proposal.inputs)?;
+            working_tree::stage(&root, stage.path(), &proposal.inputs, &proposal.layout)?;
             let mut conflict = false;
             let prepared = adapter
                 .prepare(stage.path(), &target, &options)
@@ -463,42 +500,67 @@ pub mod actions;
 pub mod config;
 
 /// Report adapter capabilities and whether each native tool is available and
-/// a tested version, for troubleshooting an installation.
+/// a tested version, for troubleshooting an installation. Uses the default
+/// adapters; see [`Engine::doctor`].
 pub fn doctor(options: &UpdateOptions) -> serde_json::Value {
-    let capabilities = Engine::default().capabilities();
-    let mut tools = vec![];
-    for tool in capabilities.iter().filter_map(|c| c.native_tool.as_ref()) {
-        let program = match tool.option {
-            "pixi" => &options.pixi,
-            other => {
-                tools.push(serde_json::json!({"tool": other, "available": false,
-                    "status": "unavailable", "error": "no option configures this executable",
-                    "tested_versions": tool.tested_versions}));
-                continue;
-            }
-        };
-        tools.push(tool_report(
-            tool.option,
-            program,
-            tool.tested_versions,
-            options,
-        ));
+    Engine::default().doctor(options)
+}
+
+impl Engine {
+    /// Report this engine's adapter specs and, for every native tool they or
+    /// the scanner declare, whether it is available and a tested version.
+    /// Tool paths come from [`UpdateOptions::tool`].
+    pub fn doctor(&self, options: &UpdateOptions) -> serde_json::Value {
+        let specs = self.specs();
+        let mut seen = std::collections::BTreeSet::new();
+        let tools: Vec<_> = specs
+            .iter()
+            .flat_map(|spec| spec.tools.iter().cloned())
+            .chain([scan::scanner_tool()])
+            .filter(|tool| seen.insert(tool.name.clone()))
+            .map(|tool| tool_report(&tool, &options.tool(&tool.name), options))
+            .collect();
+        serde_json::json!({"schema_version": 1, "tools": tools, "adapters": specs})
     }
-    tools.push(tool_report(
-        "grype",
-        &options.grype,
-        scan::GRYPE_TESTED_VERSIONS,
-        options,
-    ));
-    serde_json::json!({"schema_version": 1, "tools": tools, "adapters": capabilities})
+
+    /// Scan the current locks of the `selected` targets under `root` without
+    /// preparing an update; see [`scan_existing`].
+    ///
+    /// # Errors
+    ///
+    /// As for [`scan_existing`].
+    pub fn scan_existing(
+        &self,
+        root: &Path,
+        selected: &[String],
+        options: &UpdateOptions,
+    ) -> Result<Vec<scan::ScanReport>> {
+        options.validate()?;
+        if selected.is_empty() {
+            return Err(Error::Invalid("select targets for scanning".into()));
+        }
+        let targets = self.discover(root)?;
+        let mut reports = vec![];
+        for id in selected {
+            let target = targets
+                .iter()
+                .find(|t| &t.id == id)
+                .ok_or_else(|| Error::Invalid(format!("unknown target: {id}")))?;
+            let packages = self.adapter(target).inventory(root, target)?;
+            reports.push(scan::scan_pair(id, None, &packages, options, root)?);
+        }
+        Ok(reports)
+    }
 }
 
 fn tool_report(
-    name: &str,
+    tool: &adapter::ToolSpec,
     program: &str,
-    tested: &[&str],
     options: &UpdateOptions,
 ) -> serde_json::Value {
+    let name = &tool.name;
+    let tested = &tool.tested_versions;
+    let tested_refs: Vec<&str> = tested.iter().map(String::as_str).collect();
     let result = process::run(
         program,
         &["--version".into()],
@@ -507,7 +569,7 @@ fn tool_report(
     );
     match result {
         Ok(output) => {
-            let (status, version) = adapter::tool_status(&output, tested);
+            let (status, version) = adapter::tool_status(&output, &tested_refs);
             serde_json::json!({"tool": name, "program": program, "available": true,
                 "status": status, "version": version, "tested_versions": tested})
         }
@@ -517,8 +579,8 @@ fn tool_report(
 }
 
 /// Scan the current locks of the `selected` targets under `root` without
-/// preparing an update. There is no baseline to compare against, so every
-/// report is `candidate-only`.
+/// preparing an update, with the default adapters. There is no baseline to
+/// compare against, so every report is `candidate-only`.
 ///
 /// # Errors
 ///
@@ -530,25 +592,5 @@ pub fn scan_existing(
     selected: &[String],
     options: &UpdateOptions,
 ) -> Result<Vec<scan::ScanReport>> {
-    options.validate()?;
-    if selected.is_empty() {
-        return Err(Error::Invalid("select targets for scanning".into()));
-    }
-    let targets = discover(root)?;
-    let mut reports = vec![];
-    for id in selected {
-        let target = targets
-            .iter()
-            .find(|t| &t.id == id)
-            .ok_or_else(|| Error::Invalid(format!("unknown target: {id}")))?;
-        let engine = Engine::default();
-        let adapter = engine
-            .adapters
-            .iter()
-            .find(|a| a.manager() == target.manager)
-            .unwrap();
-        let packages = adapter.inventory(root, target)?;
-        reports.push(scan::scan_pair(id, None, &packages, options, root)?);
-    }
-    Ok(reports)
+    Engine::default().scan_existing(root, selected, options)
 }

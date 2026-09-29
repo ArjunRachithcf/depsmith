@@ -46,8 +46,8 @@ fn failed_backend_never_modifies_original_manifest() {
 
 struct FixtureAdapter;
 impl depsmith_core::adapter::Adapter for FixtureAdapter {
-    fn manager(&self) -> &'static str {
-        "fixture"
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("fixture", &["project.toml"])
     }
     fn detects(&self, path: &std::path::Path, _: &str) -> bool {
         path == std::path::Path::new("project.toml")
@@ -148,8 +148,8 @@ fn symlink_swap_is_rejected() {
 
 struct SharedOutput;
 impl depsmith_core::adapter::Adapter for SharedOutput {
-    fn manager(&self) -> &'static str {
-        "shared"
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("shared", &["*.toml"])
     }
     fn detects(&self, path: &std::path::Path, _: &str) -> bool {
         path.extension().is_some_and(|ext| ext == "toml")
@@ -214,8 +214,8 @@ fn application_cannot_target_internal_metadata() {
 fn adapter_output_symlinks_are_rejected_before_reading() {
     struct LinkedOutput;
     impl depsmith_core::adapter::Adapter for LinkedOutput {
-        fn manager(&self) -> &'static str {
-            "linked"
+        fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+            depsmith_core::adapter::AdapterSpec::new("linked", &["*"])
         }
         fn detects(&self, _: &std::path::Path, _: &str) -> bool {
             true

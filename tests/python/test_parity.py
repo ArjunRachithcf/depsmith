@@ -74,6 +74,20 @@ class ParityTests(unittest.TestCase):
                     call()
                 self.assertEqual(report["error"], str(raised.exception))
 
+    def test_tool_paths(self):
+        args = ["--target", "pixi:pixi.toml", "--tool", "pixi=missing-pixi-binary"]
+        code, report = cli("check", "--root", str(self.root), *args)
+        proposal = updater.prepare(
+            self.root,
+            targets=["pixi:pixi.toml"],
+            options=updater.UpdateOptions(tools={"pixi": "missing-pixi-binary"}),
+        )
+        self.assertEqual(report["proposal"], proposal.to_dict())
+        self.assertIn("missing-pixi-binary", proposal.failures[0].message)
+        code, report = cli("check", "--root", str(self.root), "--tool", "pixi")
+        self.assertEqual(code, 2)
+        self.assertIn("NAME=PATH", report["error"])
+
     @unittest.skipUnless(os.environ.get("PIXI"), "set PIXI to run the native parity")
     def test_native_preview(self):
         pixi = os.environ["PIXI"]

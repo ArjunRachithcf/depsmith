@@ -6,8 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, fs, path::Path};
 
-/// Grype releases exercised by the native acceptance test.
-pub const GRYPE_TESTED_VERSIONS: &[&str] = &["0.119.0"];
+/// The vulnerability scanner the engine drives, with the Grype releases
+/// exercised by the native acceptance test.
+pub fn scanner_tool() -> crate::adapter::ToolSpec {
+    crate::adapter::ToolSpec {
+        name: "grype".into(),
+        default: "grype".into(),
+        tested_versions: vec!["0.119.0".into()],
+    }
+}
 
 /// A reviewed statement that a package in one ecosystem is the same software
 /// as an upstream identity, used when no verifiable identity can be derived.
@@ -350,14 +357,14 @@ pub fn scan_pair(
         ("GRYPE_DB_AUTO_UPDATE".into(), "false".into()),
     ];
     run_env(
-        &options.grype,
+        &options.tool("grype"),
         &["db".into(), "update".into()],
         cwd,
         options.timeout_seconds,
         &env,
     )?;
     let database: Value = serde_json::from_str(&run_env(
-        &options.grype,
+        &options.tool("grype"),
         &["db".into(), "status".into(), "-o".into(), "json".into()],
         cwd,
         options.timeout_seconds,
@@ -373,7 +380,7 @@ pub fn scan_pair(
         fs::write(&path, serde_json::to_vec(&sbom).unwrap())?;
         baseline = findings(
             &run_env(
-                &options.grype,
+                &options.tool("grype"),
                 &[
                     format!("sbom:{}", path.display()),
                     "-o".into(),
@@ -391,7 +398,7 @@ pub fn scan_pair(
     fs::write(&path, serde_json::to_vec(&sbom).unwrap())?;
     let candidate = findings(
         &run_env(
-            &options.grype,
+            &options.tool("grype"),
             &[
                 format!("sbom:{}", path.display()),
                 "-o".into(),

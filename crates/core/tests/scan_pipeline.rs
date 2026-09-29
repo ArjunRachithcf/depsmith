@@ -270,8 +270,8 @@ fn unscoped_or_undocumented_suppressions_are_rejected() {
 
 struct Fixture;
 impl depsmith_core::adapter::Adapter for Fixture {
-    fn manager(&self) -> &'static str {
-        "fixture"
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("fixture", &["project.toml"])
     }
     fn detects(&self, path: &Path, _: &str) -> bool {
         path == Path::new("project.toml")

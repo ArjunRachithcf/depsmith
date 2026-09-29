@@ -3,7 +3,9 @@
 //! suggestions with availability evidence, and rewrites accepted constraints.
 use crate::constraint::Excluded;
 use crate::{
-    adapter::{pypi_key, Adapter, Candidate, Capabilities, NativeTool, Support},
+    adapter::{
+        pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
+    },
     process::run,
     Error, Result, Suggestion, Target, UpdateOptions,
 };
@@ -13,26 +15,36 @@ use std::{collections::BTreeMap, fs, path::Path};
 /// with a `[tool.pixi]` table; Pixi itself resolves in the stage.
 pub struct Pixi;
 impl Adapter for Pixi {
-    fn manager(&self) -> &'static str {
-        "pixi"
-    }
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            manager: self.manager(),
-            package_selection: Support::Supported,
-            constraint_changes: Support::Supported,
-            suggestion_acceptance: Support::Supported,
-            git_refresh: Support::Supported,
-            cooldown: Support::Unsupported(
-                "a common cooldown is not implemented; configure workspace.exclude-newer in the Pixi manifest",
-            ),
-            install_validation: Support::Supported,
-            lockfile: Support::Supported,
-            platforms: Support::Supported,
-            native_tool: Some(NativeTool {
-                option: "pixi",
-                tested_versions: &["0.80.0"],
-            }),
+    fn spec(&self) -> AdapterSpec {
+        AdapterSpec {
+            manager: "pixi".into(),
+            ecosystems: vec!["conda".into(), "pypi".into()],
+            patterns: vec!["pixi.toml".into(), "pyproject.toml".into()],
+            // Native configuration and the lock are resolver inputs even when
+            // .pixi or the lock is gitignored.
+            managed: vec![ManagedFiles {
+                manifests: vec!["pixi.toml".into(), "pyproject.toml".into()],
+                inputs: vec![".pixi/config.toml".into(), "pixi.lock".into()],
+            }],
+            skip_dirs: vec![".pixi".into()],
+            tools: vec![ToolSpec {
+                name: "pixi".into(),
+                default: "pixi".into(),
+                tested_versions: vec!["0.80.0".into()],
+            }],
+            capabilities: Capabilities {
+                package_selection: Support::Supported,
+                constraint_changes: Support::Supported,
+                suggestion_acceptance: Support::Supported,
+                git_refresh: Support::Supported,
+                cooldown: Support::Unsupported(
+                    "a common cooldown is not implemented; configure workspace.exclude-newer in the Pixi manifest"
+                        .into(),
+                ),
+                install_validation: Support::Supported,
+                lockfile: Support::Supported,
+                platforms: Support::Supported,
+            },
         }
     }
     fn detects(&self, path: &Path, content: &str) -> bool {
@@ -102,7 +114,8 @@ impl Adapter for Pixi {
             .parse()
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
         validate_paths(&parsed, manifest.parent().unwrap(), stage)?;
-        for relative in crate::working_tree::files(stage)? {
+        let layout = crate::working_tree::Layout::new([&self.spec()]);
+        for relative in crate::working_tree::files(stage, &layout)? {
             if relative
                 .file_name()
                 .is_some_and(|n| n == "pyproject.toml" || n == "pixi.toml")
@@ -161,7 +174,7 @@ impl Adapter for Pixi {
             manifest.to_string_lossy().into(),
         ];
         args.extend(options.packages.clone());
-        run(&options.pixi, &args, stage, options.timeout_seconds)?;
+        run(&options.tool("pixi"), &args, stage, options.timeout_seconds)?;
         let after_text = fs::read_to_string(stage.join(&lock))?;
         let after = crate::inventory::pixi_inventory(&after_text)?;
         if !options.refresh_git
@@ -178,7 +191,7 @@ impl Adapter for Pixi {
             ));
         }
         run(
-            &options.pixi,
+            &options.tool("pixi"),
             &[
                 "lock".into(),
                 "--manifest-path".into(),
@@ -197,7 +210,7 @@ impl Adapter for Pixi {
         validation.push(format!("{}: resolved and lock-consistent", target.id));
         if options.install {
             run(
-                &options.pixi,
+                &options.tool("pixi"),
                 &[
                     "install".into(),
                     "--manifest-path".into(),
@@ -489,7 +502,7 @@ impl Availability<'_> {
             spec.into(),
         ];
         let output = run(
-            &self.options.pixi,
+            &self.options.tool("pixi"),
             &args,
             self.stage,
             self.options.timeout_seconds,

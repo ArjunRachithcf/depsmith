@@ -19,6 +19,21 @@ upgrade = false
   behaviour. Native Pixi configuration in `.pixi/config.toml` is staged even
   when `.pixi/` is ignored.
 
+## Native tool paths
+
+Each adapter declares the native tools it runs; `depsmith doctor` lists them
+by name. Point one at a specific executable with `[options.tools]`, the
+repeatable `--tool NAME=PATH` flag, or `UpdateOptions(tools={...})` in Python:
+
+```toml
+[options.tools]
+pixi = "/opt/pixi/bin/pixi"
+grype = "/usr/local/bin/grype"
+```
+
+`--pixi` and `--grype` (and the matching option fields) still work as
+deprecated aliases.
+
 ## Saving an interactive selection
 
 When no targets are configured, an interactive CLI run asks about each

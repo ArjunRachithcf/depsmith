@@ -2,7 +2,7 @@
 //! capabilities, selects direct dependencies, and prepares a candidate inside
 //! a stage for the engine to review and apply.
 use crate::{Package, Result, Suggestion, Target, Unresolved, UpdateOptions};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -25,33 +25,84 @@ pub fn pypi_key(name: &str) -> String {
 
 /// Whether an adapter honours a requested behaviour. `Unsupported` carries an
 /// actionable hint; `NotApplicable` means the ecosystem has no such concept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "hint", rename_all = "kebab-case")]
 pub enum Support {
     /// The adapter honours the behaviour.
     Supported,
     /// The adapter cannot honour it; the hint says what to do instead.
-    Unsupported(&'static str),
+    Unsupported(String),
     /// The ecosystem has no such concept.
     NotApplicable,
 }
 
-/// The native executable an adapter drives. Only versions actually exercised
+/// A native executable an adapter drives. Only versions actually exercised
 /// are listed; others are reported as untested, not assumed incompatible.
-#[derive(Debug, Clone, Serialize)]
-pub struct NativeTool {
-    /// `UpdateOptions` field naming the executable.
-    pub option: &'static str,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    /// Name used in `UpdateOptions::tools` and `--tool NAME=PATH`.
+    pub name: String,
+    /// Executable run when no path is configured.
+    pub default: String,
     /// Versions exercised by depsmith's tests.
-    pub tested_versions: &'static [&'static str],
+    pub tested_versions: Vec<String>,
+}
+
+/// Files that are resolver inputs of a target even when they are ignored by
+/// Git, such as a lockfile or native configuration next to the manifest. They
+/// are staged and fingerprinted like any other input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedFiles {
+    /// File-name patterns of the manifests this rule applies to.
+    pub manifests: Vec<String>,
+    /// Paths relative to the manifest's directory.
+    pub inputs: Vec<String>,
+}
+
+/// Everything the engine needs to know about an adapter, as plain data: how
+/// its targets are found and staged, which native tools it drives and which
+/// behaviours it supports. Adding a package manager needs no engine changes
+/// beyond registering its adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterSpec {
+    /// Name of the package manager; the prefix of its target identifiers.
+    pub manager: String,
+    /// Ecosystems whose packages the manager resolves.
+    pub ecosystems: Vec<String>,
+    /// File-name patterns (`*` matches any run of characters) of candidate
+    /// manifests; only matching files are offered to [`Adapter::detects`].
+    pub patterns: Vec<String>,
+    /// Ignored files that are still inputs of a target.
+    pub managed: Vec<ManagedFiles>,
+    /// Directory names holding installed environments or caches, never walked.
+    pub skip_dirs: Vec<String>,
+    /// Native executables the adapter drives.
+    pub tools: Vec<ToolSpec>,
+    /// Behaviours the adapter supports.
+    #[serde(flatten)]
+    pub capabilities: Capabilities,
+}
+
+impl AdapterSpec {
+    /// A spec with only a manager name and discovery patterns: no managed
+    /// files, skipped directories, tools, ecosystems or capabilities.
+    pub fn new(manager: &str, patterns: &[&str]) -> Self {
+        Self {
+            manager: manager.into(),
+            ecosystems: vec![],
+            patterns: patterns.iter().map(|p| p.to_string()).collect(),
+            managed: vec![],
+            skip_dirs: vec![],
+            tools: vec![],
+            capabilities: Capabilities::undeclared(),
+        }
+    }
 }
 
 /// What an adapter supports, reported by `doctor` and enforced by the engine
 /// before any work: an unsupported request fails instead of being ignored.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
-    /// The package manager the adapter integrates.
-    pub manager: &'static str,
     /// Updating selected direct dependencies (`--package`).
     pub package_selection: Support,
     /// Upgrading with changed constraints (`--upgrade`).
@@ -68,25 +119,21 @@ pub struct Capabilities {
     pub lockfile: Support,
     /// Resolving for every configured platform.
     pub platforms: Support,
-    /// The native executable the adapter drives, if any.
-    pub native_tool: Option<NativeTool>,
 }
 
 impl Capabilities {
     /// Nothing is assumed: every behaviour must be declared to be requested.
-    pub fn undeclared(manager: &'static str) -> Self {
-        let no = Support::Unsupported("not declared by this adapter");
+    pub fn undeclared() -> Self {
+        let no = Support::Unsupported("not declared by this adapter".into());
         Self {
-            manager,
-            package_selection: no,
-            constraint_changes: no,
-            suggestion_acceptance: no,
-            git_refresh: no,
-            cooldown: no,
-            install_validation: no,
-            lockfile: no,
+            package_selection: no.clone(),
+            constraint_changes: no.clone(),
+            suggestion_acceptance: no.clone(),
+            git_refresh: no.clone(),
+            cooldown: no.clone(),
+            install_validation: no.clone(),
+            lockfile: no.clone(),
             platforms: no,
-            native_tool: None,
         }
     }
 }
@@ -106,7 +153,7 @@ pub fn tool_status(output: &str, tested: &[&str]) -> (&'static str, Option<Strin
 }
 
 /// The proposed state of one target after resolution in the stage.
-#[derive(Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Candidate {
     /// Files the adapter produced, relative to the stage; the engine diffs them
     /// against the repository to build file changes.
@@ -127,14 +174,15 @@ pub struct Candidate {
 
 /// Adapters only prepare inside a disposable stage. All source writes belong to the engine.
 pub trait Adapter: Send + Sync {
-    /// Name of the package manager, used as the prefix of target identifiers.
-    fn manager(&self) -> &'static str;
-    /// Whether the file at `relative` (with `content`) is a target of this adapter.
-    fn detects(&self, relative: &Path, content: &str) -> bool;
-    /// Declared capabilities; the default declares nothing.
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::undeclared(self.manager())
+    /// The adapter's spec: discovery, staging, tools and capabilities.
+    fn spec(&self) -> AdapterSpec;
+    /// Name of the package manager, from [`Adapter::spec`].
+    fn manager(&self) -> String {
+        self.spec().manager
     }
+    /// Whether the file at `relative` (with `content`) is a target of this
+    /// adapter. Only files matching the spec's patterns are offered.
+    fn detects(&self, relative: &Path, content: &str) -> bool;
     /// The resolved packages of `target` under `root`, for scanning an existing
     /// lock without preparing an update.
     fn inventory(&self, _root: &Path, _target: &Target) -> Result<Vec<Package>> {

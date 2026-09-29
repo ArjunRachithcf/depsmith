@@ -330,7 +330,7 @@ A reference left unchanged because it could not be resolved.
 - `reference`: The reference as written, such as `org/repo@main`.
 - `reason`: Why no release could be matched.
 
-### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None)`
+### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None)`
 
 Options for preparing, scanning and applying updates.
 
@@ -348,8 +348,9 @@ explicit values override them.
 - `scan`: Scan the baseline and candidate for known vulnerabilities.
 - `fail_on`: Lowest severity that rejects the proposal.
 - `only_new`: Apply `fail_on` only to introduced findings.
-- `pixi`: Pixi executable to run.
-- `grype`: Grype executable to run.
+- `tools`: Executable paths by tool name, such as `{"pixi": "/opt/pixi"}`; `doctor()` lists the tool names.
+- `pixi`: Deprecated alias for `tools["pixi"]`.
+- `grype`: Deprecated alias for `tools["grype"]`.
 - `timeout_seconds`: Time limit for each backend process.
 - `identity_mappings`: Reviewed identity mappings used when scanning.
 - `suppressions`: Scoped, documented suppressions.

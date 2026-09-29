@@ -3,7 +3,7 @@
 //! tag or commit-pin style, and suggests newer major lines separately. Local
 //! actions, Docker references and expressions are left unchanged.
 use crate::{
-    adapter::{Adapter, Candidate, Capabilities, Support},
+    adapter::{Adapter, AdapterSpec, Candidate, Capabilities, Support},
     Error, Result, Suggestion, Target, UpdateOptions,
 };
 use regex::Regex;
@@ -346,26 +346,29 @@ impl Default for Actions {
     }
 }
 impl Adapter for Actions {
-    fn manager(&self) -> &'static str {
-        "github-actions"
-    }
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            manager: self.manager(),
-            package_selection: Support::Supported,
-            // Major-version upgrades of selected repositories.
-            constraint_changes: Support::Supported,
-            suggestion_acceptance: Support::Unsupported(
-                "use --upgrade --package OWNER/REPO to review a major release",
-            ),
-            git_refresh: Support::NotApplicable,
-            cooldown: Support::Unsupported(
-                "a release-age cooldown is not implemented for GitHub Actions",
-            ),
-            install_validation: Support::NotApplicable,
-            lockfile: Support::NotApplicable,
-            platforms: Support::NotApplicable,
-            native_tool: None,
+    fn spec(&self) -> AdapterSpec {
+        AdapterSpec {
+            manager: "github-actions".into(),
+            ecosystems: vec!["github-actions".into()],
+            patterns: vec!["*.yml".into(), "*.yaml".into()],
+            managed: vec![],
+            skip_dirs: vec![],
+            tools: vec![],
+            capabilities: Capabilities {
+                package_selection: Support::Supported,
+                // Major-version upgrades of selected repositories.
+                constraint_changes: Support::Supported,
+                suggestion_acceptance: Support::Unsupported(
+                    "use --upgrade --package OWNER/REPO to review a major release".into(),
+                ),
+                git_refresh: Support::NotApplicable,
+                cooldown: Support::Unsupported(
+                    "a release-age cooldown is not implemented for GitHub Actions".into(),
+                ),
+                install_validation: Support::NotApplicable,
+                lockfile: Support::NotApplicable,
+                platforms: Support::NotApplicable,
+            },
         }
     }
     fn detects(&self, path: &Path, _: &str) -> bool {

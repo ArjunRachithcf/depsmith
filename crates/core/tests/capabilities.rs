@@ -9,8 +9,8 @@ use tempfile::tempdir;
 /// Declares no capabilities; preparing it means the engine failed to enforce them.
 struct Undeclared;
 impl Adapter for Undeclared {
-    fn manager(&self) -> &'static str {
-        "fixture"
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("fixture", &["project.toml"])
     }
     fn detects(&self, path: &Path, _: &str) -> bool {
         path == Path::new("project.toml")
@@ -112,23 +112,25 @@ fn inapplicable_options_are_reported_not_ignored() {
 
 #[test]
 fn builtin_adapters_declare_capabilities_and_tested_tools() {
-    let capabilities = Engine::default().capabilities();
-    let pixi = capabilities.iter().find(|c| c.manager == "pixi").unwrap();
-    assert_eq!(pixi.package_selection, Support::Supported);
-    assert_eq!(pixi.lockfile, Support::Supported);
-    assert!(matches!(pixi.cooldown, Support::Unsupported(hint) if hint.contains("exclude-newer")));
-    let tool = pixi.native_tool.as_ref().unwrap();
-    assert_eq!(tool.option, "pixi");
-    assert!(tool.tested_versions.contains(&"0.80.0"));
+    let specs = Engine::default().specs();
+    let pixi = specs.iter().find(|s| s.manager == "pixi").unwrap();
+    let caps = &pixi.capabilities;
+    assert_eq!(caps.package_selection, Support::Supported);
+    assert_eq!(caps.lockfile, Support::Supported);
+    assert!(matches!(&caps.cooldown, Support::Unsupported(hint) if hint.contains("exclude-newer")));
+    let tool = &pixi.tools[0];
+    assert_eq!(tool.name, "pixi");
+    assert!(tool.tested_versions.contains(&"0.80.0".to_string()));
 
-    let actions = capabilities
+    let actions = specs
         .iter()
-        .find(|c| c.manager == "github-actions")
+        .find(|s| s.manager == "github-actions")
         .unwrap();
-    assert_eq!(actions.install_validation, Support::NotApplicable);
-    assert_eq!(actions.git_refresh, Support::NotApplicable);
-    assert_eq!(actions.constraint_changes, Support::Supported);
-    assert!(actions.native_tool.is_none());
+    let caps = &actions.capabilities;
+    assert_eq!(caps.install_validation, Support::NotApplicable);
+    assert_eq!(caps.git_refresh, Support::NotApplicable);
+    assert_eq!(caps.constraint_changes, Support::Supported);
+    assert!(actions.tools.is_empty());
 }
 
 #[test]

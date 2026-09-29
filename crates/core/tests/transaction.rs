@@ -10,8 +10,8 @@ use tempfile::{tempdir, TempDir};
 /// Writes two candidate files, one of them in a subdirectory.
 struct TwoFiles;
 impl Adapter for TwoFiles {
-    fn manager(&self) -> &'static str {
-        "fixture"
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("fixture", &["project.toml"])
     }
     fn detects(&self, path: &Path, _: &str) -> bool {
         path == Path::new("project.toml")

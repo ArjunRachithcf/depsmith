@@ -1,10 +1,10 @@
 //! The repository's working tree: listing files while respecting ignore
 //! rules, fingerprinting inputs, copying them into a stage, and rejecting
 //! paths that escape the repository.
-use crate::{Error, Result};
+use crate::{adapter::AdapterSpec, Error, Result};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
 };
@@ -23,24 +23,78 @@ pub(crate) fn relative(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn files(root: &Path) -> Result<Vec<PathBuf>> {
+/// Directories that never hold project sources, whatever the package manager.
+const ALWAYS_SKIPPED: &[&str] = &[
+    ".depsmith",
+    ".venv",
+    "node_modules",
+    "target",
+    "__pycache__",
+];
+
+/// How the working tree is walked for a set of adapters: directories never
+/// entered, and ignored files that are still inputs of their targets.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Layout {
+    skip_dirs: BTreeSet<String>,
+    managed: Vec<crate::adapter::ManagedFiles>,
+}
+
+impl Layout {
+    pub(crate) fn new<'a>(specs: impl IntoIterator<Item = &'a AdapterSpec>) -> Self {
+        let mut layout = Self {
+            skip_dirs: ALWAYS_SKIPPED.iter().map(|d| d.to_string()).collect(),
+            managed: vec![],
+        };
+        for spec in specs {
+            layout.skip_dirs.extend(spec.skip_dirs.iter().cloned());
+            layout.managed.extend(spec.managed.iter().cloned());
+        }
+        layout
+    }
+
+    fn skipped(&self, name: &str) -> bool {
+        self.skip_dirs.contains(name)
+    }
+}
+
+/// Whether `name` matches a file-name `pattern`, where `*` matches any run of
+/// characters.
+pub(crate) fn matches_pattern(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == name,
+        Some((prefix, rest)) => {
+            let Some(mut tail) = name.strip_prefix(prefix) else {
+                return false;
+            };
+            if rest.is_empty() {
+                return true;
+            }
+            loop {
+                if matches_pattern(rest, tail) {
+                    return true;
+                }
+                let mut chars = tail.chars();
+                if chars.next().is_none() {
+                    return false;
+                }
+                tail = chars.as_str();
+            }
+        }
+    }
+}
+
+pub(crate) fn files(root: &Path, layout: &Layout) -> Result<Vec<PathBuf>> {
+    let skipped = layout.skip_dirs.clone();
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .require_git(false)
-        .filter_entry(|e| {
+        .filter_entry(move |e| {
             e.depth() == 0
-                || !matches!(
-                    e.file_name().to_str(),
-                    Some(
-                        ".pixi"
-                            | ".git"
-                            | ".venv"
-                            | "node_modules"
-                            | "target"
-                            | ".depsmith"
-                            | "__pycache__"
-                    )
-                )
+                || !e
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|n| n == ".git" || skipped.contains(n))
         })
         .build();
     let mut paths = vec![];
@@ -72,14 +126,10 @@ pub(crate) fn files(root: &Path) -> Result<Vec<PathBuf>> {
     // changes SCM dirty-state detection (and can drop required build sources).
     if let Some(snapshot) = crate::scm::Snapshot::read(root)? {
         for path in snapshot.tracked(root)? {
-            if path.components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some(
-                        ".pixi" | ".venv" | "node_modules" | "target" | ".depsmith" | "__pycache__"
-                    )
-                )
-            }) {
+            if path
+                .components()
+                .any(|c| c.as_os_str().to_str().is_some_and(|n| layout.skipped(n)))
+            {
                 return Err(Error::Invalid(format!(
                     "tracked file uses an excluded staging directory: {}",
                     path.display()
@@ -88,15 +138,17 @@ pub(crate) fn files(root: &Path) -> Result<Vec<PathBuf>> {
             paths.push(path);
         }
     }
-    // Native configuration is a resolver input even when .pixi is gitignored.
-    // Probe only manifest directories; never traverse installed environments.
+    // Adapters' managed inputs (locks, native configuration) are resolver
+    // inputs even when ignored. Probe only next to matching manifests; never
+    // traverse installed environments.
     let manifests = paths.clone();
     for manifest in manifests {
-        if matches!(
-            manifest.file_name().and_then(|n| n.to_str()),
-            Some("pixi.toml" | "pyproject.toml")
-        ) {
-            for input in [".pixi/config.toml", "pixi.lock"] {
+        let name = manifest.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        for rule in &layout.managed {
+            if !rule.manifests.iter().any(|p| matches_pattern(p, name)) {
+                continue;
+            }
+            for input in &rule.inputs {
                 let path = manifest.parent().unwrap().join(input);
                 output_path(root, &path)?;
                 if root.join(&path).is_file() {
@@ -110,8 +162,8 @@ pub(crate) fn files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-pub(crate) fn fingerprint(root: &Path) -> Result<BTreeMap<PathBuf, String>> {
-    let mut inputs: BTreeMap<_, _> = files(root)?
+pub(crate) fn fingerprint(root: &Path, layout: &Layout) -> Result<BTreeMap<PathBuf, String>> {
+    let mut inputs: BTreeMap<_, _> = files(root, layout)?
         .into_iter()
         .map(|path| {
             let hash = file_hash(&root.join(&path))?;
@@ -151,6 +203,7 @@ pub(crate) fn stage(
     root: &Path,
     destination: &Path,
     inputs: &BTreeMap<PathBuf, String>,
+    layout: &Layout,
 ) -> Result<()> {
     for path in inputs.keys() {
         if path.starts_with(".git") {
@@ -165,7 +218,7 @@ pub(crate) fn stage(
     if let Some(snapshot) = crate::scm::Snapshot::read(root)? {
         snapshot.copy(destination)?;
     }
-    if fingerprint(destination)? != *inputs {
+    if fingerprint(destination, layout)? != *inputs {
         return Err(Error::Stale("inputs changed during staging".into()));
     }
     Ok(())
@@ -221,6 +274,12 @@ pub(crate) fn canonical(path: &Path) -> std::io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::Layout;
+
+    fn layout() -> Layout {
+        Layout::new(&crate::Engine::default().specs())
+    }
+
     #[test]
     fn verbatim_prefixes_are_removed_for_native_tools() {
         use super::without_verbatim_prefix as plain;
@@ -288,8 +347,8 @@ mod tests {
         fs::write(root.path().join(".git/hooks/private-hook"), "secret hook").unwrap();
         let index = fs::read(root.path().join(".git/index")).unwrap();
         let destination = tempfile::tempdir().unwrap();
-        let inputs = fingerprint(root.path()).unwrap();
-        stage(root.path(), destination.path(), &inputs).unwrap();
+        let inputs = fingerprint(root.path(), &layout()).unwrap();
+        stage(root.path(), destination.path(), &inputs, &layout()).unwrap();
         assert!(destination.path().join(".git/HEAD").exists());
         assert_eq!(
             fs::read_to_string(destination.path().join("tracked.txt")).unwrap(),
@@ -309,14 +368,14 @@ mod tests {
     #[test]
     fn git_tags_and_index_changes_invalidate_fingerprint() {
         let root = git_project();
-        let before = fingerprint(root.path()).unwrap();
+        let before = fingerprint(root.path(), &layout()).unwrap();
         git(root.path(), &["tag", "v2.0.0"]);
-        assert_ne!(before, fingerprint(root.path()).unwrap());
-        let before = fingerprint(root.path()).unwrap();
+        assert_ne!(before, fingerprint(root.path(), &layout()).unwrap());
+        let before = fingerprint(root.path(), &layout()).unwrap();
         fs::write(root.path().join("tracked.txt"), "staged\n").unwrap();
         git(root.path(), &["add", "tracked.txt"]);
         fs::write(root.path().join("tracked.txt"), "original\n").unwrap();
-        assert_ne!(before, fingerprint(root.path()).unwrap());
+        assert_ne!(before, fingerprint(root.path(), &layout()).unwrap());
     }
 
     #[test]
@@ -332,7 +391,8 @@ mod tests {
         stage(
             &worktree,
             destination.path(),
-            &fingerprint(&worktree).unwrap(),
+            &fingerprint(&worktree, &layout()).unwrap(),
+            &layout(),
         )
         .unwrap();
         assert!(destination.path().join(".git").is_dir());
@@ -363,7 +423,10 @@ mod tests {
             git(root.path(), &["describe", "--tags", "--dirty"]).trim(),
             "v1.2.3"
         );
-        assert!(matches!(fingerprint(root.path()), Err(Error::Invalid(_))));
+        assert!(matches!(
+            fingerprint(root.path(), &layout()),
+            Err(Error::Invalid(_))
+        ));
     }
 
     #[test]
@@ -372,9 +435,15 @@ mod tests {
         let child = root.path().join("nested");
         fs::create_dir(&child).unwrap();
         fs::write(child.join("pixi.toml"), "[workspace]\nname='nested'\n").unwrap();
-        assert!(matches!(fingerprint(&child), Err(Error::Invalid(_))));
+        assert!(matches!(
+            fingerprint(&child, &layout()),
+            Err(Error::Invalid(_))
+        ));
         git(&child, &["init"]);
-        assert!(matches!(fingerprint(root.path()), Err(Error::Invalid(_))));
+        assert!(matches!(
+            fingerprint(root.path(), &layout()),
+            Err(Error::Invalid(_))
+        ));
     }
 
     #[cfg(unix)]
@@ -386,13 +455,19 @@ mod tests {
             "/external/objects\n",
         )
         .unwrap();
-        assert!(matches!(fingerprint(root.path()), Err(Error::Invalid(_))));
+        assert!(matches!(
+            fingerprint(root.path(), &layout()),
+            Err(Error::Invalid(_))
+        ));
         fs::remove_file(root.path().join(".git/objects/info/alternates")).unwrap();
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("exclude"), "secret\n").unwrap();
         fs::remove_dir_all(root.path().join(".git/info")).unwrap();
         std::os::unix::fs::symlink(outside.path(), root.path().join(".git/info")).unwrap();
-        assert!(matches!(fingerprint(root.path()), Err(Error::Invalid(_))));
+        assert!(matches!(
+            fingerprint(root.path(), &layout()),
+            Err(Error::Invalid(_))
+        ));
     }
     #[test]
     fn ignored_existing_lock_is_always_staged_and_fingerprinted() {
@@ -405,15 +480,15 @@ mod tests {
         )
         .unwrap();
         fs::write(source.path().join("pixi.lock"), "existing baseline").unwrap();
-        let inputs = fingerprint(source.path()).unwrap();
+        let inputs = fingerprint(source.path(), &layout()).unwrap();
         assert!(inputs.contains_key(Path::new("pixi.lock")));
-        stage(source.path(), destination.path(), &inputs).unwrap();
+        stage(source.path(), destination.path(), &inputs, &layout()).unwrap();
         assert_eq!(
             fs::read_to_string(destination.path().join("pixi.lock")).unwrap(),
             "existing baseline"
         );
         fs::write(source.path().join("pixi.lock"), "changed baseline").unwrap();
-        assert_ne!(inputs, fingerprint(source.path()).unwrap());
+        assert_ne!(inputs, fingerprint(source.path(), &layout()).unwrap());
     }
 
     #[test]
@@ -437,11 +512,11 @@ mod tests {
             "ignored",
         )
         .unwrap();
-        let inputs = fingerprint(source.path()).unwrap();
+        let inputs = fingerprint(source.path(), &layout()).unwrap();
         assert!(inputs.contains_key(Path::new(".pixi/config.toml")));
-        stage(source.path(), stage_dir.path(), &inputs).unwrap();
+        stage(source.path(), stage_dir.path(), &inputs, &layout()).unwrap();
         assert!(!stage_dir.path().join(".pixi/envs").exists());
         fs::write(source.path().join(".pixi/config.toml"), "changed").unwrap();
-        assert_ne!(inputs, fingerprint(source.path()).unwrap());
+        assert_ne!(inputs, fingerprint(source.path(), &layout()).unwrap());
     }
 }

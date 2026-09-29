@@ -11,7 +11,7 @@ project glossary (``CONTEXT.md``).
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from os import PathLike
 from typing import Any
@@ -101,8 +101,10 @@ class UpdateOptions:
         scan: Scan the baseline and candidate for known vulnerabilities.
         fail_on: Lowest severity that rejects the proposal.
         only_new: Apply ``fail_on`` only to introduced findings.
-        pixi: Pixi executable to run.
-        grype: Grype executable to run.
+        tools: Executable paths by tool name, such as ``{"pixi": "/opt/pixi"}``;
+            ``doctor()`` lists the tool names.
+        pixi: Deprecated alias for ``tools["pixi"]``.
+        grype: Deprecated alias for ``tools["grype"]``.
         timeout_seconds: Time limit for each backend process.
         identity_mappings: Reviewed identity mappings used when scanning.
         suppressions: Scoped, documented suppressions.
@@ -118,6 +120,7 @@ class UpdateOptions:
     scan: bool | None = None
     fail_on: str | None = None
     only_new: bool | None = None
+    tools: Mapping[str, str] | None = None
     pixi: str | None = None
     grype: str | None = None
     timeout_seconds: int | None = None

@@ -128,7 +128,7 @@ pub fn apply(proposal: &Proposal, allow_partial: bool) -> Result<ApplyResult> {
             return Err(Error::Stale(change.path.display().to_string()));
         }
     }
-    if working_tree::fingerprint(root)? != proposal.inputs {
+    if working_tree::fingerprint(root, &proposal.layout)? != proposal.inputs {
         return Err(Error::Stale(
             "repository inputs changed since preparation".into(),
         ));
