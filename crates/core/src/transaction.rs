@@ -144,7 +144,7 @@ pub fn apply(proposal: &Proposal, allow_partial: bool) -> Result<ApplyResult> {
 
 /// Restore an interrupted operation only if all files still contain old or proposed bytes.
 pub fn recover(root: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let root = root.canonicalize()?;
+    let root = workspace::canonical(root)?;
     let _lock = operation_lock(&root)?;
     safe_path(&root, Path::new(".depsmith/journal.json"))?;
     let journal_path = root.join(".depsmith/journal.json");

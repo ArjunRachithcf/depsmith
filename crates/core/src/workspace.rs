@@ -192,8 +192,44 @@ pub(crate) fn output_path(root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Without Windows' verbatim prefix: `\\?\C:\x` -> `C:\x` and
+/// `\\?\UNC\srv\share` -> `\\srv\share`. Other text is returned unchanged.
+fn without_verbatim_prefix(text: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}").into();
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.into(),
+        _ => text.into(),
+    }
+}
+
+/// `canonicalize` in a form native tools accept. Windows returns verbatim
+/// paths (`\\?\C:\...`) that Git for Windows cannot open.
+pub(crate) fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let path = path.canonicalize()?;
+    if cfg!(windows) {
+        if let Some(text) = path.to_str() {
+            return Ok(PathBuf::from(without_verbatim_prefix(text).into_owned()));
+        }
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verbatim_prefixes_are_removed_for_native_tools() {
+        use super::without_verbatim_prefix as plain;
+        assert_eq!(
+            plain(r"\\?\C:\Users\a\.git\config"),
+            r"C:\Users\a\.git\config"
+        );
+        assert_eq!(plain(r"\\?\UNC\server\share\repo"), r"\\server\share\repo");
+        assert_eq!(plain(r"\\?\Volume{0}\x"), r"\\?\Volume{0}\x");
+        assert_eq!(plain("/home/user/repo"), "/home/user/repo");
+        assert_eq!(plain(r"C:\already\plain"), r"C:\already\plain");
+    }
     use super::*;
 
     fn git(root: &Path, args: &[&str]) -> String {

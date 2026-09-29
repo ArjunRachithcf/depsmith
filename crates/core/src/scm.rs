@@ -55,7 +55,7 @@ fn no_symlinks(path: &Path) -> Result<()> {
 
 impl Snapshot {
     pub fn read(root: &Path) -> Result<Option<Self>> {
-        Self::read_canonical(&root.canonicalize()?)
+        Self::read_canonical(&crate::workspace::canonical(root)?)
     }
 
     fn read_canonical(root: &Path) -> Result<Option<Self>> {
@@ -78,7 +78,7 @@ impl Snapshot {
                 .ok_or_else(|| Error::Invalid("invalid Git worktree pointer".into()))?;
             let path = root.join(path);
             no_symlinks(&path)?;
-            path.canonicalize()?
+            crate::workspace::canonical(&path)?
         } else {
             marker
         };
@@ -91,7 +91,7 @@ impl Snapshot {
             no_symlinks(&common_file)?;
             let path = git_dir.join(fs::read_to_string(&common_file)?.trim());
             no_symlinks(&path)?;
-            path.canonicalize()?
+            crate::workspace::canonical(&path)?
         } else {
             git_dir.clone()
         };

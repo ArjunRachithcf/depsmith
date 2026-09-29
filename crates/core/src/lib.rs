@@ -119,7 +119,7 @@ impl Engine {
             .expect("discovered targets always have a registered adapter")
     }
     pub fn discover(&self, root: &Path) -> Result<Vec<Target>> {
-        let root = root.canonicalize()?;
+        let root = workspace::canonical(root)?;
         let mut targets = vec![];
         for path in workspace::files(&root)? {
             if !matches!(
@@ -151,7 +151,7 @@ impl Engine {
         selected: &[String],
         options: UpdateOptions,
     ) -> Result<Proposal> {
-        let root = root.canonicalize()?;
+        let root = workspace::canonical(root)?;
         options.validate()?;
         let found = self.discover(&root)?;
         if selected.is_empty() {

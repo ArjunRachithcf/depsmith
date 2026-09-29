@@ -716,14 +716,17 @@ fn rewrite_requirements(
 }
 
 fn validate_paths(value: &toml::Value, base: &Path, workspace: &Path) -> Result<()> {
+    // Compare canonical spellings on both sides (e.g. macOS /var -> /private/var).
+    let workspace = &crate::workspace::canonical(workspace)?;
     match value {
         toml::Value::Table(t) => {
             for (key, v) in t {
                 if key == "path" {
                     if let Some(p) = v.as_str() {
-                        let resolved = base.join(p).canonicalize().map_err(|_| {
-                            Error::Invalid(format!("local path unavailable in stage: {p}"))
-                        })?;
+                        let resolved =
+                            crate::workspace::canonical(&base.join(p)).map_err(|_| {
+                                Error::Invalid(format!("local path unavailable in stage: {p}"))
+                            })?;
                         if !resolved.starts_with(workspace) {
                             return Err(Error::Invalid(format!(
                                 "local dependency escapes workspace: {p}"
@@ -748,9 +751,10 @@ fn validate_paths(value: &toml::Value, base: &Path, workspace: &Path) -> Result<
                     || location.starts_with('/')
                     || location.as_bytes().get(1) == Some(&b':')
                 {
-                    let resolved = base.join(location).canonicalize().map_err(|_| {
-                        Error::Invalid("dependency reference is unavailable in stage".into())
-                    })?;
+                    let resolved =
+                        crate::workspace::canonical(&base.join(location)).map_err(|_| {
+                            Error::Invalid("dependency reference is unavailable in stage".into())
+                        })?;
                     if !resolved.starts_with(workspace) {
                         return Err(Error::Invalid("dependency reference escapes stage".into()));
                     }
@@ -881,6 +885,26 @@ local = { path = "local", editable = true }
         assert!(blocked_evidence(&with_rc, &allowed, None).is_empty());
         assert_eq!(versions(Some(2_500_000_000_000)), ["0.16.0"]);
         assert!(versions(Some(1_500_000_000_000)).is_empty());
+    }
+
+    /// macOS temp directories sit behind a symlink (/var -> /private/var), so the
+    /// stage path and canonical dependency paths differ in spelling.
+    #[cfg(unix)]
+    #[test]
+    fn local_paths_inside_a_symlinked_stage_are_accepted() {
+        let real = tempfile::tempdir().unwrap();
+        fs::create_dir(real.path().join("local")).unwrap();
+        let aliases = tempfile::tempdir().unwrap();
+        let alias = aliases.path().join("stage");
+        std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+        let manifest: toml::Value = "[pypi-dependencies]\nlocal = { path = \"local\" }\n"
+            .parse()
+            .unwrap();
+        validate_paths(&manifest, &alias, &alias).unwrap();
+        let escape: toml::Value = "[pypi-dependencies]\nout = { path = \"..\" }\n"
+            .parse()
+            .unwrap();
+        assert!(validate_paths(&escape, &alias, &alias).is_err());
     }
 
     #[test]
