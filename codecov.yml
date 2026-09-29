@@ -6,6 +6,7 @@ coverage:
       default:
         target: auto
         threshold: 1%
+        base: auto
     # Lines changed by a pull request must be at least 80% covered.
     patch:
       default:
@@ -30,3 +31,4 @@ fixes:
 comment:
   layout: "condensed_header, diff, flags, components, condensed_files"
   require_changes: false
+  hide_project_coverage: false
