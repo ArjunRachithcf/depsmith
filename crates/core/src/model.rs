@@ -237,6 +237,8 @@ impl Error {
     }
 }
 impl Proposal {
+    /// Whether the proposal has nothing to report: no file changes, no
+    /// failures and no suggestions.
     pub fn is_empty(&self) -> bool {
         self.changes.is_empty() && self.failures.is_empty() && self.suggestions.is_empty()
     }
