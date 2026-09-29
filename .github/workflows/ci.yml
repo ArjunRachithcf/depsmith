@@ -85,6 +85,25 @@ jobs:
           name: wheel-${{ matrix.os }}
           path: dist/*.whl
           if-no-files-found: error
+  docs-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Documentation bot commits change only documentation
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          for commit in $(git log --format=%H --grep='^Docs-only: true$' "$BASE..HEAD"); do
+            echo "Checking $commit"
+            python scripts/check-docs-only.py "$commit^" "$commit"
+          done
   docs-reference:
     runs-on: ubuntu-latest
     steps:

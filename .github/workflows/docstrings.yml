@@ -1,0 +1,121 @@
+# Keeps API docs current on pull requests: finds the Rust/Python symbols a PR
+# changed (codebase-memory-mcp), lets Claude update only their doc comments and
+# docstrings (.github/prompts/docstrings.md), verifies the edit is
+# documentation-only and builds, then commits through the docs GitHub App so the
+# commit is GitHub-signed and re-runs CI. The commit carries a
+# "Docs-only: true" trailer, which ends the loop and which docs-guard checks.
+name: Docstrings
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: docstrings-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+env:
+  CBM_VERSION: v0.11.0
+  RUFF_VERSION: 0.16.9
+jobs:
+  document:
+    # Same-repository branches only: fork PRs get neither secrets nor write access.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Decide whether there is anything to document
+        id: scope
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          CONFIGURED: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && secrets.DOCS_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$CONFIGURED" != true ]; then
+            echo "::notice::Docs automation secrets are not configured; skipping."
+            echo run=false >> "$GITHUB_OUTPUT"
+          elif git log -1 --format=%B | grep -qx 'Docs-only: true'; then
+            echo "Head is the bot's own documentation commit."
+            echo run=false >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "origin/$BASE_REF...HEAD" | grep -Eq '\.(rs|py|pyi)$'; then
+            echo run=true >> "$GITHUB_OUTPUT"
+          else
+            echo "No Rust or Python changes."
+            echo run=false >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run == 'true'
+        with:
+          python-version: '3.10'
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.run == 'true'
+      - name: Install codebase-memory-mcp (checksum-verified)
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          base="https://github.com/DeusData/codebase-memory-mcp/releases/download/${CBM_VERSION}"
+          archive=codebase-memory-mcp-linux-amd64-portable.tar.gz
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$base/$archive"
+          curl -fsSLO "$base/checksums.txt"
+          sha256sum --check --ignore-missing checksums.txt
+          mkdir -p cbm && tar -xzf "$archive" -C cbm codebase-memory-mcp
+          echo "$RUNNER_TEMP/cbm" >> "$GITHUB_PATH"
+      - name: List changed symbols for the prompt
+        if: steps.scope.outputs.run == 'true'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          project=$(codebase-memory-mcp cli --quiet index_repository "{\"repo_path\":\"$PWD\"}" \
+            | python -c 'import json, sys; print(json.load(sys.stdin)["project"])')
+          {
+            cat .github/prompts/docstrings.md
+            echo
+            codebase-memory-mcp cli --quiet detect_changes \
+              "{\"project\":\"$project\",\"base_branch\":\"origin/$BASE_REF\"}"
+          } > "$RUNNER_TEMP/prompt.md"
+          {
+            echo 'prompt<<PROMPT_EOF'
+            cat "$RUNNER_TEMP/prompt.md"
+            echo 'PROMPT_EOF'
+          } >> "$GITHUB_ENV"
+      - uses: anthropics/claude-code-action@v1
+        if: steps.scope.outputs.run == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: ${{ env.prompt }}
+          claude_args: >-
+            --model claude-sonnet-5
+            --max-turns 40
+            --allowedTools "Read,Edit,MultiEdit,Glob,Grep,mcp__codebase-memory-mcp"
+            --mcp-config '{"mcpServers":{"codebase-memory-mcp":{"command":"codebase-memory-mcp"}}}'
+      - name: Verify the edit is documentation-only and builds
+        if: steps.scope.outputs.run == 'true'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          python scripts/check-docs-only.py HEAD
+          cargo doc --workspace --no-deps --locked
+          python -m pip install "ruff==${RUFF_VERSION}" .
+          ruff check python
+          python scripts/gen-reference.py
+          python scripts/check-docs-only.py HEAD
+      - uses: actions/create-github-app-token@v3
+        id: app
+        if: steps.scope.outputs.run == 'true'
+        with:
+          app-id: ${{ vars.DOCS_APP_ID }}
+          private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+      - name: Commit through the GitHub API (signed by GitHub)
+        if: steps.scope.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python scripts/commit-via-api.py "$GITHUB_REPOSITORY" "$HEAD_REF" "$HEAD_SHA" \
+            "Update API docs for changed symbols
+
+          Docs-only: true"
