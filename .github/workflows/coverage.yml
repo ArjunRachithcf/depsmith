@@ -15,6 +15,8 @@ jobs:
     permissions:
       contents: read
       code-quality: write
+    outputs:
+      lines: ${{ steps.total.outputs.lines }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,6 +40,16 @@ jobs:
           python -c "import glob, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', *glob.glob('dist/*.whl')])"
           python -m coverage run --source=depsmith -m unittest discover -s tests/python -v
           python -m coverage xml -o python-coverage.xml
+      - name: Combined line coverage
+        id: total
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import xml.etree.ElementTree as ET
+          roots = [ET.parse(f).getroot() for f in ('rust-coverage.xml', 'python-coverage.xml')]
+          covered = sum(int(r.get('lines-covered')) for r in roots)
+          valid = sum(int(r.get('lines-valid')) for r in roots)
+          print(f'lines={100 * covered / valid:.1f}')
+          PY
       - uses: actions/upload-code-coverage@v1.4.3
         with:
           file: rust-coverage.xml
@@ -48,3 +60,27 @@ jobs:
           file: python-coverage.xml
           language: Python
           label: code-coverage/coverage-py
+  # README badge data: on main only, publish a shields.io endpoint file to the
+  # orphan `badges` branch (outside the main-branch ruleset).
+  badge:
+    if: github.event_name == 'push'
+    needs: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish coverage badge data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINES: ${{ needs.coverage.outputs.lines }}
+        run: |
+          color=$(python3 -c "import os; v=float(os.environ['LINES']); print('brightgreen' if v >= 90 else 'green' if v >= 80 else 'yellow' if v >= 75 else 'red')")
+          git init -q badges && cd badges
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin badges; then git checkout -q -b badges FETCH_HEAD; else git checkout -q --orphan badges; fi
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$LINES" "$color" > coverage.json
+          git add coverage.json
+          if git diff --cached --quiet; then exit 0; fi
+          git -c user.name='github-actions[bot]' -c user.email='41898283+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "Coverage ${LINES}% at ${GITHUB_SHA}"
+          git push -q origin HEAD:badges
