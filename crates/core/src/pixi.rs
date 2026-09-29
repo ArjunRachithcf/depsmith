@@ -136,15 +136,7 @@ impl Adapter for Pixi {
         let edited: toml::Value = content
             .parse()
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-        let mut constraints = vec![];
-        collect_constraints(
-            if pyproject {
-                edited.get("tool").and_then(|v| v.get("pixi")).unwrap()
-            } else {
-                &edited
-            },
-            &mut constraints,
-        );
+        let constraints = manifest_constraints(&edited, pyproject);
         let lock = target.manifest.parent().unwrap().join("pixi.lock");
         let before_text = fs::read_to_string(workspace.join(&lock)).ok();
         let before = before_text
@@ -322,9 +314,10 @@ fn dependency_names(value: &toml::Value, output: &mut Vec<(String, bool)>) {
 }
 
 /// PEP 508 requirement strings from `[project]` and `[dependency-groups]`.
-fn project_names(parsed: &toml::Value, output: &mut Vec<(String, bool)>) {
+/// Tables such as `{include-group = ...}` are not requirements.
+fn project_requirements(parsed: &toml::Value) -> impl Iterator<Item = &str> {
     let project = parsed.get("project");
-    let lists = project
+    project
         .and_then(|p| p.get("dependencies"))
         .into_iter()
         .chain(
@@ -340,20 +333,90 @@ fn project_names(parsed: &toml::Value, output: &mut Vec<(String, bool)>) {
                 .and_then(|g| g.as_table())
                 .into_iter()
                 .flat_map(|t| t.values()),
-        );
-    for requirement in lists.filter_map(|l| l.as_array()).flatten() {
-        // Tables such as {include-group = ...} are not package names.
-        if let Some(text) = requirement.as_str() {
-            let name: String = text
-                .trim()
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-                .collect();
-            if !name.is_empty() {
-                output.push((name, true));
-            }
+        )
+        .filter_map(|l| l.as_array())
+        .flatten()
+        .filter_map(|r| r.as_str())
+}
+
+fn project_names(parsed: &toml::Value, output: &mut Vec<(String, bool)>) {
+    for requirement in project_requirements(parsed).filter_map(Pep508::parse) {
+        output.push((requirement.name, true));
+    }
+}
+
+/// The parts of a PEP 508 requirement this tool reads or rewrites.
+struct Pep508 {
+    name: String,
+    /// Byte range of the version specifier, excluding surrounding whitespace
+    /// and parentheses; `None` for unversioned and direct-URL requirements.
+    specifier: Option<std::ops::Range<usize>>,
+}
+
+impl Pep508 {
+    fn parse(text: &str) -> Option<Self> {
+        let start = text.len() - text.trim_start().len();
+        let name_end = text[start..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+            .map_or(text.len(), |i| start + i);
+        if name_end == start {
+            return None;
+        }
+        let mut position =
+            name_end + (text[name_end..].len() - text[name_end..].trim_start().len());
+        if text[position..].starts_with('[') {
+            position += text[position..].find(']')? + 1;
+            position += text[position..].len() - text[position..].trim_start().len();
+        }
+        let rest = &text[position..];
+        let range = if rest.starts_with('@') {
+            None
+        } else if let Some(inner) = rest.strip_prefix('(') {
+            Some(position + 1..position + 1 + inner.find(')')?)
+        } else {
+            Some(position..position + rest.find(';').unwrap_or(rest.len()))
+        };
+        let specifier = range.and_then(|r| {
+            let raw = &text[r.clone()];
+            let begin = r.start + (raw.len() - raw.trim_start().len());
+            let end = r.start + raw.trim_end().len();
+            (begin < end).then_some(begin..end)
+        });
+        Some(Self {
+            name: text[start..name_end].to_owned(),
+            specifier,
+        })
+    }
+}
+
+/// Constraints declared in the manifest, including `[project]` and
+/// `[dependency-groups]` requirements of a `pyproject.toml` target.
+fn manifest_constraints(parsed: &toml::Value, pyproject: bool) -> Vec<Constraint> {
+    let mut output = vec![];
+    if !pyproject {
+        collect_constraints(parsed, &mut output);
+        return output;
+    }
+    if let Some(pixi) = parsed.get("tool").and_then(|v| v.get("pixi")) {
+        collect_constraints(pixi, &mut output);
+    }
+    for text in project_requirements(parsed) {
+        let Some(requirement) = Pep508::parse(text) else {
+            continue;
+        };
+        let Some(range) = requirement.specifier else {
+            continue;
+        };
+        let constraint = Constraint {
+            package: requirement.name,
+            requirement: text[range].to_owned(),
+            pypi: true,
+        };
+        if caps_newer_releases(&constraint.requirement) && !output.contains(&constraint) {
+            output.push(constraint);
         }
     }
+    output
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -680,6 +743,71 @@ fn rewrite_tables(
     Ok(())
 }
 
+/// Rewrite the version specifier of `name` in `[project]` and
+/// `[dependency-groups]` requirement strings. Extras, markers, parentheses and
+/// spacing around the specifier are kept; direct URLs count as unversioned.
+fn rewrite_project(
+    document: &mut toml_edit::DocumentMut,
+    name: &str,
+    change: &mut dyn FnMut(&str, bool) -> Result<String>,
+    edits: &mut Vec<Edit>,
+    unversioned: &mut bool,
+) -> Result<()> {
+    let mut arrays: Vec<&mut toml_edit::Array> = vec![];
+    let (project, groups) = {
+        let table = document.as_table_mut();
+        let mut project = None;
+        let mut groups = None;
+        for (key, item) in table.iter_mut() {
+            match key.get() {
+                "project" => project = item.as_table_like_mut(),
+                "dependency-groups" => groups = item.as_table_like_mut(),
+                _ => {}
+            }
+        }
+        (project, groups)
+    };
+    if let Some(project) = project {
+        for (key, item) in project.iter_mut() {
+            match key.get() {
+                "dependencies" => arrays.extend(item.as_array_mut()),
+                "optional-dependencies" => arrays.extend(
+                    item.as_table_like_mut()
+                        .into_iter()
+                        .flat_map(|t| t.iter_mut().filter_map(|(_, v)| v.as_array_mut())),
+                ),
+                _ => {}
+            }
+        }
+    }
+    if let Some(groups) = groups {
+        arrays.extend(groups.iter_mut().filter_map(|(_, v)| v.as_array_mut()));
+    }
+    for array in arrays {
+        for value in array.iter_mut() {
+            let Some(text) = value.as_str() else {
+                continue;
+            };
+            let Some(requirement) = Pep508::parse(text) else {
+                continue;
+            };
+            if pypi_key(&requirement.name) != pypi_key(name) {
+                continue;
+            }
+            let Some(range) = requirement.specifier else {
+                *unversioned = true;
+                continue;
+            };
+            let old = text[range.clone()].to_owned();
+            let new = change(&old, true)?;
+            let spliced = format!("{}{new}{}", &text[..range.start], &text[range.end..]);
+            replace_string(value, &spliced);
+            edits.push((old, new, true));
+        }
+    }
+    Ok(())
+}
+
 /// Rewrite every versioned declaration of `name` in the dependency tables,
 /// keeping comments and layout. `change` receives the old requirement and
 /// whether the declaration is a PyPI one. Returns (old, new, pypi) per edit.
@@ -704,6 +832,9 @@ fn rewrite_requirements(
     let mut unversioned = false;
     if let Some(root) = root {
         rewrite_tables(root, name, change, &mut edits, &mut unversioned)?;
+    }
+    if pyproject {
+        rewrite_project(&mut document, name, change, &mut edits, &mut unversioned)?;
     }
     if edits.is_empty() {
         return Err(Error::Invalid(if unversioned {
@@ -848,6 +979,34 @@ local = { path = "local", editable = true }
             matches!(&error, Error::Invalid(m) if m.contains("no version")),
             "{error}"
         );
+        let pyproject = r#"[project]
+dependencies = [
+  "Six[socks] (==1.15.0) ; python_version < '3.12'", # keep
+  'urllib3>=1.26,<2',
+  "direct @ https://example.invalid/direct-1.0.tar.gz",
+]
+[project.optional-dependencies]
+extra = ["six==1.15.0"]
+[dependency-groups]
+dev = ["six ==1.15.0", { include-group = "extra" }]
+"#;
+        let (text, edits) = rewrite_requirements(pyproject, true, "six", &mut |old, pypi| {
+            assert!(pypi);
+            assert_eq!(old, "==1.15.0");
+            Ok("==1.17.0".into())
+        })
+        .unwrap();
+        assert_eq!(edits.len(), 3);
+        assert_eq!(text, pyproject.replace("==1.15.0", "==1.17.0"));
+        let (text, _) =
+            rewrite_requirements(pyproject, true, "urllib3", &mut |_, _| Ok("<3".into())).unwrap();
+        assert!(text.contains("'urllib3<3',"), "{text}");
+        let error = rewrite_requirements(pyproject, true, "direct", &mut |_, _| Ok("1".into()))
+            .unwrap_err();
+        assert!(
+            matches!(&error, Error::Invalid(m) if m.contains("no version")),
+            "{error}"
+        );
         let pyproject = "[tool.pixi.dependencies]\nruff = '==1' # c\n";
         let (text, _) =
             rewrite_requirements(pyproject, true, "ruff", &mut |_, _| Ok("==2".into())).unwrap();
@@ -905,6 +1064,42 @@ local = { path = "local", editable = true }
             .parse()
             .unwrap();
         assert!(validate_paths(&escape, &alias, &alias).is_err());
+    }
+
+    #[test]
+    fn pyproject_standard_requirements_are_pypi_constraints() {
+        let manifest = r#"
+[project]
+dependencies = [
+  "requests>=2,<3",
+  "six==1.15.0; python_version < '3.12'",
+  "urllib3[socks] (<2)",
+  "floor>=1",
+  "bare",
+  "direct @ https://example.invalid/direct-1.0.tar.gz",
+]
+[project.optional-dependencies]
+extra = ["compatible ~=1.4"]
+[dependency-groups]
+lint = ["ruff==0.15.22", { include-group = "extra" }]
+[tool.pixi.dependencies]
+python = "3.12.*"
+"#;
+        let parsed: toml::Value = manifest.parse().unwrap();
+        let found: Vec<(String, String, bool)> = manifest_constraints(&parsed, true)
+            .into_iter()
+            .map(|c| (c.package, c.requirement, c.pypi))
+            .collect();
+        let expected = [
+            ("python", "3.12.*", false),
+            ("requests", ">=2,<3", true),
+            ("six", "==1.15.0", true),
+            ("urllib3", "<2", true),
+            ("compatible", "~=1.4", true),
+            ("ruff", "==0.15.22", true),
+        ]
+        .map(|(n, r, p)| (n.to_owned(), r.to_owned(), p));
+        assert_eq!(found, expected);
     }
 
     #[test]

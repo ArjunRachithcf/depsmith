@@ -101,3 +101,44 @@ fn explicit_replacement_proceeds_to_the_backend_without_lookups() {
     );
     assert!(proposal.failures[0].message.contains("cannot start"));
 }
+
+fn prepare_pyproject(manifest: &str, accept: &[&str]) -> depsmith_core::Result<Proposal> {
+    let root = tempdir().unwrap();
+    let pixi = PIXI.replace("[workspace]", "[tool.pixi.workspace]");
+    fs::write(
+        root.path().join("pyproject.toml"),
+        format!("{manifest}{pixi}"),
+    )
+    .unwrap();
+    Engine::default().prepare(
+        root.path(),
+        &["pixi:pyproject.toml".into()],
+        options(accept),
+    )
+}
+
+fn failure(proposal: &Proposal) -> (u8, &str) {
+    assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);
+    let failure = &proposal.failures[0];
+    (failure.code, &failure.message)
+}
+
+#[test]
+fn standard_pyproject_requirements_can_be_accepted() {
+    let manifest = "[project]\nname='p'\nversion='0'\ndependencies=[\"six[x] ==1.15.0; os_name == 'nt'\", 'foo>=1,<2', 'direct @ https://example.invalid/d.tar.gz']\n";
+    // Explicit replacement rewrites the [project] string and reaches the backend.
+    let proposal = prepare_pyproject(manifest, &["six===1.17.0"]).unwrap();
+    let (code, message) = failure(&proposal);
+    assert_eq!(code, 3, "{message}");
+    assert!(message.contains("cannot start"), "{message}");
+    for (accept, needle) in [
+        ("foo", "--accept foo=REQUIREMENT"),
+        ("direct", "no version requirement"),
+        ("six=1.17", "PEP 440"),
+    ] {
+        let proposal = prepare_pyproject(manifest, &[accept]).unwrap();
+        let (code, message) = failure(&proposal);
+        assert_eq!(code, 2, "{accept}: {message}");
+        assert!(message.contains(needle), "{accept}: {message}");
+    }
+}

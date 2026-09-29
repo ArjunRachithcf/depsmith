@@ -61,13 +61,17 @@ Pixi suggestions are limited to pins and upper bounds that exclude a newer final
 release, with evidence (artifact URL and sha256): conda packages via `pixi search`
 on the manifest's channels, PyPI packages via the JSON Simple API of pypi.org or
 the manifest's `[pypi-options]` indexes (credentials are stripped and never
-sent). A failed lookup keeps the suggestion as "not established".
+sent). A failed lookup keeps the suggestion as "not established". In
+`pyproject.toml` targets this includes `[project]` dependencies, optional
+dependencies and `[dependency-groups]` requirements; direct-URL requirements
+have no version to suggest or accept.
 
 To accept a suggestion, pass `--accept NAME` (repeatable; Python
 `UpdateOptions(accept=[...])`). The declared requirement is rewritten in the same
 style to the newest release the evidence shows it excludes (`==X` → `==Y`,
 `<=X` → `<=Y`, `X.*`, `~=X.Y` and conda `=X` keep their precision); comments
-and layout are preserved. Ranges, `<X`, `!=` and `|` alternatives are ambiguous
+and layout are preserved, as are extras, markers and parentheses around a
+`[project]` requirement's specifier. Ranges, `<X`, `!=` and `|` alternatives are ambiguous
 and need `--accept NAME=REQUIREMENT` — the first `=` separates the name, so an
 exact PyPI pin is `--accept six===1.17.0`. The staged manifest is then
 re-resolved, scanned if requested and previewed; the manifest and lock diffs
@@ -239,6 +243,5 @@ setup, and GitHub Actions/provider-neutral update-job examples.
 
 The [local conda recipe](recipes/depsmith/README.md) is a starting point for
 conda-forge packaging, not a published feedstock. See the [design plan](docs/plan.md).
-Remaining first-release work includes constraint suggestions for `[project]`
-dependencies in `pyproject.toml`, Windows process-tree acceptance, and conda-forge
-release prerequisites. Interactive suggestion prompts are deferred.
+Remaining first-release work includes Windows process-tree acceptance and
+conda-forge release prerequisites. Interactive suggestion prompts are deferred.
