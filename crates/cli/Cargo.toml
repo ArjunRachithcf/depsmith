@@ -16,3 +16,9 @@ clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# End-to-end tests with their own runner: when started with DEPSMITH_E2E_FAKE set,
+# the test executable acts as a cross-platform Pixi stand-in for the real CLI.
+[[test]]
+name = "e2e"
+harness = false
