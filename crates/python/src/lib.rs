@@ -6,25 +6,25 @@ use pyo3::{create_exception, exceptions::PyRuntimeError, prelude::*};
 use std::path::Path;
 
 create_exception!(
-    _native,
+    depsmith,
     ConfigurationError,
     PyRuntimeError,
     "Invalid options, configuration or targets, or an unmet precondition (CLI exit 2)."
 );
 create_exception!(
-    _native,
+    depsmith,
     OperationError,
     PyRuntimeError,
     "A package manager, scanner or other operation failed (CLI exit 3)."
 );
 create_exception!(
-    _native,
+    depsmith,
     StaleProposalError,
     PyRuntimeError,
     "The repository changed since the proposal was prepared; prepare it again."
 );
 create_exception!(
-    _native,
+    depsmith,
     PolicyError,
     PyRuntimeError,
     "A configured policy, such as a vulnerability gate, rejected the proposal (CLI exit 4)."
