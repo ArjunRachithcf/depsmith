@@ -6,7 +6,7 @@ use depsmith_core::{
     conda::{lock_inventory, Conda},
     conformance, Engine, Target,
 };
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, fs};
 
 const ENVIRONMENT: &str = "name: demo
 channels:
@@ -130,7 +130,7 @@ mod stand_in {
         constraints::{FixtureRelease, RegistryConfig},
         Proposal, Result, UpdateOptions,
     };
-    use std::os::unix::fs::PermissionsExt;
+    use std::{os::unix::fs::PermissionsExt, path::Path};
 
     const LOCK: &str = "version: 1\nmetadata:\n  platforms: [linux-64]\n  sources: [environment.yml]\npackage:\n- name: six\n  version: 1.16.0\n  manager: conda\n  platform: linux-64\n  url: https://conda.anaconda.org/conda-forge/noarch/six-1.16.0-pyhd8ed1ab_1.conda\n  hash: {md5: a, sha256: b}\n";
 
