@@ -239,6 +239,7 @@ fn check_declarations(
         .map(|d| Edit {
             declaration: (*d).clone(),
             requirement: d.requirement.clone(),
+            comment: None,
         })
         .collect();
     match adapter.rewrite(root.path(), &target, &identity) {
@@ -256,6 +257,7 @@ fn check_declarations(
     let edit = Edit {
         declaration: (*first).clone(),
         requirement: requirement.clone(),
+        comment: None,
     };
     if let Err(error) = adapter.rewrite(root.path(), &target, &[edit]) {
         return problems.push(format!("rewrite failed: {error}"));

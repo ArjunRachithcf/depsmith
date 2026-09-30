@@ -1,7 +1,10 @@
 //! Suggestion acceptance (`--accept`): validation of names and requirements
 //! before any package manager or network access.
-use depsmith_core::{Engine, Error, Proposal, UpdateOptions};
-use std::fs;
+use depsmith_core::{
+    adapter::{Adapter, AdapterSpec, Candidate},
+    Engine, Error, Proposal, Target, UpdateOptions,
+};
+use std::{fs, path::Path};
 use tempfile::tempdir;
 
 const PIXI: &str = "[workspace]\nname='a'\nchannels=['conda-forge']\nplatforms=['linux-64']\n";
@@ -32,25 +35,29 @@ fn malformed_or_undeclared_acceptances_are_rejected() {
     }
 }
 
+/// An adapter that declares no capabilities.
+struct Plain;
+impl Adapter for Plain {
+    fn spec(&self) -> AdapterSpec {
+        AdapterSpec::new("plain", &["plain.txt"])
+    }
+    fn detects(&self, _: &Path, _: &str) -> bool {
+        true
+    }
+    fn prepare(&self, _: &Path, _: &Target, _: &UpdateOptions) -> depsmith_core::Result<Candidate> {
+        panic!("--accept must be rejected before the adapter runs")
+    }
+}
+
 #[test]
 fn acceptance_requires_adapter_support() {
     let root = tempdir().unwrap();
-    let workflows = root.path().join(".github/workflows");
-    fs::create_dir_all(&workflows).unwrap();
-    fs::write(
-        workflows.join("ci.yml"),
-        "on: push\njobs:\n  b:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@v4\n",
-    )
-    .unwrap();
-    let error = Engine::default()
-        .prepare(
-            root.path(),
-            &["github-actions:.github/workflows/ci.yml".into()],
-            options(&["actions/checkout"]),
-        )
+    fs::write(root.path().join("plain.txt"), "six==1\n").unwrap();
+    let error = Engine::new(vec![Box::new(Plain)])
+        .prepare(root.path(), &["plain:plain.txt".into()], options(&["six"]))
         .unwrap_err();
     assert!(
-        matches!(&error, Error::Invalid(m) if m.contains("--accept") && m.contains("github-actions")),
+        matches!(&error, Error::Invalid(m) if m.contains("--accept") && m.contains("plain")),
         "{error}"
     );
 }

@@ -657,6 +657,7 @@ mod tests {
             .map(|d| Edit {
                 requirement: change(&d.requirement),
                 declaration: d,
+                comment: None,
             })
             .collect();
         let text = rewrite_manifest(manifest, file == "pyproject.toml", &edits).unwrap();
@@ -745,6 +746,7 @@ dev = ["six ==1.15.0", { include-group = "extra" }]
         let edit = Edit {
             declaration,
             requirement: "==2".into(),
+            comment: None,
         };
         let error = rewrite_manifest(manifest, false, &[edit]).unwrap_err();
         assert!(

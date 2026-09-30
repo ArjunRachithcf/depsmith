@@ -79,9 +79,62 @@ fn live_actions_stay_in_their_major_line_and_offer_major_upgrades() {
         "slsa-framework/slsa-github-generator",
     ] {
         assert!(
-            proposal.suggestions.iter().any(|s| s.package == repository),
+            proposal
+                .suggestions
+                .iter()
+                .any(|s| s.package == repository && s.requirement == "current major"),
             "no major-upgrade suggestion for {repository}: {:?}",
             proposal.suggestions
         );
     }
+}
+
+#[test]
+#[ignore = "queries the live GitHub API"]
+fn live_tag_reference_is_suggested_and_accepted_as_a_commit_pin() {
+    let root = tempfile::tempdir().unwrap();
+    let workflows = root.path().join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    let workflow = "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      \
+                    - uses: actions/checkout@v3.5.0\n";
+    std::fs::write(workflows.join("ci.yml"), workflow).unwrap();
+    let target = ["github-actions:.github/workflows/ci.yml".into()];
+    let engine = Engine::default();
+
+    let suggested = engine
+        .prepare(root.path(), &target, UpdateOptions::default())
+        .unwrap();
+    let tag = reference(&suggested.changes[0].after, "actions/checkout").to_owned();
+    let pin = suggested
+        .suggestions
+        .iter()
+        .find(|s| s.package == "actions/checkout" && s.requirement == tag)
+        .unwrap_or_else(|| panic!("no commit pin suggestion: {:?}", suggested.suggestions));
+    assert!(
+        pin.evidence[0].contains(&format!("release {tag}")),
+        "{:?}",
+        pin.evidence
+    );
+
+    let accepted = engine
+        .prepare(
+            root.path(),
+            &target,
+            UpdateOptions {
+                accept: vec!["actions/checkout".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(accepted.failures.is_empty(), "{:?}", accepted.failures);
+    let after = &accepted.changes[0].after;
+    // Pinned to v3.5.0's commit, then updated within v3 keeping the pin.
+    let sha = reference(after, "actions/checkout");
+    assert!(sha.len() == 40 && pin.evidence[0].contains(sha), "{after}");
+    assert!(after.contains(&format!("{sha} # {tag}\n")), "{after}");
+    assert!(
+        !accepted.suggestions.iter().any(|s| s.requirement == tag),
+        "{:?}",
+        accepted.suggestions
+    );
 }

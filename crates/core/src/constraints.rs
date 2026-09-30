@@ -42,6 +42,25 @@ pub struct Edit {
     pub declaration: Declaration,
     /// Its new requirement.
     pub requirement: String,
+    /// A comment to write beside the requirement, such as the release a
+    /// commit pin stands for; `None` keeps any existing comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// An immutable requirement for a declaration whose requirement can move,
+/// such as the commit a release tag points to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pin {
+    /// The immutable requirement.
+    pub requirement: String,
+    /// A comment to write beside it, such as the release it stands for.
+    pub comment: Option<String>,
+    /// What the pin is, cited in acceptance notes, such as
+    /// `commit pin of v4.2.1`.
+    pub note: String,
+    /// Where the pin was established, cited in suggestions.
+    pub evidence: String,
 }
 
 /// Where a target's packages are published, per ecosystem, and the release
@@ -428,6 +447,12 @@ pub(crate) fn accept(
             let old = &declaration.requirement;
             match &acceptance.requirement {
                 Some(requirement) => scheme.check_explicit(name, requirement)?,
+                None if scheme.pinned(old) == Some(true) => {
+                    return Err(Error::Invalid(format!(
+                        "{name} {old} is already a commit pin; nothing to accept"
+                    )))
+                }
+                None if scheme.pinned(old) == Some(false) => {}
                 None if scheme.restyle(old, PROBE_VERSION).is_some() => {}
                 None => {
                     return Err(Error::Invalid(format!(
@@ -444,10 +469,16 @@ pub(crate) fn accept(
         let name = &acceptance.name;
         for declaration in versioned {
             let old = &declaration.requirement;
+            let scheme = ecosystem::scheme(&declaration.ecosystem).unwrap();
+            let mut comment = None;
             let (new, cited) = match &acceptance.requirement {
                 Some(requirement) => (requirement.clone(), "explicit replacement".to_owned()),
+                None if scheme.pinned(old) == Some(false) => {
+                    let pin = adapter.pin(stage, declaration, lookup.options)?;
+                    comment = pin.comment;
+                    (pin.requirement, pin.note)
+                }
                 None => {
-                    let scheme = ecosystem::scheme(&declaration.ecosystem).unwrap();
                     let (excluded, failures) =
                         lookup.excluded(&declaration.ecosystem, name, old)?;
                     let newest = excluded
@@ -481,6 +512,7 @@ pub(crate) fn accept(
             edits.push(Edit {
                 declaration: declaration.clone(),
                 requirement: new,
+                comment,
             });
         }
     }

@@ -2,7 +2,7 @@
 //! capabilities, selects direct dependencies, and prepares a candidate inside
 //! a stage for the engine to review and apply.
 use crate::{
-    constraints::{AvailabilityConfig, Declaration, Edit},
+    constraints::{AvailabilityConfig, Declaration, Edit, Pin},
     Package, Result, Suggestion, Target, Unresolved, UpdateOptions,
 };
 use serde::{Deserialize, Serialize};
@@ -226,6 +226,21 @@ pub trait Adapter: Send + Sync {
     /// applies, for availability evidence. The default consults no registry.
     fn availability(&self, _root: &Path, _target: &Target) -> Result<AvailabilityConfig> {
         Ok(AvailabilityConfig::default())
+    }
+    /// The immutable pin for `declaration`, whose requirement can move (a
+    /// GitHub Actions tag or branch), for `--accept`. Read from `root` (the
+    /// stage); may consult the adapter's registry.
+    fn pin(
+        &self,
+        _root: &Path,
+        declaration: &Declaration,
+        _options: &UpdateOptions,
+    ) -> Result<Pin> {
+        Err(crate::Error::Invalid(format!(
+            "the {} adapter cannot pin {}",
+            self.manager(),
+            declaration.package
+        )))
     }
     /// Resolve `target` inside `stage`, a disposable copy of the repository, and
     /// return the candidate. Must not write outside `stage`.

@@ -4,6 +4,7 @@
 //! actions, Docker references and expressions are left unchanged.
 use crate::{
     adapter::{Adapter, AdapterSpec, Candidate, Capabilities, Support},
+    constraints::{Declaration, Edit, Pin},
     Error, Result, Suggestion, Target, UpdateOptions,
 };
 use regex::Regex;
@@ -25,7 +26,9 @@ pub struct Release {
     /// Full commit SHA the tag points to.
     pub sha: String,
 }
-fn version(tag: &str) -> Option<Version> {
+/// The release version a tag names (`v4` is 4.0.0); `None` for other refs
+/// and pre-releases.
+pub(crate) fn version(tag: &str) -> Option<Version> {
     let plain = tag.strip_prefix('v').unwrap_or(tag);
     let count = plain.split('.').count();
     let padded = match count {
@@ -48,23 +51,53 @@ fn remote(value: &str) -> Option<(&str, &str)> {
     }
     Some((&path[..owner.len() + repo.len() + 1], reference))
 }
-fn refs(value: &Value) -> Vec<String> {
-    let mut refs = vec![];
-    if let Some(jobs) = value.get("jobs").and_then(Value::as_mapping) {
-        for job in jobs.values() {
-            if let Some(reference) = job.get("uses").and_then(Value::as_str) {
-                refs.push(reference.into());
-            }
-            if let Some(steps) = job.get("steps").and_then(Value::as_sequence) {
-                for step in steps {
-                    if let Some(reference) = step.get("uses").and_then(Value::as_str) {
-                        refs.push(reference.into());
+/// Whether a reference is a full commit SHA.
+pub(crate) fn is_commit(reference: &str) -> bool {
+    reference.len() == 40 && reference.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The `uses:` slots of a workflow in document order, by location
+/// (`jobs.<job>.uses` or `jobs.<job>.steps[<i>].uses`).
+fn uses_slots(value: &mut Value) -> Vec<(String, &mut Value)> {
+    let mut slots = vec![];
+    if let Some(jobs) = value.get_mut("jobs").and_then(Value::as_mapping_mut) {
+        for (name, job) in jobs.iter_mut() {
+            let name = name.as_str().unwrap_or_default().to_owned();
+            let Some(job) = job.as_mapping_mut() else {
+                continue;
+            };
+            for (key, item) in job.iter_mut() {
+                match key.as_str() {
+                    Some("uses") if item.is_string() => {
+                        slots.push((format!("jobs.{name}.uses"), item));
                     }
+                    Some("steps") => {
+                        for (index, step) in
+                            item.as_sequence_mut().into_iter().flatten().enumerate()
+                        {
+                            if let Some(slot) = step.get_mut("uses").filter(|s| s.is_string()) {
+                                slots.push((format!("jobs.{name}.steps[{index}].uses"), slot));
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
     }
-    refs
+    slots
+}
+
+/// The `uses:` references of a workflow as (location, reference).
+fn uses_entries(value: &Value) -> Vec<(String, String)> {
+    uses_slots(&mut value.clone())
+        .into_iter()
+        .map(|(location, slot)| (location, slot.as_str().unwrap().to_owned()))
+        .collect()
+}
+
+fn refs(value: &Value) -> Vec<String> {
+    uses_entries(value).into_iter().map(|(_, r)| r).collect()
 }
 fn mutate_refs(value: &mut Value, replacements: &BTreeMap<String, String>) {
     if let Some(jobs) = value.get_mut("jobs").and_then(Value::as_mapping_mut) {
@@ -127,7 +160,7 @@ pub fn rewrite_explained(
         if repo != repository {
             continue;
         }
-        let pinned = reference.len() == 40 && reference.chars().all(|c| c.is_ascii_hexdigit());
+        let pinned = is_commit(reference);
         let baseline = if pinned {
             releases
                 .iter()
@@ -200,9 +233,42 @@ pub fn rewrite_explained(
         }
     }
     mutate_refs(&mut expected, &replacements);
+    let result = edit_uses_lines(source, &mut |reference, _, rest| {
+        let new = replacements.get(reference)?;
+        let suffix = if let Some(label) = labels.get(reference) {
+            format!(" # {label}")
+        } else if let Some((from, to)) = retagged.get(reference).filter(|(from, _)| {
+            rest.trim_start().strip_prefix('#').map(str::trim) == Some(from.as_str())
+        }) {
+            rest.replacen(from.as_str(), to, 1)
+        } else {
+            rest.to_string()
+        };
+        Some((new.clone(), suffix))
+    });
+    let actual: Value =
+        serde_yaml::from_str(&result).map_err(|e| Error::Operation(e.to_string()))?;
+    if actual != expected {
+        return Err(Error::Operation(
+            "cannot edit this YAML layout without changing unrelated content".into(),
+        ));
+    }
+    Ok((result, unresolved.into_iter().collect()))
+}
+
+/// Maps (reference, preceding identical references, rest of line) to the new
+/// reference and rest of line, or `None` to keep the line.
+type UsesEdit<'a> = dyn FnMut(&str, usize, &str) -> Option<(String, String)> + 'a;
+
+/// Rewrite `uses:` lines outside block scalars, keeping everything else byte
+/// for byte. `edit` receives each reference, how many identical references
+/// precede it, and the rest of its line; it returns the new reference and
+/// rest, or `None` to keep the line.
+fn edit_uses_lines(source: &str, edit: &mut UsesEdit) -> String {
     let pattern = Regex::new(r#"^(\s*(?:-\s+)?uses:\s*)(['"]?)([^\s'"]+)(['"]?)(.*)$"#).unwrap();
     let block = Regex::new(r":\s*[|>][+-]?[0-9]?\s*(?:#.*)?$").unwrap();
     let mut block_indent: Option<usize> = None;
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     let mut result = String::new();
     for line in source.split_inclusive('\n') {
         let ending = if line.ends_with("\r\n") {
@@ -225,25 +291,66 @@ pub fn rewrite_explained(
             block_indent = Some(indent);
         }
         if let Some(captures) = pattern.captures(text) {
-            if let Some(new) = replacements.get(&captures[3]) {
-                let suffix = if let Some(label) = labels.get(&captures[3]) {
-                    format!(" # {label}")
-                } else if let Some((from, to)) = retagged.get(&captures[3]).filter(|(from, _)| {
-                    captures[5].trim_start().strip_prefix('#').map(str::trim) == Some(from.as_str())
-                }) {
-                    captures[5].replacen(from.as_str(), to, 1)
-                } else {
-                    captures[5].to_string()
-                };
+            let count = seen.entry(captures[3].to_owned()).or_default();
+            let ordinal = *count;
+            *count += 1;
+            if let Some((new, rest)) = edit(&captures[3], ordinal, &captures[5]) {
                 result.push_str(&format!(
                     "{}{}{}{}{}{}",
-                    &captures[1], &captures[2], new, &captures[4], suffix, ending
+                    &captures[1], &captures[2], new, &captures[4], rest, ending
                 ));
                 continue;
             }
         }
         result.push_str(line);
     }
+    result
+}
+
+/// Apply `edits` to workflow `source`: each names a `uses:` declaration by
+/// location and gets a new reference (and optionally a new trailing
+/// comment). The result is verified by re-parsing.
+fn rewrite_declarations(source: &str, edits: &[Edit]) -> Result<String> {
+    let mut expected: Value = serde_yaml::from_str(source)
+        .map_err(|e| Error::Invalid(format!("invalid workflow YAML: {e}")))?;
+    let entries = uses_entries(&expected);
+    let mut plan: BTreeMap<(String, usize), (String, Option<String>)> = BTreeMap::new();
+    let mut new_values: BTreeMap<String, String> = BTreeMap::new();
+    for edit in edits {
+        let d = &edit.declaration;
+        let index = entries
+            .iter()
+            .position(|(location, reference)| {
+                *location == d.location
+                    && remote(reference) == Some((d.package.as_str(), d.requirement.as_str()))
+            })
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "{}@{} is not declared at {} in {}",
+                    d.package,
+                    d.requirement,
+                    d.location,
+                    d.file.display()
+                ))
+            })?;
+        let text = &entries[index].1;
+        let ordinal = entries[..index].iter().filter(|(_, r)| r == text).count();
+        let new = format!("{}@{}", text.rsplit_once('@').unwrap().0, edit.requirement);
+        new_values.insert(d.location.clone(), new.clone());
+        plan.insert((text.clone(), ordinal), (new, edit.comment.clone()));
+    }
+    for (location, slot) in uses_slots(&mut expected) {
+        if let Some(new) = new_values.get(&location) {
+            *slot = Value::String(new.clone());
+        }
+    }
+    let result = edit_uses_lines(source, &mut |reference, ordinal, rest| {
+        let (new, comment) = plan.get(&(reference.to_owned(), ordinal))?;
+        let rest = comment
+            .as_ref()
+            .map_or_else(|| rest.to_owned(), |c| format!(" # {c}"));
+        Some((new.clone(), rest))
+    });
     let actual: Value =
         serde_yaml::from_str(&result).map_err(|e| Error::Operation(e.to_string()))?;
     if actual != expected {
@@ -251,7 +358,30 @@ pub fn rewrite_explained(
             "cannot edit this YAML layout without changing unrelated content".into(),
         ));
     }
-    Ok((result, unresolved.into_iter().collect()))
+    Ok(result)
+}
+
+/// The commit pin for tag `reference` of `repository`: the commit the tag
+/// points to, labelled with the most specific release tag on that commit.
+fn commit_pin(repository: &str, reference: &str, releases: &[Release]) -> Option<Pin> {
+    let sha = &releases.iter().find(|r| r.tag == reference)?.sha;
+    if !is_commit(sha) {
+        return None;
+    }
+    let label = releases
+        .iter()
+        .filter(|r| &r.sha == sha)
+        .filter_map(|r| version(&r.tag).map(|v| ((v, r.tag.split('.').count()), &r.tag)))
+        .max()
+        .map_or(reference, |(_, tag)| tag.as_str());
+    Some(Pin {
+        requirement: sha.clone(),
+        comment: Some(label.to_owned()),
+        note: format!("commit pin of {label}"),
+        evidence: format!(
+            "{repository}@{reference} is commit {sha} (release {label}): https://github.com/{repository}/releases/tag/{label}"
+        ),
+    })
 }
 
 /// Where release information comes from; replaceable in tests.
@@ -358,9 +488,8 @@ impl Adapter for Actions {
                 package_selection: Support::Supported,
                 // Major-version upgrades of selected repositories.
                 constraint_changes: Support::Supported,
-                suggestion_acceptance: Support::Unsupported(
-                    "use --upgrade --package OWNER/REPO to review a major release".into(),
-                ),
+                // Converting tag references to commit pins.
+                suggestion_acceptance: Support::Supported,
                 git_refresh: Support::NotApplicable,
                 cooldown: Support::Unsupported(
                     "a release-age cooldown is not implemented for GitHub Actions".into(),
@@ -403,6 +532,50 @@ impl Adapter for Actions {
             })
             .collect())
     }
+    fn declarations(&self, root: &Path, target: &Target) -> Result<Vec<Declaration>> {
+        let parsed: Value = serde_yaml::from_str(&fs::read_to_string(root.join(&target.manifest))?)
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+        Ok(uses_entries(&parsed)
+            .into_iter()
+            .filter_map(|(location, reference)| {
+                let (repository, requirement) = remote(&reference)?;
+                Some(Declaration {
+                    ecosystem: "github-actions".into(),
+                    package: repository.into(),
+                    requirement: requirement.into(),
+                    file: target.manifest.clone(),
+                    location,
+                })
+            })
+            .collect())
+    }
+    fn rewrite(&self, stage: &Path, target: &Target, edits: &[Edit]) -> Result<()> {
+        if edits.is_empty() {
+            return Ok(());
+        }
+        if let Some(edit) = edits.iter().find(|e| e.declaration.file != target.manifest) {
+            return Err(Error::Invalid(format!(
+                "{}: {} is not this target's workflow",
+                target.id,
+                edit.declaration.file.display()
+            )));
+        }
+        let path = stage.join(&target.manifest);
+        let text = rewrite_declarations(&fs::read_to_string(&path)?, edits)?;
+        fs::write(path, text)?;
+        Ok(())
+    }
+    /// Tags and branches pin to the commit of the matching release tag.
+    fn pin(&self, _root: &Path, declaration: &Declaration, options: &UpdateOptions) -> Result<Pin> {
+        let repository = &declaration.package;
+        let reference = &declaration.requirement;
+        let releases = self.source.releases(repository, options.timeout_seconds)?;
+        commit_pin(repository, reference, &releases).ok_or_else(|| {
+            Error::Operation(format!(
+                "{repository} {reference}: no release commit could be established; only published release tags can be pinned"
+            ))
+        })
+    }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<crate::Package>> {
         workflow_inventory(&fs::read_to_string(root.join(&target.manifest))?)
     }
@@ -437,6 +610,27 @@ impl Adapter for Actions {
                 suggestions.push(Suggestion { target: target.id.clone(), package: repository.clone(), requirement: "current major".into(), reason: "A newer major release is available; select this repository with --upgrade to review it.".into(), evidence: vec![format!("GitHub releases: https://github.com/{repository}/releases")] });
             }
             content = newer;
+            // Tag references of the candidate that can become commit pins.
+            let parsed: Value =
+                serde_yaml::from_str(&content).map_err(|e| Error::Invalid(e.to_string()))?;
+            let mut pinned = BTreeSet::new();
+            for reference in refs(&parsed) {
+                let Some((repo, tag)) = remote(&reference) else {
+                    continue;
+                };
+                if repo != repository || is_commit(tag) || !pinned.insert(tag.to_owned()) {
+                    continue;
+                }
+                if let Some(pin) = commit_pin(&repository, tag, &releases) {
+                    suggestions.push(Suggestion {
+                        target: target.id.clone(),
+                        package: repository.clone(),
+                        requirement: tag.into(),
+                        reason: format!("Tag references can be moved to other commits. Pin this action to its release commit with --accept {repository}."),
+                        evidence: vec![pin.evidence],
+                    });
+                }
+            }
         }
         let after = workflow_inventory(&content)?;
         fs::write(&file, content)?;

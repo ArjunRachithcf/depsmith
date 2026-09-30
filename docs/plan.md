@@ -157,7 +157,7 @@ After this release, add **conda-family**, then **uv** adapters. Conda locking us
 
 **C. Release.** Tag `v0.1.0` on `main`, run the Release workflow without publishing, review the artifacts, then publish only with explicit approval. PyPI trusted publishing and the `pypi`/`release` environments are configured beforehand. Submit the conda-forge feedstock afterwards.
 
-**Later (0.2 and beyond).** Configured post-install project checks, commit-pin conversion suggestions, interactive per-suggestion acceptance prompts, shared scanner database downloads, then conda-family and uv adapters.
+**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, then conda-family and uv adapters.
 
 ## 7. Documentation automation
 

@@ -12,6 +12,13 @@ expressions, script contents, runner labels and action inputs are left alone.
   tags, and full commit SHAs stay SHAs. A trailing `# vX.Y.Z` comment equal to
   the old tag is updated with the reference; an updated SHA gets a
   `# vX.Y.Z` comment naming its new release, replacing any existing comment.
+- **Commit pins:** each tag reference gets a suggestion to pin it to its
+  release commit, citing the commit and the most specific release tag on it.
+  `--accept owner/name` rewrites every tag reference to that repository as
+  `owner/name@<sha> # vX.Y.Z`, and later updates keep the pin style.
+  `--accept owner/name=REF` writes a tag or SHA of your choice instead.
+  Branches cannot be pinned this way, and a reference that already is a
+  commit pin has nothing to accept.
 - **Unresolved references:** branches such as `@main`, SHAs that match no
   release, and missing alias tags stay unchanged and are listed under
   `unresolved` with the reason.

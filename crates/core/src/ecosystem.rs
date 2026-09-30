@@ -24,6 +24,12 @@ pub(crate) trait VersionScheme: Sync {
     fn check_explicit(&self, _name: &str, _requirement: &str) -> Result<()> {
         Ok(())
     }
+    /// For ecosystems with commit pins: whether the requirement already is
+    /// one (`Some(true)`) or is a movable reference that can be pinned
+    /// (`Some(false)`). `None` when the ecosystem has no pins.
+    fn pinned(&self, _requirement: &str) -> Option<bool> {
+        None
+    }
 }
 
 /// Whether a conda or PEP 440 requirement can exclude a newer release. Every `|`
@@ -65,11 +71,44 @@ impl VersionScheme for Pypi {
     }
 }
 
+/// GitHub Actions references: release tags (`v4`, `v4.2.1`) ordered as
+/// versions, branches, or full commit SHAs. Tags move within their major
+/// line on update, so they never cap newer releases; they can be pinned.
+struct GithubActions;
+
+impl VersionScheme for GithubActions {
+    fn compare(&self, left: &str, right: &str) -> Ordering {
+        crate::actions::version(left).cmp(&crate::actions::version(right))
+    }
+    fn caps_newer(&self, _requirement: &str) -> bool {
+        false
+    }
+    fn restyle(&self, _requirement: &str, _newest: &str) -> Option<String> {
+        None
+    }
+    fn check_explicit(&self, name: &str, requirement: &str) -> Result<()> {
+        if requirement.is_empty()
+            || !requirement
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c))
+        {
+            return Err(Error::Invalid(format!(
+                "{name}={requirement} is not a tag or commit SHA"
+            )));
+        }
+        Ok(())
+    }
+    fn pinned(&self, requirement: &str) -> Option<bool> {
+        Some(crate::actions::is_commit(requirement))
+    }
+}
+
 /// The version scheme of `ecosystem`, if depsmith knows it.
 pub(crate) fn scheme(ecosystem: &str) -> Option<&'static dyn VersionScheme> {
     match ecosystem {
         "conda" => Some(&Conda),
         "pypi" => Some(&Pypi),
+        "github-actions" => Some(&GithubActions),
         _ => None,
     }
 }
