@@ -141,13 +141,17 @@ impl Capabilities {
     }
 }
 
-/// Classify `tool --version` output (`name X.Y.Z`) against tested versions.
+/// Classify `tool --version` output (`name X.Y.Z`, optionally followed by
+/// build details such as `(hash date)`) against tested versions.
 pub fn tool_status(output: &str, tested: &[&str]) -> (&'static str, Option<String>) {
     let version = output
         .lines()
         .next()
-        .and_then(|line| line.split_whitespace().last())
-        .filter(|token| token.starts_with(|c: char| c.is_ascii_digit()))
+        .and_then(|line| {
+            line.split_whitespace()
+                .skip(1)
+                .find(|token| token.starts_with(|c: char| c.is_ascii_digit()))
+        })
         .map(str::to_owned);
     match &version {
         Some(v) if tested.contains(&v.as_str()) => ("tested", version),
@@ -186,6 +190,12 @@ pub trait Adapter: Send + Sync {
     /// Whether the file at `relative` (with `content`) is a target of this
     /// adapter. Only files matching the spec's patterns are offered.
     fn detects(&self, relative: &Path, content: &str) -> bool;
+    /// Like [`Adapter::detects`], for adapters that must look at other files
+    /// under `root` (the repository) to decide, such as whether a Cargo
+    /// package belongs to an enclosing workspace. Discovery calls this.
+    fn detects_in(&self, _root: &Path, relative: &Path, content: &str) -> bool {
+        self.detects(relative, content)
+    }
     /// The resolved packages of `target` under `root`, for scanning an existing
     /// lock without preparing an update.
     fn inventory(&self, _root: &Path, _target: &Target) -> Result<Vec<Package>> {

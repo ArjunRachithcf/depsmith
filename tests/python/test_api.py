@@ -54,7 +54,9 @@ class ApiTests(unittest.TestCase):
     def test_doctor_reports_adapter_capabilities(self):
         report = updater.doctor(
             options=updater.UpdateOptions(
-                pixi="missing-pixi-binary", grype="missing-grype-binary"
+                pixi="missing-pixi-binary",
+                grype="missing-grype-binary",
+                tools={"cargo": "missing-cargo-binary"},
             )
         )
         pixi = next(a for a in report["adapters"] if a["manager"] == "pixi")

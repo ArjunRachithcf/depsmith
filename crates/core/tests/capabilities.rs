@@ -147,6 +147,10 @@ fn tool_versions_are_tested_or_untested_never_guessed_compatible() {
         tool_status("no version here", &["0.80.0"]),
         ("untested", None)
     );
+    assert_eq!(
+        tool_status("cargo 1.98.1 (797e8a9bc 2026-08-05)", &["1.98.1"]),
+        ("tested", Some("1.98.1".into()))
+    );
 }
 
 #[test]
@@ -154,6 +158,7 @@ fn doctor_reports_capabilities_and_unavailable_tools() {
     let options = UpdateOptions {
         pixi: "depsmith-nonexistent-executable".into(),
         grype: "depsmith-nonexistent-executable".into(),
+        tools: [("cargo".into(), "depsmith-nonexistent-executable".into())].into(),
         ..Default::default()
     };
     let report = depsmith_core::doctor(&options);

@@ -86,6 +86,11 @@ pub enum RegistryConfig {
         /// The manifest, relative to the stage.
         manifest: PathBuf,
     },
+    /// A Cargo sparse registry index such as `https://index.crates.io/`.
+    CratesSparse {
+        /// Index URL, ending in `/`.
+        index: String,
+    },
     /// PEP 691 JSON Simple API indexes.
     PypiSimple {
         /// Index URLs, in order.
@@ -192,6 +197,13 @@ impl<'a> Lookup<'a> {
                 crate::pypi::evidence(package, &pages, requirement, cutoff)
                     .map(|evidence| (label(evidence), failures))
             }
+            RegistryConfig::CratesSparse { index } => crate::cargo::sparse_excluded(
+                index,
+                package,
+                requirement,
+                self.options.timeout_seconds,
+            )
+            .map(|excluded| (label(excluded), vec![])),
             RegistryConfig::Fixture { releases, failing } => {
                 if failing.iter().any(|f| f == package) {
                     return Ok((
@@ -292,12 +304,25 @@ fn fixture_excluded(
     requirement: &str,
 ) -> Result<Vec<Excluded>> {
     use crate::pep440::{satisfies, Version};
+    let releases = releases.map(Vec::as_slice).unwrap_or_default();
+    if ecosystem == "cargo" {
+        let rows: Vec<(semver::Version, &str, &str)> = releases
+            .iter()
+            .filter_map(|r| {
+                Some((
+                    semver::Version::parse(&r.version).ok()?,
+                    r.url.as_str(),
+                    r.sha256.as_str(),
+                ))
+            })
+            .collect();
+        return crate::cargo::semver_excluded("fixture", &rows, requirement);
+    }
     if ecosystem != "pypi" {
         return Err(Error::Operation(format!(
-            "fixture registries match PEP 440 requirements only, not {ecosystem}"
+            "fixture registries match PEP 440 or Cargo requirements only, not {ecosystem}"
         )));
     }
-    let releases = releases.map(Vec::as_slice).unwrap_or_default();
     let finals: Vec<_> = releases
         .iter()
         .filter_map(|r| Version::parse(&r.version).map(|v| (v, r)))

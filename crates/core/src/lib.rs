@@ -23,6 +23,8 @@
 //! ```
 /// The adapter contract implemented by each package manager integration.
 pub mod adapter;
+/// The Cargo adapter: `Cargo.lock` owners (workspaces and standalone crates).
+pub mod cargo;
 mod conda_version;
 pub mod conformance;
 mod constraint;
@@ -48,7 +50,7 @@ pub use model::*;
 use std::{fs, path::Path};
 
 /// Discovers targets and prepares proposals with a set of adapters. The
-/// default engine has the Pixi and GitHub Actions adapters.
+/// default engine has the Pixi, GitHub Actions and Cargo adapters.
 pub struct Engine {
     adapters: Vec<(Box<dyn Adapter>, adapter::AdapterSpec)>,
 }
@@ -57,6 +59,7 @@ impl Default for Engine {
         Self::new(vec![
             Box::new(pixi::Pixi),
             Box::new(actions::Actions::default()),
+            Box::new(cargo::Cargo::default()),
         ])
     }
 }
@@ -219,7 +222,7 @@ impl Engine {
                         return Err(Error::Operation(format!("cannot read {}", path.display())))
                     }
                 };
-                if adapter.detects(&path, text) {
+                if adapter.detects_in(&root, &path, text) {
                     targets.push(Target {
                         id: format!(
                             "{}:{}",

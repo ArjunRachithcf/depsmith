@@ -168,6 +168,18 @@ pub fn run_env(
     timeout: u64,
     env: &[(String, String)],
 ) -> Result<String> {
+    run_env_output(program, args, cwd, timeout, env).map(|(stdout, _)| stdout)
+}
+
+/// Like [`run_env`], returning stdout and stderr, for tools that report
+/// results on stderr (such as `cargo update`).
+pub(crate) fn run_env_output(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout: u64,
+    env: &[(String, String)],
+) -> Result<(String, String)> {
     let mut command = Command::new(program);
     command.args(args).envs(env.iter().cloned());
     run_with_env(command, program, cwd, timeout, env)
@@ -179,7 +191,7 @@ pub(crate) fn run_command(
     cwd: &Path,
     timeout: u64,
 ) -> Result<String> {
-    run_with_env(command, program, cwd, timeout, &[])
+    run_with_env(command, program, cwd, timeout, &[]).map(|(stdout, _)| stdout)
 }
 
 fn run_with_env(
@@ -188,7 +200,7 @@ fn run_with_env(
     cwd: &Path,
     timeout: u64,
     env: &[(String, String)],
-) -> Result<String> {
+) -> Result<(String, String)> {
     // Keep authentication (e.g. GIT_ASKPASS/GIT_SSH_COMMAND), but do not let a
     // caller's repository context redirect build-hook Git operations out of
     // the stage. Git config injection can set core.worktree too.
@@ -266,9 +278,9 @@ fn wait(
     program: &str,
     timeout: u64,
     mut output: std::fs::File,
-    errors: std::fs::File,
+    mut errors: std::fs::File,
     env: &[(String, String)],
-) -> Result<String> {
+) -> Result<(String, String)> {
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
@@ -281,7 +293,10 @@ fn wait(
             output.seek(SeekFrom::Start(0))?;
             let mut text = String::new();
             output.take(32 * 1024 * 1024).read_to_string(&mut text)?;
-            return Ok(text);
+            errors.seek(SeekFrom::Start(0))?;
+            let mut raw = vec![];
+            errors.take(4 * 1024 * 1024).read_to_end(&mut raw)?;
+            return Ok((text, String::from_utf8_lossy(&raw).into_owned()));
         }
         if cancelled() {
             kill_tree(child);

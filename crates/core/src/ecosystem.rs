@@ -103,19 +103,77 @@ impl VersionScheme for GithubActions {
     }
 }
 
+/// Cargo's SemVer requirements. A bare version is a caret requirement, so it
+/// caps the next incompatible release; restyling keeps the operator and the
+/// declared precision (`1.0` becomes `2.0`, `=1.2.3` becomes `=2.5.1`).
+struct CargoSemver;
+
+impl VersionScheme for CargoSemver {
+    fn compare(&self, left: &str, right: &str) -> Ordering {
+        match (semver::Version::parse(left), semver::Version::parse(right)) {
+            (Ok(left), Ok(right)) => left.cmp(&right),
+            _ => left.cmp(right),
+        }
+    }
+    fn restyle(&self, requirement: &str, newest: &str) -> Option<String> {
+        // Registries report full versions; pad shorter ones such as `2`.
+        let padded = match newest.split('.').count() {
+            1 => format!("{newest}.0.0"),
+            2 => format!("{newest}.0"),
+            _ => newest.to_owned(),
+        };
+        let newest = semver::Version::parse(&padded).ok()?;
+        if !newest.pre.is_empty() {
+            return None;
+        }
+        let requirement = requirement.trim();
+        let (operator, version) = ["^", "~", "="]
+            .iter()
+            .find_map(|op| Some((*op, requirement.strip_prefix(op)?.trim())))
+            .unwrap_or(("", requirement));
+        let parts: Vec<&str> = version.split('.').collect();
+        let numbers = [newest.major, newest.minor, newest.patch].map(|n| n.to_string());
+        let wildcard = parts.last() == Some(&"*");
+        let precision = parts.len() - usize::from(wildcard);
+        if !(1..=3).contains(&precision)
+            || (wildcard && !operator.is_empty())
+            || !parts[..precision]
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        {
+            return None;
+        }
+        let kept = numbers[..precision].join(".");
+        Some(if wildcard {
+            format!("{kept}.*")
+        } else {
+            format!("{operator}{kept}")
+        })
+    }
+    fn check_explicit(&self, name: &str, requirement: &str) -> Result<()> {
+        semver::VersionReq::parse(requirement).map_err(|_| {
+            Error::Invalid(format!(
+                "{name}={requirement} is not a Cargo version requirement"
+            ))
+        })?;
+        Ok(())
+    }
+}
+
 /// The version scheme of `ecosystem`, if depsmith knows it.
 pub(crate) fn scheme(ecosystem: &str) -> Option<&'static dyn VersionScheme> {
     match ecosystem {
         "conda" => Some(&Conda),
         "pypi" => Some(&Pypi),
         "github-actions" => Some(&GithubActions),
+        "cargo" => Some(&CargoSemver),
         _ => None,
     }
 }
 
 /// The upstream identity (unversioned PURL, evidence) a resolved package
-/// carries by itself: a PyPI artifact on files.pythonhosted.org or a GitHub
-/// Actions exact release tag. Anything else needs a reviewed mapping; names
+/// carries by itself: a PyPI artifact on files.pythonhosted.org, a crate
+/// from crates.io, or a GitHub Actions exact release tag. Anything else needs a reviewed mapping; names
 /// alone never imply identity across ecosystems.
 pub(crate) fn native_identity(package: &Package) -> Option<(String, String)> {
     match package.ecosystem.as_str() {
@@ -133,6 +191,19 @@ pub(crate) fn native_identity(package: &Package) -> Option<(String, String)> {
                 "native lockfile PyPI identity".into(),
             ))
         }
+        "cargo" => package
+            .artifact
+            .starts_with(&format!(
+                "{}/{}/",
+                crate::cargo::CRATES_IO_DOWNLOAD,
+                package.name
+            ))
+            .then(|| {
+                (
+                    format!("pkg:cargo/{}", package.name),
+                    "Cargo.lock crates.io source".into(),
+                )
+            }),
         "github-actions" => {
             let exact_tag = regex::Regex::new(r"^v?[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
             (package
@@ -229,5 +300,26 @@ mod tests {
         assert!(native_identity(&package("conda", "openssl", "3.0", wheel)).is_none());
         assert!(build_caveat("conda").is_some());
         assert!(build_caveat("pypi").is_none());
+    }
+
+    #[test]
+    fn cargo_requirements_restyle_at_the_declared_precision() {
+        let cargo = scheme("cargo").unwrap();
+        for (old, new) in [
+            ("1.0", Some("2.5")),
+            ("1", Some("2")),
+            ("^0.2.3", Some("^2.5.1")),
+            ("=1.2.3", Some("=2.5.1")),
+            ("~1.2", Some("~2.5")),
+            ("1.*", Some("2.*")),
+            (">=1, <2", None),
+            ("<2", None),
+        ] {
+            assert_eq!(cargo.restyle(old, "2.5.1").as_deref(), new, "{old}");
+        }
+        assert!(cargo.caps_newer("1.0") && cargo.caps_newer("~1") && !cargo.caps_newer(">=1"));
+        assert!(cargo.check_explicit("serde", ">=1, <3").is_ok());
+        assert!(cargo.check_explicit("serde", "one").is_err());
+        assert_eq!(cargo.compare("1.10.0", "1.9.0"), Ordering::Greater);
     }
 }

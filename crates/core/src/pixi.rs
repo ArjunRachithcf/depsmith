@@ -412,7 +412,7 @@ impl Pep508 {
 
 /// Replace a string value, keeping its surrounding comments/whitespace and its
 /// literal (single-quoted) style when the new text allows it.
-fn replace_string(value: &mut toml_edit::Value, new: &str) {
+pub(crate) fn replace_string(value: &mut toml_edit::Value, new: &str) {
     let decor = value.decor().clone();
     let literal = match &*value {
         toml_edit::Value::String(formatted) => formatted
