@@ -232,7 +232,8 @@ mod stand_in {
     const LOCK: &str = "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"once_cell\"\nversion = \"1.17.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"abc\"\n";
 
     /// A cargo that reports `version`, writes a fixed lock on `update` and
-    /// reports once_cell as held back by the MSRV.
+    /// reports once_cell as held back by the MSRV, in colour unless asked
+    /// for `--color never`.
     fn cargo(dir: &Path, version: &str) -> String {
         let script = dir.join("cargo");
         let lock = dir.join("lock");
@@ -240,7 +241,7 @@ mod stand_in {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'cargo {version} (fake 2026-01-01)';;\n  update) cp '{}' Cargo.lock; echo '    Unchanged once_cell v1.17.0 (available: v1.21.3, requires Rust 1.70)' >&2;;\n  metadata) echo '{{}}';;\n  *) exit 2;;\nesac\n",
+                "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'cargo {version} (fake 2026-01-01)';;\n  update) cp '{}' Cargo.lock; line='Unchanged once_cell v1.17.0 (available: v1.21.3, requires Rust 1.70)'; case \"$*\" in *'--color never'*) echo \"    $line\" >&2;; *) printf '\\033[1m    %s\\033[0m\\n' \"$line\" >&2;; esac;;\n  metadata) echo '{{}}';;\n  *) exit 2;;\nesac\n",
                 lock.display()
             ),
         )

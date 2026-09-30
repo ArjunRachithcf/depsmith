@@ -594,9 +594,13 @@ impl Adapter for Cargo {
             .map(lock_inventory)
             .transpose()?
             .unwrap_or_default();
+        // The report is parsed, so never colour it (CARGO_TERM_COLOR may
+        // say otherwise).
         let mut args: Vec<String> = vec![
             "update".into(),
             "--verbose".into(),
+            "--color".into(),
+            "never".into(),
             "--manifest-path".into(),
             manifest_arg.clone(),
         ];
