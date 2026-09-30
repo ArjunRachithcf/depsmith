@@ -88,7 +88,7 @@ impl Engine {
                 .collect(),
         }
     }
-    /// Declared capabilities of every adapter.
+    /// Every adapter's spec: discovery, staging, tools and capabilities.
     pub fn specs(&self) -> Vec<adapter::AdapterSpec> {
         self.adapters.iter().map(|(_, spec)| spec.clone()).collect()
     }
