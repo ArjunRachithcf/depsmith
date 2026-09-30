@@ -840,4 +840,403 @@ mod tests {
             "https://c/noarch/shards/"
         );
     }
+
+    /// Serve `routes` (path -> body) over HTTP on 127.0.0.1; other paths get
+    /// 404 and `/fail/...` gets 500. Returns the base URL.
+    fn serve(routes: Vec<(String, Vec<u8>)>) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let routes: BTreeMap<String, Vec<u8>> = routes.into_iter().collect();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(&stream);
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap_or_default();
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                let (status, body) = match routes.get(&path) {
+                    Some(body) => ("200 OK", body.clone()),
+                    None if path.starts_with("/fail/") => ("500 Internal Server Error", vec![]),
+                    None => ("404 Not Found", vec![]),
+                };
+                let mut stream = &stream;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(&body);
+            }
+        });
+        base
+    }
+
+    struct Bin(Vec<u8>);
+    impl serde::Serialize for Bin {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+            s.serialize_bytes(&self.0)
+        }
+    }
+
+    fn packed<T: serde::Serialize>(value: &T) -> Vec<u8> {
+        let bytes = rmp_serde::to_vec_named(value).unwrap();
+        ruzstd::encoding::compress_to_vec(&bytes[..], ruzstd::encoding::CompressionLevel::Fastest)
+    }
+
+    #[derive(serde::Serialize)]
+    struct Row {
+        name: String,
+        version: String,
+        sha256: Bin,
+        timestamp: i64,
+    }
+
+    /// Routes for a sharded subdir holding `name` at `versions`.
+    fn sharded(prefix: &str, name: &str, versions: &[&str]) -> Vec<(String, Vec<u8>)> {
+        let hash = vec![0x5a, prefix.len() as u8];
+        let rows: BTreeMap<String, Row> = versions
+            .iter()
+            .map(|v| {
+                (
+                    format!("{name}-{v}-0.conda"),
+                    Row {
+                        name: name.into(),
+                        version: (*v).into(),
+                        sha256: Bin(vec![0xab, 0xcd]),
+                        timestamp: 1_700_000_000_000,
+                    },
+                )
+            })
+            .collect();
+        let shard = BTreeMap::from([("packages.conda", rows)]);
+        let index = serde_json::json!({"info": {"base_url": "", "shards_base_url": "shards/"}});
+        #[derive(serde::Serialize)]
+        struct Index {
+            info: serde_json::Value,
+            shards: BTreeMap<String, Bin>,
+        }
+        let index = Index {
+            info: index["info"].clone(),
+            shards: BTreeMap::from([(name.to_owned(), Bin(hash.clone()))]),
+        };
+        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        vec![
+            (
+                format!("{prefix}/repodata_shards.msgpack.zst"),
+                packed(&index),
+            ),
+            (format!("{prefix}/shards/{hex}.msgpack.zst"), packed(&shard)),
+        ]
+    }
+
+    #[test]
+    fn records_merge_channels_and_noarch_with_a_repodata_fallback() {
+        let mut routes = sharded("/a/linux-64", "six", &["1.14.0"]);
+        routes.extend(sharded("/a/noarch", "six", &["1.16.0", "1.17.0"]));
+        let repodata = serde_json::json!({"packages.conda": {
+            "six-1.18.0-0.conda": {"name": "six", "version": "1.18.0", "sha256": "ff"},
+            "other-1.0-0.conda": {"name": "other", "version": "1.0"},
+        }});
+        routes.push((
+            "/b/noarch/repodata.json".into(),
+            repodata.to_string().into_bytes(),
+        ));
+        let base = serve(routes);
+        let channels = [format!("{base}/a"), format!("{base}/b")];
+        let cache = ShardCache::default();
+        let records = sharded_records(&cache, &channels, &["linux-64".into()], "six", 30).unwrap();
+        let mut versions: Vec<&str> = records["linux-64"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["version"].as_str().unwrap())
+            .collect();
+        versions.sort();
+        assert_eq!(versions, ["1.14.0", "1.16.0", "1.17.0", "1.18.0"]);
+        let first = &records["linux-64"][0];
+        assert_eq!(
+            first["url"],
+            format!("{base}/a/linux-64/six-1.14.0-0.conda")
+        );
+        assert_eq!(first["sha256"], "abcd");
+        assert!(
+            records.get("noarch").is_none(),
+            "noarch is merged into platforms"
+        );
+        // A package missing everywhere has no records.
+        let none = sharded_records(&cache, &channels, &["linux-64".into()], "absent", 30).unwrap();
+        assert!(none.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_fetches_are_errors_not_empty_results() {
+        let base = serve(vec![]);
+        let cache = ShardCache::default();
+        let error = sharded_records(
+            &cache,
+            &[format!("{base}/fail")],
+            &["linux-64".into()],
+            "six",
+            30,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("HTTP 500"), "{error}");
+        // An index that names a shard the server does not have.
+        let mut routes = sharded("/c/noarch", "six", &["1.0"]);
+        routes.pop();
+        let base = serve(routes);
+        let error = sharded_records(
+            &ShardCache::default(),
+            &[format!("{base}/c")],
+            &[],
+            "six",
+            30,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("shard not found"), "{error}");
+        let garbage = serve(vec![(
+            "/d/noarch/repodata_shards.msgpack.zst".into(),
+            b"nope".to_vec(),
+        )]);
+        assert!(sharded_records(
+            &ShardCache::default(),
+            &[format!("{garbage}/d")],
+            &[],
+            "six",
+            30
+        )
+        .is_err());
+    }
+
+    fn target(manifest: &str) -> Target {
+        Target {
+            id: format!("conda:{manifest}"),
+            manager: "conda".into(),
+            manifest: manifest.into(),
+        }
+    }
+
+    #[test]
+    fn availability_follows_channels_and_platforms() {
+        let root = tempfile::tempdir().unwrap();
+        let registries = |text: &str| {
+            fs::write(root.path().join("environment.yml"), text).unwrap();
+            Conda
+                .availability(root.path(), &target("environment.yml"))
+                .unwrap()
+                .registries
+        };
+        let conda = |text: &str| match registries(text).remove("conda").unwrap() {
+            RegistryConfig::CondaSharded {
+                channels,
+                platforms,
+            } => (channels, platforms),
+            other => panic!("{other:?}"),
+        };
+        let (channels, platforms) = conda(
+            "channels: [conda-forge, defaults, nodefaults, 'https://mirror.invalid/c/']\ndependencies: [six]\n",
+        );
+        assert_eq!(
+            channels,
+            [
+                "https://conda.anaconda.org/conda-forge",
+                "https://repo.anaconda.com/pkgs/main",
+                "https://mirror.invalid/c"
+            ]
+        );
+        assert_eq!(platforms, DEFAULT_PLATFORMS);
+        let (channels, _) = conda("dependencies: [six]\n");
+        assert_eq!(channels, ["https://repo.anaconda.com/pkgs/main"]);
+        fs::write(
+            root.path().join("conda-lock.yml"),
+            "metadata:\n  platforms: [osx-arm64]\npackage: []\n",
+        )
+        .unwrap();
+        assert_eq!(conda("dependencies: [six]\n").1, ["osx-arm64"]);
+        assert_eq!(
+            conda("dependencies: [six]\nplatforms: [win-64]\n").1,
+            ["win-64"]
+        );
+        assert!(registries("dependencies: [six]\n").contains_key("pypi"));
+    }
+
+    #[test]
+    fn locks_detection_and_rewrites_are_checked() {
+        let root = tempfile::tempdir().unwrap();
+        let environment = Path::new("envs/environment.yml");
+        assert_eq!(
+            lock_path(root.path(), environment),
+            Path::new("envs/conda-lock.yml")
+        );
+        fs::create_dir(root.path().join("envs")).unwrap();
+        fs::write(
+            root.path().join("envs/environment.conda-lock.yml"),
+            "package: []\n",
+        )
+        .unwrap();
+        assert_eq!(
+            lock_path(root.path(), environment),
+            Path::new("envs/environment.conda-lock.yml")
+        );
+        assert!(Conda.detects(environment, "dependencies:\n  - six\n"));
+        assert!(!Conda.detects(environment, "name: only\n"));
+        assert!(!Conda.detects(environment, "dependencies: six\n"));
+
+        fs::write(
+            root.path().join("environment.yml"),
+            "dependencies:\n  - six ==1\n",
+        )
+        .unwrap();
+        let t = target("environment.yml");
+        let error = Conda.inventory(root.path(), &t).unwrap_err();
+        assert!(
+            error.to_string().contains("no conda-lock.yml to scan"),
+            "{error}"
+        );
+        fs::write(
+            root.path().join("conda-lock.yml"),
+            "package:\n- {name: six, version: 1, manager: conda, platform: linux-64}\n- {name: broken}\n",
+        )
+        .unwrap();
+        let inventory = Conda.inventory(root.path(), &t).unwrap();
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].version, "1");
+        assert!(lock_inventory("[").is_err());
+
+        let mut declaration = Conda.declarations(root.path(), &t).unwrap().remove(0);
+        Conda.rewrite(root.path(), &t, &[]).unwrap();
+        let edit = |d: &Declaration| Edit {
+            declaration: d.clone(),
+            requirement: "==2".into(),
+            comment: None,
+        };
+        declaration.file = "other.yml".into();
+        assert!(Conda
+            .rewrite(root.path(), &t, &[edit(&declaration)])
+            .is_err());
+        declaration.file = "environment.yml".into();
+        declaration.requirement = "==0".into();
+        let error = Conda
+            .rewrite(root.path(), &t, &[edit(&declaration)])
+            .unwrap_err();
+        assert!(error.to_string().contains("is not declared"), "{error}");
+        // A flow-style list cannot be edited line by line.
+        fs::write(
+            root.path().join("environment.yml"),
+            "dependencies: [six ==1]\n",
+        )
+        .unwrap();
+        let declaration = Conda.declarations(root.path(), &t).unwrap().remove(0);
+        let error = Conda
+            .rewrite(root.path(), &t, &[edit(&declaration)])
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("cannot edit this YAML layout"),
+            "{error}"
+        );
+        let upgrade = UpdateOptions {
+            upgrade: true,
+            ..Default::default()
+        };
+        assert!(Conda.prepare(root.path(), &t, &upgrade).is_err());
+    }
+
+    /// The whole pipeline offline: a stand-in conda-lock, the environment's
+    /// channel served locally, generic suggestions and acceptance.
+    #[cfg(unix)]
+    #[test]
+    fn suggestions_and_acceptance_use_the_sharded_channel() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut routes = sharded("/c/noarch", "six", &["1.16.0", "1.17.0"]);
+        let numpy = sharded("/c/linux-64", "numpy", &["1.2.0", "1.3.0"]);
+        routes.extend(numpy);
+        let base = serve(routes);
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        let environment = format!(
+            "channels: ['{base}/c']\ndependencies:\n  - six ==1.16.0  # pinned\n  - numpy 1.2 py*\nplatforms: [linux-64]\n"
+        );
+        fs::write(root.path().join("environment.yml"), &environment).unwrap();
+        let lock = tools.path().join("lock");
+        fs::write(
+            &lock,
+            "package:\n- {name: six, version: 1.16.0, manager: conda, platform: linux-64, url: u}\n- {name: numpy, version: 1.2.0, manager: conda, platform: linux-64, url: u}\n",
+        )
+        .unwrap();
+        let script = tools.path().join("conda-lock");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --lockfile ] && cp '{}' \"$2\"; shift; done\n",
+                lock.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let options = |accept: &[&str]| UpdateOptions {
+            tools: BTreeMap::from([
+                ("conda-lock".into(), script.to_string_lossy().into_owned()),
+                ("conda".into(), "/opt/micromamba/bin/micromamba".into()),
+            ]),
+            packages: vec![],
+            accept: accept.iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
+        };
+        let engine = crate::Engine::new(vec![Box::new(Conda)]);
+        let targets = ["conda:environment.yml".to_owned()];
+        let proposal = engine.prepare(root.path(), &targets, options(&[])).unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let six = proposal
+            .suggestions
+            .iter()
+            .find(|s| s.package == "six")
+            .unwrap();
+        assert!(
+            six.evidence[0].starts_with("linux-64: 1.17.0 is excluded (newest allowed 1.16.0)"),
+            "{:?}",
+            six.evidence
+        );
+        let numpy = proposal
+            .suggestions
+            .iter()
+            .find(|s| s.package == "numpy")
+            .unwrap();
+        assert!(
+            numpy.reason.contains("not been established"),
+            "{}",
+            numpy.reason
+        );
+        assert!(
+            numpy.evidence[0].contains("depsmith can evaluate"),
+            "{:?}",
+            numpy.evidence
+        );
+
+        let accepted = engine
+            .prepare(root.path(), &targets, options(&["six"]))
+            .unwrap();
+        assert!(accepted.failures.is_empty(), "{:?}", accepted.failures);
+        let after = &accepted
+            .changes
+            .iter()
+            .find(|c| c.path == Path::new("environment.yml"))
+            .unwrap()
+            .after;
+        assert_eq!(*after, environment.replace("==1.16.0", "==1.17.0"));
+        // Selected updates pass --update once a lock exists.
+        fs::copy(&lock, root.path().join("conda-lock.yml")).unwrap();
+        let selected = UpdateOptions {
+            packages: vec!["six".into()],
+            ..options(&[])
+        };
+        assert!(engine
+            .prepare(root.path(), &targets, selected)
+            .unwrap()
+            .failures
+            .is_empty());
+    }
 }
