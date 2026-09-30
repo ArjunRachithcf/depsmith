@@ -1,7 +1,8 @@
 //! The GitHub Actions adapter: updates remote `uses:` references (actions and
 //! reusable workflows) within their current major release line, preserving
-//! tag or commit-pin style, and suggests newer major lines separately. Local
-//! actions, Docker references and expressions are left unchanged.
+//! tag or commit-pin style, and suggests newer major lines and commit pins
+//! for tag references separately. Local actions, Docker references and
+//! expressions are left unchanged.
 use crate::{
     adapter::{Adapter, AdapterSpec, Candidate, Capabilities, Support},
     constraints::{Declaration, Edit, Pin},
@@ -565,7 +566,9 @@ impl Adapter for Actions {
         fs::write(path, text)?;
         Ok(())
     }
-    /// Tags and branches pin to the commit of the matching release tag.
+    /// The commit of the published release tag named by `declaration`'s
+    /// requirement; branches and tags absent from the release list are
+    /// rejected.
     fn pin(&self, _root: &Path, declaration: &Declaration, options: &UpdateOptions) -> Result<Pin> {
         let repository = &declaration.package;
         let reference = &declaration.requirement;

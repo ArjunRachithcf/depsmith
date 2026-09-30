@@ -3,8 +3,10 @@
 //! An adapter reports its [`Declaration`]s, rewrites them from [`Edit`]s and
 //! describes where releases are published as an [`AvailabilityConfig`]. The
 //! engine does the rest: it finds pins and upper bounds that exclude a newer
-//! release (with evidence), checks and applies `--accept`, and restyles the
-//! requirement using the ecosystem's version scheme.
+//! release (with evidence), checks and applies `--accept`, restyling the
+//! requirement using the ecosystem's version scheme or, for a movable
+//! reference such as a GitHub Actions tag, asking the adapter for its
+//! [`Pin`].
 use crate::{
     adapter::Adapter,
     constraint::{parse_accept, Excluded},
