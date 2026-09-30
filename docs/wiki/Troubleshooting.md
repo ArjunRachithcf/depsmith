@@ -1,7 +1,8 @@
 # Troubleshooting
 
-Start with `depsmith doctor`: it shows whether Pixi and Grype are found, which
-versions have been tested, and what each adapter supports.
+Start with `depsmith doctor`: it shows whether each native tool (Pixi, cargo,
+conda-lock and its solver, Grype) is found, which versions have been tested,
+and what each adapter supports.
 
 | Message or symptom | Cause and fix |
 |---|---|

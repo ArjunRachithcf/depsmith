@@ -4,11 +4,11 @@
 
 Build a Rust package updater with a consistent local and CI workflow, plus a typed Python API through PyO3. Distribute it as a standalone executable, a pip package, and a conda-forge package.
 
-**The first release targets a representative Pixi project:** update `pixi.lock`, suggest dependency-health improvements in `pixi.toml` and `pyproject.toml`, update GitHub Actions references, and optionally compare vulnerabilities before and after updates.
+**The first release targets a representative Pixi project:** update `pixi.lock`, suggest dependency-health improvements in `pixi.toml` and `pyproject.toml`, update GitHub Actions references (including commit-pin conversion), and optionally compare vulnerabilities before and after updates. It also ships Cargo and conda (conda-lock) adapters built on the extensible adapter seam (§8).
 
 Release 0.1.0 is a public alpha on PyPI plus a draft GitHub release with standalone executables. The conda-forge recipe is prepared and validated in CI; feedstock submission follows the release and does not block it.
 
-Conda-family and uv adapters follow this first release. The broader roadmap includes npm, vcpkg, prek/pre-commit, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
+A uv adapter follows this first release. The broader roadmap includes npm, vcpkg, prek/pre-commit, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
 
 ## 2. Architecture and public interfaces
 
@@ -147,7 +147,7 @@ Tests run in three layers, in priority order:
 2. **Native integration** (pull requests to and pushes on `main`, nightly, and as a gate in the Release workflow; informational on pull requests): real Pixi 0.80.0 and Grype 0.119.0, pinned, plus pypi.org and the GitHub API — `[project]` suggestion acceptance, mixed conda/PyPI across multiple platforms, Actions tags/SHA pins/reusable workflows/major suggestions, and scanner comparisons (a native Git-pin preservation scenario is deferred; offline tests cover the policy). Failed native tests are retried once; nightly failures open or update a `nightly-integration` issue. Linux runs everything; Windows and macOS run the Pixi tests.
 3. **CLI/Python parity**: one fixture through both interfaces yields equal proposals.
 
-After this release, add **conda-family**, then **uv** adapters. Conda locking uses an established artifact-exact YAML format, preferring `environment.conda-lock.yml` when required for native compatibility. Reproduce any reported conda environment-creation failure before adding an ordering workaround; preserve it as a regression test if recovered.
+The **conda** adapter ships in this release (§8); **uv** follows. Conda locking uses conda-lock's artifact-exact unified YAML format, following conda-lock's own lock path (`environment.conda-lock.yml` is recognised). Reproduce any reported conda environment-creation failure before adding an ordering workaround; preserve it as a regression test if recovered.
 
 ## 6. Path to 0.1.0
 
@@ -157,7 +157,7 @@ After this release, add **conda-family**, then **uv** adapters. Conda locking us
 
 **C. Release.** Tag `v0.1.0` on `main`, run the Release workflow without publishing, review the artifacts, then publish only with explicit approval. PyPI trusted publishing and the `pypi`/`release` environments are configured beforehand. Submit the conda-forge feedstock afterwards.
 
-**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, then conda-family and uv adapters.
+**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, then a uv adapter and an out-of-tree adapter bridge.
 
 ## 7. Documentation automation
 
@@ -168,3 +168,14 @@ Documentation is kept consistent with the code by reviewed sources plus AI passe
 - **Wiki:** `docs/wiki/` is reviewed in pull requests and mirrored to the GitHub wiki on every push to `main`. The CLI and Python API reference pages are generated from `--help` and docstrings; `docs-reference` fails when they are stale or a wiki link is broken.
 - **README and wiki drift:** a nightly job has Claude (Opus 5.5) audit `README.md` and `docs/wiki/` against the code and opens or updates one pull request when something drifted; failures open a tracking issue.
 - **Credentials:** a Claude subscription token and the docs GitHub App's key are repository secrets; fork pull requests never receive them.
+
+## 8. Extensible adapters
+
+Folded into 0.1.0 (ADR 0001). A new package manager is one adapter module plus one registration line, and must pass a shared conformance suite.
+
+- **Seam:** an adapter is described by an owned, serde-serialisable `AdapterSpec` (manager, ecosystems, discovery patterns, managed files, skipped directories, native tools, capabilities). It reports `Declaration`s, applies `Edit`s with `rewrite`, names registries as data (`RegistryConfig`), may `pin` movable references, and prepares candidates in the stage. Discovery, staging, `doctor`, tool paths (`--tool NAME=PATH`), suggestions and `--accept` are generic.
+- **Ecosystems:** conda, PyPI, Cargo and GitHub Actions each have one version scheme (ordering, caps, restyling, explicit-requirement checks, pins) and one scan identity rule, shared by every manager that resolves them.
+- **Registries:** `pixi search`, PEP 691 indexes, the crates.io sparse index, conda sharded repodata (CEP 16, full repodata as fallback) and an inline fixture for tests, all feeding one evidence format.
+- **Adapters:** Pixi and GitHub Actions were ported without behaviour changes; Actions gained commit-pin suggestions and `--accept` to `@<sha> # vX.Y.Z`; Cargo targets each `Cargo.lock` owner with MSRV-aware resolution; conda targets `environment.yml` locked with conda-lock.
+- **Conformance:** `depsmith_core::conformance::check` runs the contract offline (spec round-trip, discovery, managed files, selection, capability enforcement, declarations round-tripping through `rewrite`). Each adapter also has a native live round trip in the Integration workflow.
+- **Protocol-ready:** every seam type holds owned data only, so an out-of-tree subprocess bridge (`{method, params}` JSON lines) can be added later without redesign.

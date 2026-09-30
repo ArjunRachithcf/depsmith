@@ -34,20 +34,65 @@ The CLI and Python API are thin layers; all behaviour lives in the core.
 
 ## Adapter contract
 
-An adapter declares its package manager and capabilities, recognises its
-targets, maps requested package names to declared direct dependencies, reads
-inventories from existing locks, and prepares a candidate inside a stage. It
-never writes outside the stage; all writes to the repository belong to the
-engine. Unsupported requests fail instead of being ignored. See the
-`depsmith_core::adapter` module docs.
+An adapter describes its package manager as data and resolves inside a stage;
+the engine does everything generic. It never writes outside the stage; all
+writes to the repository belong to the engine. Unsupported requests fail
+instead of being ignored. See the `depsmith_core::adapter` module docs.
+
+- `spec()`: an `AdapterSpec` with the manager name, the **ecosystems** it
+  resolves, discovery patterns, managed files (locks and native configuration
+  staged even when ignored), directories never walked, native tools
+  (`ToolSpec`) and capabilities. Discovery, staging, `doctor` and tool paths
+  come from specs.
+- `detects` / `detects_in`: whether a file is a target; `detects_in` may look
+  at other files, as Cargo does to tell a workspace member from a lock owner.
+- `select`: requested `--package` names to declared spellings.
+- `declarations`: where each direct dependency and its requirement are
+  written (`Declaration`: ecosystem, package, requirement, file, location).
+- `rewrite`: apply `Edit`s to those declarations in the stage, keeping
+  comments and layout.
+- `availability`: the registry of each ecosystem and any release-age policy,
+  as data (`RegistryConfig`).
+- `pin`: an immutable replacement for a movable reference, such as the commit
+  of an action's release tag.
+- `inventory` and `prepare`: read a lock, and resolve a candidate.
+
+Suggestions and `--accept` are generic: the engine reads declarations, asks
+the ecosystem's **version scheme** whether a requirement can exclude newer
+releases and how to restyle it, looks releases up in the registry, applies
+accepted edits through `rewrite` before the adapter resolves, and suggests
+from the resolved stage. Ecosystem rules (version schemes and scan
+identities) live in `ecosystem` and are shared by every manager that resolves
+that ecosystem.
+
+## Adding a package manager
+
+1. Write one module implementing `Adapter`, starting from `spec()`; reuse an
+   existing ecosystem when the manager resolves one (conda, PyPI, Cargo), or
+   add its version scheme and identity to `ecosystem`.
+2. Implement `declarations` and `rewrite` to get suggestions and `--accept`
+   for free; describe registries in `availability`. A `Fixture` registry
+   keeps tests offline.
+3. Register the adapter in `Engine::default`.
+4. Test it with `depsmith_core::conformance::check`, which runs the contract
+   offline: spec round-trip and shape, discovery, managed files, selection,
+   capability enforcement, and declarations round-tripping through `rewrite`.
+   Add a native live test (ignored by default) for a preview → accept → apply
+   → recheck round trip.
+
+Every seam type is owned and serde-serialisable, so a later out-of-tree
+adapter can speak the same contract over a subprocess bridge of JSON lines
+(`{"method": ..., "params": ...}`) without redesign.
 
 ## Modules of `depsmith-core`
 
 | Module | Responsibility |
 |---|---|
 | `lib` | `Engine`, discovery, preparation, `doctor`, scanning existing locks |
-| `adapter` | The adapter contract and capabilities |
-| `pixi`, `actions` | The Pixi and GitHub Actions adapters |
+| `adapter` | The adapter contract, specs and capabilities |
+| `conformance` | Contract checks every adapter's tests run |
+| `constraints`, `ecosystem` | Declarations, registries, generic suggestions and acceptance; version schemes and scan identities |
+| `pixi`, `actions`, `cargo`, `conda` | The Pixi, GitHub Actions, Cargo and conda adapters |
 | `working_tree` | Listing, fingerprinting and staging repository files; path safety |
 | `scm` | Data-only Git staging for SCM-derived versions |
 | `transaction` | Applying proposals: stale checks, locking, journal, recovery |

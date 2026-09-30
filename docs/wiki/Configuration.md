@@ -29,6 +29,7 @@ repeatable `--tool NAME=PATH` flag, or `UpdateOptions(tools={...})` in Python:
 [options.tools]
 pixi = "/opt/pixi/bin/pixi"
 grype = "/usr/local/bin/grype"
+conda = "/opt/micromamba/bin/micromamba"  # the solver conda-lock drives
 ```
 
 `--pixi` and `--grype` (and the matching option fields) still work as

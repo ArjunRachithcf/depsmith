@@ -6,6 +6,8 @@
 - [Reviewing and applying](Reviewing-and-applying)
 - [Pixi adapter](Pixi-adapter)
 - [GitHub Actions adapter](GitHub-Actions-adapter)
+- [Cargo adapter](Cargo-adapter)
+- [Conda adapter](Conda-adapter)
 - [Vulnerability scanning](Vulnerability-scanning)
 - [CI integration](CI-integration)
 - [Troubleshooting](Troubleshooting)
