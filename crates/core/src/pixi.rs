@@ -367,15 +367,15 @@ fn manifest_declarations(text: &str, pyproject: bool, file: &Path) -> Result<Vec
 }
 
 /// The parts of a PEP 508 requirement this tool reads or rewrites.
-struct Pep508 {
-    name: String,
+pub(crate) struct Pep508 {
+    pub(crate) name: String,
     /// Byte range of the version specifier, excluding surrounding whitespace
     /// and parentheses; `None` for unversioned and direct-URL requirements.
-    specifier: Option<std::ops::Range<usize>>,
+    pub(crate) specifier: Option<std::ops::Range<usize>>,
 }
 
 impl Pep508 {
-    fn parse(text: &str) -> Option<Self> {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
         let start = text.len() - text.trim_start().len();
         let name_end = text[start..]
             .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))

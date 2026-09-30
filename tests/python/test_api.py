@@ -56,7 +56,11 @@ class ApiTests(unittest.TestCase):
             options=updater.UpdateOptions(
                 pixi="missing-pixi-binary",
                 grype="missing-grype-binary",
-                tools={"cargo": "missing-cargo-binary"},
+                tools={
+                    "cargo": "missing-cargo-binary",
+                    "conda-lock": "missing-conda-lock-binary",
+                    "conda": "missing-conda-binary",
+                },
             )
         )
         pixi = next(a for a in report["adapters"] if a["manager"] == "pixi")

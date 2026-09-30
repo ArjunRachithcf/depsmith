@@ -140,6 +140,68 @@ pub(crate) fn is_prerelease(version: &str) -> bool {
         .is_match(version)
 }
 
+/// Whether `version` has `prefix`'s components as its leading components.
+fn starts_with(version: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches(['.', '*']);
+    version == prefix
+        || version.starts_with(&format!("{prefix}."))
+        || compare(version, prefix) == Ordering::Equal
+}
+
+/// Whether `version` satisfies one clause of a conda version specification.
+fn clause(spec: &str, version: &str) -> Option<bool> {
+    if spec.is_empty() || spec == "*" {
+        return Some(true);
+    }
+    let (operator, operand) = ["==", "!=", ">=", "<=", "~=", ">", "<", "="]
+        .iter()
+        .find_map(|op| Some((*op, spec.strip_prefix(op)?.trim())))
+        .unwrap_or(("", spec));
+    if operand.is_empty()
+        || operand
+            .chars()
+            .any(|c| c.is_whitespace() || "^$()[]|,".contains(c))
+    {
+        return None;
+    }
+    let glob = operand.ends_with('*');
+    if glob && !matches!(operator, "" | "==" | "!=" | "=") {
+        return None;
+    }
+    let order = compare(version, operand);
+    Some(match operator {
+        "" | "==" if glob => starts_with(version, operand),
+        "" | "==" => order == Ordering::Equal,
+        "!=" if glob => !starts_with(version, operand),
+        "!=" => order != Ordering::Equal,
+        ">=" => order != Ordering::Less,
+        "<=" => order != Ordering::Greater,
+        ">" => order == Ordering::Greater,
+        "<" => order == Ordering::Less,
+        "~=" => {
+            let parent = operand.rsplit_once('.')?.0;
+            order != Ordering::Less && starts_with(version, parent)
+        }
+        // `=1.2` is fuzzy: 1.2 and any 1.2.x.
+        _ => starts_with(version, operand),
+    })
+}
+
+/// Whether `version` satisfies a conda version specification (`,` binds
+/// tighter than `|`). `None` for forms this does not evaluate, such as
+/// regular expressions or build strings, so callers never guess.
+pub(crate) fn matches(spec: &str, version: &str) -> Option<bool> {
+    let mut any = false;
+    for alternative in spec.trim().split('|') {
+        let mut all = true;
+        for part in alternative.split(',') {
+            all &= clause(part.trim(), version)?;
+        }
+        any |= all;
+    }
+    Some(any)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{compare, is_prerelease};
@@ -224,5 +286,27 @@ mod tests {
         assert_eq!(compare("2.17", "2.39"), Less);
         assert_eq!(compare("12.9.0", "12.9.2"), Less);
         assert_eq!(compare("20240101", "99999999999999999999"), Less);
+    }
+
+    #[test]
+    fn specifications_match_like_conda() {
+        for (spec, version, expected) in [
+            ("=3.12", "3.12.4", Some(true)),
+            ("=3.12", "3.13.0", Some(false)),
+            ("3.12.*", "3.12.0", Some(true)),
+            ("==1.16.0", "1.16", Some(true)),
+            ("==1.16.0", "1.16.1", Some(false)),
+            (">=1.26,<2", "1.26.4", Some(true)),
+            (">=1.26,<2", "2.0.0", Some(false)),
+            ("1.0|>=2", "2.1", Some(true)),
+            ("~=1.4.2", "1.4.9", Some(true)),
+            ("~=1.4.2", "1.5.0", Some(false)),
+            ("!=1.2.*", "1.2.3", Some(false)),
+            ("*", "0.1", Some(true)),
+            ("1.2 py*", "1.2", None),
+            ("^1\\.2$", "1.2", None),
+        ] {
+            assert_eq!(super::matches(spec, version), expected, "{spec} {version}");
+        }
     }
 }

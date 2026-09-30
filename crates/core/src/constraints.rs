@@ -86,6 +86,14 @@ pub enum RegistryConfig {
         /// The manifest, relative to the stage.
         manifest: PathBuf,
     },
+    /// Conda channels' sharded repodata (CEP 16), or full repodata for
+    /// channels without shards.
+    CondaSharded {
+        /// Channel URLs, in order.
+        channels: Vec<String>,
+        /// Platforms (subdirs) to consult; `noarch` is always included.
+        platforms: Vec<String>,
+    },
     /// A Cargo sparse registry index such as `https://index.crates.io/`.
     CratesSparse {
         /// Index URL, ending in `/`.
@@ -128,6 +136,7 @@ pub(crate) struct Lookup<'a> {
     stage: &'a Path,
     options: &'a UpdateOptions,
     config: AvailabilityConfig,
+    shards: crate::conda::ShardCache,
 }
 
 impl<'a> Lookup<'a> {
@@ -140,6 +149,7 @@ impl<'a> Lookup<'a> {
             stage,
             options,
             config,
+            shards: Default::default(),
         }
     }
 
@@ -196,6 +206,20 @@ impl<'a> Lookup<'a> {
                 }
                 crate::pypi::evidence(package, &pages, requirement, cutoff)
                     .map(|evidence| (label(evidence), failures))
+            }
+            RegistryConfig::CondaSharded {
+                channels,
+                platforms,
+            } => {
+                let all = crate::conda::sharded_records(
+                    &self.shards,
+                    channels,
+                    platforms,
+                    package,
+                    self.options.timeout_seconds,
+                )?;
+                let allowed = conda_allowed(&all, requirement)?;
+                Ok((label(conda_excluded(&all, &allowed, cutoff)), vec![]))
             }
             RegistryConfig::CratesSparse { index } => crate::cargo::sparse_excluded(
                 index,
@@ -298,6 +322,30 @@ pub(crate) fn conda_excluded(
     evidence
 }
 
+/// The records of conda search output (subdir -> records) that satisfy a
+/// conda version specification; unreadable specifications are an error,
+/// never "nothing allowed".
+fn conda_allowed(all: &serde_json::Value, requirement: &str) -> Result<serde_json::Value> {
+    let mut allowed = serde_json::Map::new();
+    for (subdir, records) in all.as_object().into_iter().flatten() {
+        let mut kept = vec![];
+        for record in records.as_array().into_iter().flatten() {
+            let version = record["version"].as_str().unwrap_or_default();
+            match crate::conda_version::matches(requirement, version) {
+                Some(true) => kept.push(record.clone()),
+                Some(false) => {}
+                None => {
+                    return Err(Error::Operation(format!(
+                        "{requirement:?} is not a conda version specification depsmith can evaluate"
+                    )))
+                }
+            }
+        }
+        allowed.insert(subdir.clone(), kept.into());
+    }
+    Ok(allowed.into())
+}
+
 fn fixture_excluded(
     ecosystem: &str,
     releases: Option<&Vec<FixtureRelease>>,
@@ -318,9 +366,18 @@ fn fixture_excluded(
             .collect();
         return crate::cargo::semver_excluded("fixture", &rows, requirement);
     }
+    if ecosystem == "conda" {
+        let rows: Vec<serde_json::Value> = releases
+            .iter()
+            .map(|r| serde_json::json!({"version": r.version, "url": r.url, "sha256": r.sha256}))
+            .collect();
+        let all = serde_json::json!({ "fixture": rows });
+        let allowed = conda_allowed(&all, requirement)?;
+        return Ok(conda_excluded(&all, &allowed, None));
+    }
     if ecosystem != "pypi" {
         return Err(Error::Operation(format!(
-            "fixture registries match PEP 440 or Cargo requirements only, not {ecosystem}"
+            "fixture registries match PEP 440, Cargo or conda requirements only, not {ecosystem}"
         )));
     }
     let finals: Vec<_> = releases

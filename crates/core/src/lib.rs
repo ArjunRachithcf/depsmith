@@ -25,6 +25,8 @@
 pub mod adapter;
 /// The Cargo adapter: `Cargo.lock` owners (workspaces and standalone crates).
 pub mod cargo;
+/// The conda adapter: `environment.yml` targets locked with conda-lock.
+pub mod conda;
 mod conda_version;
 pub mod conformance;
 mod constraint;
@@ -50,7 +52,7 @@ pub use model::*;
 use std::{fs, path::Path};
 
 /// Discovers targets and prepares proposals with a set of adapters. The
-/// default engine has the Pixi, GitHub Actions and Cargo adapters.
+/// default engine has the Pixi, GitHub Actions, Cargo and conda adapters.
 pub struct Engine {
     adapters: Vec<(Box<dyn Adapter>, adapter::AdapterSpec)>,
 }
@@ -60,6 +62,7 @@ impl Default for Engine {
             Box::new(pixi::Pixi),
             Box::new(actions::Actions::default()),
             Box::new(cargo::Cargo::default()),
+            Box::new(conda::Conda),
         ])
     }
 }

@@ -141,15 +141,14 @@ impl Capabilities {
     }
 }
 
-/// Classify `tool --version` output (`name X.Y.Z`, optionally followed by
-/// build details such as `(hash date)`) against tested versions.
+/// Classify `tool --version` output (`name X.Y.Z` or `X.Y.Z`, optionally
+/// followed by build details such as `(hash date)`) against tested versions.
 pub fn tool_status(output: &str, tested: &[&str]) -> (&'static str, Option<String>) {
     let version = output
         .lines()
         .next()
         .and_then(|line| {
             line.split_whitespace()
-                .skip(1)
                 .find(|token| token.starts_with(|c: char| c.is_ascii_digit()))
         })
         .map(str::to_owned);

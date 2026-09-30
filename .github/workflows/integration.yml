@@ -1,6 +1,7 @@
-# Native integration: real Pixi and Grype plus conda-forge, pypi.org and the GitHub
-# API. Informational on pull requests; blocking as a gate in the Release workflow.
-# Nightly failures open or update a tracking issue (integration-alert.yml).
+# Native integration: real Pixi, Grype, cargo and conda-lock plus conda-forge,
+# pypi.org, crates.io and the GitHub API. Informational on pull requests;
+# blocking as a gate in the Release workflow. Nightly failures open or update
+# a tracking issue (integration-alert.yml).
 name: Integration
 on:
   push:
@@ -61,6 +62,13 @@ jobs:
           sha256sum --check --ignore-missing "grype_${GRYPE_VERSION}_checksums.txt"
           tar -xzf "grype_${GRYPE_VERSION}_linux_amd64.tar.gz" grype
           echo "GRYPE=$RUNNER_TEMP/grype" >> "$GITHUB_ENV"
+      - name: Install conda-lock and micromamba
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          pixi global install conda-lock==4.0.2 micromamba==2.9.0
+          echo "CONDA_LOCK=$(command -v conda-lock)" >> "$GITHUB_ENV"
+          echo "CONDA_SOLVER=$(command -v micromamba)" >> "$GITHUB_ENV"
       - name: Native Rust tests (one retry for network flakes)
         shell: bash
         run: |
