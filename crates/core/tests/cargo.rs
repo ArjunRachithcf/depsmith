@@ -1,13 +1,7 @@
 //! The Cargo adapter offline: lock-owner discovery, member declarations,
 //! resolution with the real cargo on a path-only workspace, and suggestions,
 //! `--accept` and MSRV hold-backs with a fixture registry and a stand-in cargo.
-use depsmith_core::{
-    adapter::Adapter,
-    cargo::Cargo,
-    conformance,
-    constraints::{FixtureRelease, RegistryConfig},
-    Engine, Target, UpdateOptions,
-};
+use depsmith_core::{adapter::Adapter, cargo::Cargo, conformance, Engine, Target, UpdateOptions};
 use std::{collections::BTreeMap, fs, path::Path};
 
 fn write(root: &Path, files: &[(&str, &str)]) {
@@ -229,7 +223,10 @@ fn cargo_passes_the_conformance_suite() {
 #[cfg(unix)]
 mod stand_in {
     use super::*;
-    use depsmith_core::Proposal;
+    use depsmith_core::{
+        constraints::{FixtureRelease, RegistryConfig},
+        Proposal,
+    };
     use std::os::unix::fs::PermissionsExt;
 
     const LOCK: &str = "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"once_cell\"\nversion = \"1.17.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"abc\"\n";
