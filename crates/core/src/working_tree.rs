@@ -272,6 +272,48 @@ pub(crate) fn canonical(path: &Path) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Normalize `a/./b/../c` without touching the filesystem.
+pub(crate) fn normalize(path: &Path) -> PathBuf {
+    let mut output = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                output.pop();
+            }
+            other => output.push(other),
+        }
+    }
+    output
+}
+
+/// Directories under `root` matching `pattern` (with `*` components),
+/// relative to `base`.
+pub(crate) fn expand(root: &Path, base: &Path, pattern: &str) -> Vec<PathBuf> {
+    let mut current = vec![base.to_path_buf()];
+    for component in pattern.split('/').filter(|c| !c.is_empty()) {
+        let mut next = vec![];
+        for dir in &current {
+            if component.contains('*') {
+                let mut names: Vec<String> = fs::read_dir(root.join(dir))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter(|n| matches_pattern(component, n))
+                    .collect();
+                names.sort();
+                next.extend(names.into_iter().map(|n| dir.join(n)));
+            } else {
+                next.push(normalize(&dir.join(component)));
+            }
+        }
+        current = next;
+    }
+    current
+}
+
 #[cfg(test)]
 mod tests {
     use super::Layout;

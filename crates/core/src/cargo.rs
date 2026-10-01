@@ -46,58 +46,16 @@ fn strings(value: Option<&toml::Value>) -> Vec<&str> {
         .collect()
 }
 
-/// Normalize `a/./b/../c` without touching the filesystem.
-fn normalize(path: &Path) -> PathBuf {
-    let mut output = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                output.pop();
-            }
-            other => output.push(other),
-        }
-    }
-    output
-}
-
-/// Directories under `root` matching `pattern` (with `*` components),
-/// relative to `base`.
-fn expand(root: &Path, base: &Path, pattern: &str) -> Vec<PathBuf> {
-    let mut current = vec![base.to_path_buf()];
-    for component in pattern.split('/').filter(|c| !c.is_empty()) {
-        let mut next = vec![];
-        for dir in &current {
-            if component.contains('*') {
-                let mut names: Vec<String> = fs::read_dir(root.join(dir))
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .filter(|n| crate::working_tree::matches_pattern(component, n))
-                    .collect();
-                names.sort();
-                next.extend(names.into_iter().map(|n| dir.join(n)));
-            } else {
-                next.push(normalize(&dir.join(component)));
-            }
-        }
-        current = next;
-    }
-    current
-}
-
 /// Member manifests of the workspace whose root manifest is in `dir`, in
 /// order, excluding `workspace.exclude` and the root itself.
 fn members(root: &Path, dir: &Path, workspace: &toml::Value) -> Vec<PathBuf> {
     let excluded: Vec<PathBuf> = strings(workspace.get("exclude"))
         .into_iter()
-        .map(|e| normalize(&dir.join(e)))
+        .map(|e| crate::working_tree::normalize(&dir.join(e)))
         .collect();
     let mut output = vec![];
     for pattern in strings(workspace.get("members")) {
-        for member in expand(root, dir, pattern) {
+        for member in crate::working_tree::expand(root, dir, pattern) {
             let manifest = member.join("Cargo.toml");
             if member != dir
                 && !excluded.iter().any(|e| member.starts_with(e))
@@ -226,7 +184,7 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
         };
         match value {
             Some(value) if value.as_str() == Some(d.requirement.as_str()) => {
-                crate::pixi::replace_string(value, &edit.requirement);
+                crate::pyproject::replace_string(value, &edit.requirement);
             }
             _ => return Err(missing(d)),
         }

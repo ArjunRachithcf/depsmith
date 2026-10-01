@@ -297,39 +297,6 @@ fn table_declarations(value: &toml::Value, path: &str, file: &Path, output: &mut
     }
 }
 
-/// PEP 508 requirement lists of `[project]` and `[dependency-groups]`, by
-/// location. Tables such as `{include-group = ...}` are not requirements.
-fn project_lists(parsed: &toml::Value) -> Vec<(String, &Vec<toml::Value>)> {
-    let project = parsed.get("project");
-    let mut lists: Vec<_> = project
-        .and_then(|p| p.get("dependencies")?.as_array())
-        .map(|a| ("project.dependencies".to_owned(), a))
-        .into_iter()
-        .collect();
-    for (name, list) in project
-        .and_then(|p| p.get("optional-dependencies")?.as_table())
-        .into_iter()
-        .flatten()
-    {
-        lists.extend(
-            list.as_array()
-                .map(|a| (format!("project.optional-dependencies.{name}"), a)),
-        );
-    }
-    for (name, list) in parsed
-        .get("dependency-groups")
-        .and_then(|g| g.as_table())
-        .into_iter()
-        .flatten()
-    {
-        lists.extend(
-            list.as_array()
-                .map(|a| (format!("dependency-groups.{name}"), a)),
-        );
-    }
-    lists
-}
-
 /// Every direct dependency declared in the manifest `text`: Pixi tables
 /// first, then the standard `[project]` and `[dependency-groups]` requirements
 /// of a `pyproject.toml` target. Direct URLs count as unversioned.
@@ -345,95 +312,15 @@ fn manifest_declarations(text: &str, pyproject: bool, file: &Path) -> Result<Vec
     if let Some(pixi) = parsed.get("tool").and_then(|t| t.get("pixi")) {
         table_declarations(pixi, "tool.pixi.", file, &mut output);
     }
-    for (list, items) in project_lists(&parsed) {
-        for (index, text) in items.iter().enumerate() {
-            let Some(requirement) = text.as_str().and_then(Pep508::parse) else {
-                continue;
-            };
-            let text = text.as_str().unwrap();
-            output.push(Declaration {
-                ecosystem: "pypi".into(),
-                package: requirement.name,
-                requirement: requirement
-                    .specifier
-                    .map(|range| text[range].to_owned())
-                    .unwrap_or_default(),
-                file: file.into(),
-                location: format!("{list}[{index}]"),
-            });
-        }
-    }
+    output.extend(crate::pyproject::declarations(text, file, &[])?);
     Ok(output)
 }
 
-/// The parts of a PEP 508 requirement this tool reads or rewrites.
-pub(crate) struct Pep508 {
-    pub(crate) name: String,
-    /// Byte range of the version specifier, excluding surrounding whitespace
-    /// and parentheses; `None` for unversioned and direct-URL requirements.
-    pub(crate) specifier: Option<std::ops::Range<usize>>,
-}
-
-impl Pep508 {
-    pub(crate) fn parse(text: &str) -> Option<Self> {
-        let start = text.len() - text.trim_start().len();
-        let name_end = text[start..]
-            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
-            .map_or(text.len(), |i| start + i);
-        if name_end == start {
-            return None;
-        }
-        let mut position =
-            name_end + (text[name_end..].len() - text[name_end..].trim_start().len());
-        if text[position..].starts_with('[') {
-            position += text[position..].find(']')? + 1;
-            position += text[position..].len() - text[position..].trim_start().len();
-        }
-        let rest = &text[position..];
-        let range = if rest.starts_with('@') {
-            None
-        } else if let Some(inner) = rest.strip_prefix('(') {
-            Some(position + 1..position + 1 + inner.find(')')?)
-        } else {
-            Some(position..position + rest.find(';').unwrap_or(rest.len()))
-        };
-        let specifier = range.and_then(|r| {
-            let raw = &text[r.clone()];
-            let begin = r.start + (raw.len() - raw.trim_start().len());
-            let end = r.start + raw.trim_end().len();
-            (begin < end).then_some(begin..end)
-        });
-        Some(Self {
-            name: text[start..name_end].to_owned(),
-            specifier,
-        })
-    }
-}
-
-/// Replace a string value, keeping its surrounding comments/whitespace and its
-/// literal (single-quoted) style when the new text allows it.
-pub(crate) fn replace_string(value: &mut toml_edit::Value, new: &str) {
-    let decor = value.decor().clone();
-    let literal = match &*value {
-        toml_edit::Value::String(formatted) => formatted
-            .as_repr()
-            .and_then(|r| r.as_raw().as_str())
-            .is_some_and(|raw| raw.starts_with('\'')),
-        _ => false,
-    };
-    *value = if literal && !new.contains(['\'', '\n']) {
-        format!("'{new}'").parse().unwrap_or_else(|_| new.into())
-    } else {
-        new.into()
-    };
-    *value.decor_mut() = decor;
-}
-
-/// Replaces the requirement of the declaration at (location, package, old
-/// requirement), or keeps it when `None`.
-type Change<'a> = dyn FnMut(&str, &str, &str) -> Option<String> + 'a;
-
-fn rewrite_tables(table: &mut dyn toml_edit::TableLike, path: &str, change: &mut Change) {
+fn rewrite_tables(
+    table: &mut dyn toml_edit::TableLike,
+    path: &str,
+    change: &mut crate::pyproject::Change,
+) {
     for (key, item) in table.iter_mut() {
         let location = format!("{path}{}", key.get());
         let Some(children) = item.as_table_like_mut() else {
@@ -457,68 +344,7 @@ fn rewrite_tables(table: &mut dyn toml_edit::TableLike, path: &str, change: &mut
             };
             let old = value.as_str().unwrap().to_owned();
             if let Some(new) = change(&location, dependency.get(), &old) {
-                replace_string(value, &new);
-            }
-        }
-    }
-}
-
-/// Rewrite version specifiers in `[project]` and `[dependency-groups]`
-/// requirement strings. Extras, markers, parentheses and spacing around the
-/// specifier are kept.
-fn rewrite_project(document: &mut toml_edit::DocumentMut, change: &mut Change) {
-    let mut lists: Vec<(String, &mut toml_edit::Array)> = vec![];
-    for (key, item) in document.as_table_mut().iter_mut() {
-        let Some(table) = item.as_table_like_mut() else {
-            continue;
-        };
-        match key.get() {
-            "project" => {
-                for (key, item) in table.iter_mut() {
-                    match key.get() {
-                        "dependencies" => lists.extend(
-                            item.as_array_mut()
-                                .map(|a| ("project.dependencies".to_owned(), a)),
-                        ),
-                        "optional-dependencies" => {
-                            lists.extend(item.as_table_like_mut().into_iter().flat_map(|t| {
-                                t.iter_mut().filter_map(|(name, list)| {
-                                    Some((
-                                        format!("project.optional-dependencies.{}", name.get()),
-                                        list.as_array_mut()?,
-                                    ))
-                                })
-                            }))
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            "dependency-groups" => lists.extend(table.iter_mut().filter_map(|(name, list)| {
-                Some((
-                    format!("dependency-groups.{}", name.get()),
-                    list.as_array_mut()?,
-                ))
-            })),
-            _ => {}
-        }
-    }
-    for (list, array) in lists {
-        for (index, value) in array.iter_mut().enumerate() {
-            let Some(text) = value.as_str().map(str::to_owned) else {
-                continue;
-            };
-            let Some(Pep508 {
-                name,
-                specifier: Some(range),
-            }) = Pep508::parse(&text)
-            else {
-                continue;
-            };
-            let location = format!("{list}[{index}]");
-            if let Some(new) = change(&location, &name, &text[range.clone()]) {
-                let spliced = format!("{}{new}{}", &text[..range.start], &text[range.end..]);
-                replace_string(value, &spliced);
+                crate::pyproject::replace_string(value, &new);
             }
         }
     }
@@ -549,7 +375,7 @@ fn rewrite_manifest(text: &str, pyproject: bool, edits: &[Edit]) -> Result<Strin
             {
                 rewrite_tables(pixi, "tool.pixi.", &mut change);
             }
-            rewrite_project(&mut document, &mut change);
+            crate::pyproject::rewrite(&mut document, &mut change, &[]);
         }
     }
     if let Some(edit) = pending.first() {

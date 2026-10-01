@@ -43,6 +43,7 @@ pub mod pixi;
 /// process trees, and redacted diagnostics.
 pub mod process;
 mod pypi;
+mod pyproject;
 /// Vulnerability scanning of inventories.
 pub mod scan;
 mod scm;

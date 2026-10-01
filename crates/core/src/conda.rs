@@ -7,8 +7,8 @@ use crate::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
     },
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
-    pixi::Pep508,
     process::run,
+    pyproject::Pep508,
     Error, Package, Result, Target, UpdateOptions,
 };
 use regex::Regex;
