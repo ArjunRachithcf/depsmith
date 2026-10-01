@@ -60,6 +60,7 @@ class ApiTests(unittest.TestCase):
                     "cargo": "missing-cargo-binary",
                     "conda-lock": "missing-conda-lock-binary",
                     "conda": "missing-conda-binary",
+                    "uv": "missing-uv-binary",
                 },
             )
         )

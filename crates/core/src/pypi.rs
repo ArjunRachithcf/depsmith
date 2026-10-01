@@ -69,6 +69,53 @@ pub(crate) fn index_urls(manifest: &toml::Value) -> Vec<String> {
     all
 }
 
+/// Indexes of uv `settings` (a `uv.toml`, or a pyproject's `[tool.uv]`) in
+/// uv's priority order: `[[index]]` entries, then `extra-index-url`, then the
+/// default (an index marked `default`, `index-url`, or PyPI). Explicit
+/// indexes serve only packages pinned to them and are left out; embedded
+/// credentials are removed.
+pub(crate) fn uv_index_urls(settings: Option<&toml::Value>) -> Vec<String> {
+    let url = |value: &toml::Value| {
+        value
+            .as_str()
+            .and_then(without_credentials)
+            .map(|u| display(&u))
+    };
+    let field = |name: &str| settings.and_then(|s| s.get(name));
+    let mut named = vec![];
+    let mut default = None;
+    for index in field("index")
+        .and_then(|i| i.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let flag = |name: &str| index.get(name).and_then(|v| v.as_bool()) == Some(true);
+        let Some(location) = index.get("url").and_then(url) else {
+            continue;
+        };
+        if flag("default") {
+            default = Some(location);
+        } else if !flag("explicit") {
+            named.push(location);
+        }
+    }
+    let extra: Vec<String> = match field("extra-index-url") {
+        Some(toml::Value::Array(many)) => many.iter().filter_map(url).collect(),
+        Some(one) => url(one).into_iter().collect(),
+        None => vec![],
+    };
+    let default = default
+        .or_else(|| field("index-url").and_then(url))
+        .unwrap_or_else(|| DEFAULT_INDEX.into());
+    let mut all: Vec<String> = vec![];
+    for location in named.into_iter().chain(extra).chain([default]) {
+        if !all.contains(&location) {
+            all.push(location);
+        }
+    }
+    all
+}
+
 /// Fetch a project page from a credential-free index URL.
 pub(crate) fn fetch(index: &str, package: &str, timeout: u64) -> Result<Value> {
     const JSON: &str = "application/vnd.pypi.simple.v1+json";

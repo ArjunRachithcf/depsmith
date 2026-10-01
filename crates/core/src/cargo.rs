@@ -3,7 +3,10 @@
 //! of its manifests. Cargo resolves in the stage with MSRV-aware fallback;
 //! crates held back by `rust-version` are reported as suggestions.
 use crate::{
-    adapter::{Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec},
+    adapter::{
+        edits_by_manifest, undeclared, Adapter, AdapterSpec, Candidate, Capabilities, LockCheck,
+        ManagedFiles, Support, ToolSpec,
+    },
     constraint::Excluded,
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
     process::{run, run_env_output},
@@ -172,9 +175,9 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
         let mut item = document.as_item_mut();
         // Platform keys such as `cfg(unix)` never contain dots.
         for part in table.split('.').filter(|p| !p.is_empty()) {
-            item = item.get_mut(part).ok_or_else(|| missing(d))?;
+            item = item.get_mut(part).ok_or_else(|| undeclared(d))?;
         }
-        let slot = item.get_mut(key).ok_or_else(|| missing(d))?;
+        let slot = item.get_mut(key).ok_or_else(|| undeclared(d))?;
         let value = if slot.is_str() {
             slot.as_value_mut()
         } else {
@@ -186,20 +189,10 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
             Some(value) if value.as_str() == Some(d.requirement.as_str()) => {
                 crate::pyproject::replace_string(value, &edit.requirement);
             }
-            _ => return Err(missing(d)),
+            _ => return Err(undeclared(d)),
         }
     }
     Ok(document.to_string())
-}
-
-fn missing(d: &Declaration) -> Error {
-    Error::Invalid(format!(
-        "{} {} is not declared at {} in {}",
-        d.package,
-        d.requirement,
-        d.location,
-        d.file.display()
-    ))
 }
 
 /// Resolved packages of a `Cargo.lock`. Workspace members and other local
@@ -498,19 +491,7 @@ impl Adapter for Cargo {
     }
     fn rewrite(&self, stage: &Path, target: &Target, edits: &[Edit]) -> Result<()> {
         let manifests = manifests(stage, target)?;
-        let mut by_file: BTreeMap<&Path, Vec<&Edit>> = BTreeMap::new();
-        for edit in edits {
-            let file = edit.declaration.file.as_path();
-            if !manifests.iter().any(|m| m == file) {
-                return Err(Error::Invalid(format!(
-                    "{}: {} is not one of this target's manifests",
-                    target.id,
-                    file.display()
-                )));
-            }
-            by_file.entry(file).or_default().push(edit);
-        }
-        for (file, edits) in by_file {
+        for (file, edits) in edits_by_manifest(target, &manifests, edits)? {
             let path = stage.join(file);
             let text = rewrite_manifest(&fs::read_to_string(&path)?, &edits)?;
             fs::write(path, text)?;
@@ -540,18 +521,12 @@ impl Adapter for Cargo {
         check_version(&cargo, stage, timeout)?;
         let manifest = stage.join(&target.manifest);
         let manifest_arg: String = manifest.to_string_lossy().into();
-        let lock = target.manifest.with_file_name("Cargo.lock");
-        let files = manifests(stage, target)?;
-        let sources = files
-            .iter()
-            .map(|f| fs::read(stage.join(f)))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        let before_text = fs::read_to_string(stage.join(&lock)).ok();
-        let before = before_text
-            .as_deref()
-            .map(lock_inventory)
-            .transpose()?
-            .unwrap_or_default();
+        let check = LockCheck::take(
+            stage,
+            manifests(stage, target)?,
+            target.manifest.with_file_name("Cargo.lock"),
+            lock_inventory,
+        )?;
         // The report is parsed, so never colour it (CARGO_TERM_COLOR may
         // say otherwise).
         let mut args: Vec<String> = vec![
@@ -570,28 +545,7 @@ impl Adapter for Cargo {
             "fallback".to_owned(),
         )];
         let (_, report) = run_env_output(&cargo, &args, stage, timeout, &msrv)?;
-        let after_text = fs::read_to_string(stage.join(&lock))?;
-        let after = lock_inventory(&after_text)?;
-        let git = |packages: &[Package]| -> BTreeSet<String> {
-            packages
-                .iter()
-                .filter(|p| p.artifact.starts_with("git+"))
-                .map(|p| p.artifact.clone())
-                .collect()
-        };
-        if !options.refresh_git && before_text.is_some() && git(&before) != git(&after) {
-            return Err(Error::Policy(
-                "backend moved Git resolutions; select --refresh-git explicitly".into(),
-            ));
-        }
-        for (file, source) in files.iter().zip(&sources) {
-            if fs::read(stage.join(file))? != *source {
-                return Err(Error::Policy(format!(
-                    "backend unexpectedly changed {}",
-                    file.display()
-                )));
-            }
-        }
+        let resolved = check.resolved(stage, options.refresh_git)?;
         run_env_output(
             &cargo,
             &[
@@ -605,22 +559,7 @@ impl Adapter for Cargo {
             timeout,
             &msrv,
         )?;
-        if fs::read_to_string(stage.join(&lock))? != after_text {
-            return Err(Error::Operation(
-                "lock consistency check changed the candidate".into(),
-            ));
-        }
-        let mut changed = files;
-        changed.push(lock);
-        Ok(Candidate {
-            files: changed,
-            suggestions: held_back(&report, target),
-            unresolved: vec![],
-            before,
-            baseline_available: before_text.is_some(),
-            after,
-            validation: vec![format!("{}: resolved and lock-consistent", target.id)],
-        })
+        check.candidate(stage, target, &resolved, held_back(&report, target))
     }
 }
 

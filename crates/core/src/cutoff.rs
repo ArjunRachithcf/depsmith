@@ -129,6 +129,12 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
+/// Whether `text` is a plain `YYYY-MM-DD` date, which managers read
+/// differently (Pixi: end of day in UTC; uv: the local time zone).
+pub(crate) fn is_date(text: &str) -> bool {
+    date(text.trim()).is_some()
+}
+
 /// Cutoff in milliseconds since the Unix epoch, or `None` if not understood.
 pub(crate) fn parse(text: &str, now_ms: i64) -> Option<i64> {
     let text = text.trim();

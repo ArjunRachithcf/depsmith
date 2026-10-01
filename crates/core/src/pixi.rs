@@ -379,14 +379,7 @@ fn rewrite_manifest(text: &str, pyproject: bool, edits: &[Edit]) -> Result<Strin
         }
     }
     if let Some(edit) = pending.first() {
-        let d = &edit.declaration;
-        return Err(Error::Invalid(format!(
-            "{} {} is not declared at {} in {}",
-            d.package,
-            d.requirement,
-            d.location,
-            d.file.display()
-        )));
+        return Err(crate::adapter::undeclared(&edit.declaration));
     }
     Ok(document.to_string())
 }

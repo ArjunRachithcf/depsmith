@@ -154,15 +154,7 @@ fn rewrite_environment(source: &str, edits: &[Edit]) -> Result<String> {
     let mut plan: BTreeMap<(String, usize), String> = BTreeMap::new();
     for edit in edits {
         let d = &edit.declaration;
-        let missing = || {
-            Error::Invalid(format!(
-                "{} {} is not declared at {} in {}",
-                d.package,
-                d.requirement,
-                d.location,
-                d.file.display()
-            ))
-        };
+        let missing = || crate::adapter::undeclared(d);
         let index = items
             .iter()
             .position(|(location, _)| *location == d.location)

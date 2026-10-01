@@ -1,4 +1,4 @@
-# Native integration: real Pixi, Grype, cargo and conda-lock plus conda-forge,
+# Native integration: real Pixi, uv, Grype, cargo and conda-lock plus conda-forge,
 # pypi.org, crates.io and the GitHub API. Informational on pull requests;
 # blocking as a gate in the Release workflow. Nightly failures open or update
 # a tracking issue (integration-alert.yml).
@@ -21,6 +21,7 @@ permissions:
 env:
   PIXI_VERSION: v0.80.0
   GRYPE_VERSION: 0.119.0
+  UV_VERSION: 0.12.15
 jobs:
   native:
     strategy:
@@ -31,10 +32,10 @@ jobs:
             tests: --workspace
             python: true
           - os: windows-latest
-            tests: -p depsmith-core --test pixi_live
+            tests: -p depsmith-core --test pixi_live --test uv_live
             python: false
           - os: macos-latest
-            tests: -p depsmith-core --test pixi_live
+            tests: -p depsmith-core --test pixi_live --test uv_live
             python: false
     runs-on: ${{ matrix.os }}
     env:
@@ -52,6 +53,10 @@ jobs:
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           run-install: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
       - name: Install Grype (checksum-verified)
         if: runner.os == 'Linux'
         run: |
@@ -73,7 +78,8 @@ jobs:
         shell: bash
         run: |
           PIXI="$(command -v pixi)"
-          export PIXI
+          UV="$(command -v uv)"
+          export PIXI UV
           run() { cargo test ${{ matrix.tests }} --locked -- --ignored --test-threads 1; }
           if ! run; then
             echo "::warning::Native tests failed; retrying once to rule out a transient network error"

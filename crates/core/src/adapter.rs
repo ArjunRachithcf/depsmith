@@ -255,3 +255,139 @@ pub trait Adapter: Send + Sync {
     /// return the candidate. Must not write outside `stage`.
     fn prepare(&self, stage: &Path, target: &Target, options: &UpdateOptions) -> Result<Candidate>;
 }
+
+/// Group `edits` by the manifest they change, refusing any edit outside
+/// `manifests` (the target's own files).
+pub(crate) fn edits_by_manifest<'a>(
+    target: &Target,
+    manifests: &[PathBuf],
+    edits: &'a [Edit],
+) -> Result<BTreeMap<&'a Path, Vec<&'a Edit>>> {
+    let mut by_file: BTreeMap<&Path, Vec<&Edit>> = BTreeMap::new();
+    for edit in edits {
+        let file = edit.declaration.file.as_path();
+        if !manifests.iter().any(|m| m == file) {
+            return Err(crate::Error::Invalid(format!(
+                "{}: {} is not one of this target's manifests",
+                target.id,
+                file.display()
+            )));
+        }
+        by_file.entry(file).or_default().push(edit);
+    }
+    Ok(by_file)
+}
+
+/// The error for an edit whose declaration is no longer in its file.
+pub(crate) fn undeclared(d: &Declaration) -> crate::Error {
+    crate::Error::Invalid(format!(
+        "{} {} is not declared at {} in {}",
+        d.package,
+        d.requirement,
+        d.location,
+        d.file.display()
+    ))
+}
+
+/// The guards around one native resolution of a lockfile in the stage: the
+/// manifests must not change, Git pins only move with `--refresh-git`, and
+/// re-running the manager in its locked mode must leave the lock as it was.
+pub(crate) struct LockCheck {
+    manifests: Vec<PathBuf>,
+    sources: Vec<Vec<u8>>,
+    lock: PathBuf,
+    inventory: fn(&str) -> Result<Vec<Package>>,
+    baseline: Option<String>,
+    before: Vec<Package>,
+}
+
+fn git_pins(packages: &[Package]) -> std::collections::BTreeSet<&str> {
+    packages
+        .iter()
+        .filter(|p| p.artifact.starts_with("git+"))
+        .map(|p| p.artifact.as_str())
+        .collect()
+}
+
+impl LockCheck {
+    /// Snapshot `manifests` and the baseline `lock` (read with `inventory`)
+    /// in `stage` before resolving.
+    pub(crate) fn take(
+        stage: &Path,
+        manifests: Vec<PathBuf>,
+        lock: PathBuf,
+        inventory: fn(&str) -> Result<Vec<Package>>,
+    ) -> Result<Self> {
+        let sources = manifests
+            .iter()
+            .map(|f| std::fs::read(stage.join(f)))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let baseline = std::fs::read_to_string(stage.join(&lock)).ok();
+        let before = baseline
+            .as_deref()
+            .map(inventory)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Self {
+            manifests,
+            sources,
+            lock,
+            inventory,
+            baseline,
+            before,
+        })
+    }
+    /// The baseline inventory, empty without a lock.
+    pub(crate) fn before(&self) -> &[Package] {
+        &self.before
+    }
+    /// Whether the baseline pins any Git resolution.
+    pub(crate) fn has_git_pins(&self) -> bool {
+        !git_pins(&self.before).is_empty()
+    }
+    /// After resolving: the candidate lock text, once the guards pass.
+    pub(crate) fn resolved(&self, stage: &Path, refresh_git: bool) -> Result<String> {
+        let text = std::fs::read_to_string(stage.join(&self.lock))?;
+        let after = (self.inventory)(&text)?;
+        if !refresh_git && self.baseline.is_some() && git_pins(&self.before) != git_pins(&after) {
+            return Err(crate::Error::Policy(
+                "backend moved Git resolutions; select --refresh-git explicitly".into(),
+            ));
+        }
+        for (file, source) in self.manifests.iter().zip(&self.sources) {
+            if std::fs::read(stage.join(file))? != *source {
+                return Err(crate::Error::Policy(format!(
+                    "backend unexpectedly changed {}",
+                    file.display()
+                )));
+            }
+        }
+        Ok(text)
+    }
+    /// After the locked-mode re-run: the candidate of `target`, whose lock
+    /// must still be `resolved`.
+    pub(crate) fn candidate(
+        self,
+        stage: &Path,
+        target: &Target,
+        resolved: &str,
+        suggestions: Vec<Suggestion>,
+    ) -> Result<Candidate> {
+        if std::fs::read_to_string(stage.join(&self.lock))? != resolved {
+            return Err(crate::Error::Operation(
+                "lock consistency check changed the candidate".into(),
+            ));
+        }
+        let mut files = self.manifests;
+        files.push(self.lock);
+        Ok(Candidate {
+            files,
+            suggestions,
+            unresolved: vec![],
+            before: self.before,
+            baseline_available: self.baseline.is_some(),
+            after: (self.inventory)(resolved)?,
+            validation: vec![format!("{}: resolved and lock-consistent", target.id)],
+        })
+    }
+}

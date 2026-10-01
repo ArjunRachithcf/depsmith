@@ -47,6 +47,8 @@ mod pyproject;
 /// Vulnerability scanning of inventories.
 pub mod scan;
 mod scm;
+/// The uv adapter: `pyproject.toml` projects locked with `uv.lock`.
+pub mod uv;
 mod working_tree;
 use adapter::Adapter;
 pub use model::*;
@@ -64,6 +66,7 @@ impl Default for Engine {
             Box::new(actions::Actions::default()),
             Box::new(cargo::Cargo::default()),
             Box::new(conda::Conda),
+            Box::new(uv::Uv::default()),
         ])
     }
 }
