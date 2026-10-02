@@ -7,16 +7,16 @@ of the repository), so you review exact file and dependency changes before
 anything is written, and the reviewed files are applied without resolving again.
 
 Supported today: **Pixi** (`pixi.toml` and Pixi-managed `pyproject.toml`),
-**GitHub Actions** workflow references, **Cargo** (`Cargo.lock` owners) and
-**conda** (`environment.yml` locked with conda-lock). A uv adapter follows the
-first release.
+**GitHub Actions** workflow references, **Cargo** (`Cargo.lock` owners),
+**conda** (`environment.yml` locked with conda-lock) and **uv**
+(`pyproject.toml` locked with `uv.lock`).
 
 ## Guide
 
-- [Getting started](Getting-started): install, check a project, apply updates.
+- [Getting started](Getting-started): install, set up native tools, check a project, apply updates.
 - [Configuration](Configuration): `depsmith.toml`, saved targets and options.
 - [Reviewing and applying](Reviewing-and-applying): proposals, stale inputs, partial application and recovery.
-- [Pixi adapter](Pixi-adapter): updates, upgrades, suggestions and acceptance.
+- [Pixi adapter](Pixi-adapter): updates, upgrades, suggestions and acceptance; also uv projects.
 - [GitHub Actions adapter](GitHub-Actions-adapter): release lines, commit pins and unresolved references.
 - [Cargo adapter](Cargo-adapter): lock owners, MSRV-aware updates, suggestions and acceptance.
 - [Conda adapter](Conda-adapter): conda-lock, sharded repodata evidence and `pip:` requirements.

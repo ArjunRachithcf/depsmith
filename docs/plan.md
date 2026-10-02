@@ -8,7 +8,7 @@ Build a Rust package updater with a consistent local and CI workflow, plus a typ
 
 Release 0.1.0 is a public alpha on PyPI plus a draft GitHub release with standalone executables. The conda-forge recipe is prepared and validated in CI; feedstock submission follows the release and does not block it.
 
-A uv adapter follows this first release. The broader roadmap includes npm, vcpkg, prek/pre-commit, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
+A uv adapter has since been added (§8). The broader roadmap includes npm, vcpkg, prek/pre-commit, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
 
 ## 2. Architecture and public interfaces
 
@@ -147,7 +147,7 @@ Tests run in three layers, in priority order:
 2. **Native integration** (pull requests to and pushes on `main`, nightly, and as a gate in the Release workflow; informational on pull requests): real Pixi 0.80.0 and Grype 0.119.0, pinned, plus pypi.org and the GitHub API — `[project]` suggestion acceptance, mixed conda/PyPI across multiple platforms, Actions tags/SHA pins/reusable workflows/major suggestions, and scanner comparisons (a native Git-pin preservation scenario is deferred; offline tests cover the policy). Failed native tests are retried once; nightly failures open or update a `nightly-integration` issue. Linux runs everything; Windows and macOS run the Pixi tests.
 3. **CLI/Python parity**: one fixture through both interfaces yields equal proposals.
 
-The **conda** adapter ships in this release (§8); **uv** follows. Conda locking uses conda-lock's artifact-exact unified YAML format, following conda-lock's own lock path (`environment.conda-lock.yml` is recognised). Reproduce any reported conda environment-creation failure before adding an ordering workaround; preserve it as a regression test if recovered.
+The **conda** adapter ships in this release (§8), and a **uv** adapter has been added. Conda locking uses conda-lock's artifact-exact unified YAML format, following conda-lock's own lock path (`environment.conda-lock.yml` is recognised). Reproduce any reported conda environment-creation failure before adding an ordering workaround; preserve it as a regression test if recovered.
 
 ## 6. Path to 0.1.0
 
@@ -157,7 +157,7 @@ The **conda** adapter ships in this release (§8); **uv** follows. Conda locking
 
 **C. Release.** Tag `v0.1.0` on `main`, run the Release workflow without publishing, review the artifacts, then publish only with explicit approval. PyPI trusted publishing and the `pypi`/`release` environments are configured beforehand. Submit the conda-forge feedstock afterwards.
 
-**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, then a uv adapter and an out-of-tree adapter bridge.
+**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, then an out-of-tree adapter bridge.
 
 ## 7. Documentation automation
 
@@ -176,6 +176,6 @@ Folded into 0.1.0 (ADR 0001). A new package manager is one adapter module plus o
 - **Seam:** an adapter is described by an owned, serde-serialisable `AdapterSpec` (manager, ecosystems, discovery patterns, managed files, skipped directories, native tools, capabilities). It reports `Declaration`s, applies `Edit`s with `rewrite`, names registries as data (`RegistryConfig`), may `pin` movable references, and prepares candidates in the stage. Discovery, staging, `doctor`, tool paths (`--tool NAME=PATH`), suggestions and `--accept` are generic.
 - **Ecosystems:** conda, PyPI, Cargo and GitHub Actions each have one version scheme (ordering, caps, restyling, explicit-requirement checks, pins) and one scan identity rule, shared by every manager that resolves them.
 - **Registries:** `pixi search`, PEP 691 indexes, the crates.io sparse index, conda sharded repodata (CEP 16, full repodata as fallback) and an inline fixture for tests, all feeding one evidence format.
-- **Adapters:** Pixi and GitHub Actions were ported without behaviour changes; Actions gained commit-pin suggestions and `--accept` to `@<sha> # vX.Y.Z`; Cargo targets each `Cargo.lock` owner with MSRV-aware resolution; conda targets `environment.yml` locked with conda-lock.
+- **Adapters:** Pixi and GitHub Actions were ported without behaviour changes; Actions gained commit-pin suggestions and `--accept` to `@<sha> # vX.Y.Z`; Cargo targets each `Cargo.lock` owner with MSRV-aware resolution; conda targets `environment.yml` locked with conda-lock; uv targets each `uv.lock` owner.
 - **Conformance:** `depsmith_core::conformance::check` runs the contract offline (spec round-trip, discovery, managed files, selection, capability enforcement, declarations round-tripping through `rewrite`). Each adapter also has a native live round trip in the Integration workflow.
 - **Protocol-ready:** every seam type holds owned data only, so an out-of-tree subprocess bridge (`{method, params}` JSON lines) can be added later without redesign.

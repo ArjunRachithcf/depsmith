@@ -1,8 +1,9 @@
 # Troubleshooting
 
 Start with `depsmith doctor`: it shows whether each native tool (Pixi, cargo,
-conda-lock and its solver, Grype) is found, which versions have been tested,
-and what each adapter supports.
+conda-lock and its solver, uv, Grype) is found, which versions have been
+tested, and what each adapter supports. `depsmith init` offers to install the
+missing ones (see [Getting started](Getting-started)).
 
 | Message or symptom | Cause and fix |
 |---|---|

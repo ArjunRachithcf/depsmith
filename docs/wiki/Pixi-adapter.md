@@ -3,8 +3,9 @@
 ## Targets
 
 `pixi.toml` files and `pyproject.toml` files with a `[tool.pixi]` table are
-targets (`pixi:pixi.toml`, `pixi:pyproject.toml`). An ordinary Python project
-without `[tool.pixi]` is not a target yet.
+targets (`pixi:pixi.toml`, `pixi:pyproject.toml`). A Python project without
+`[tool.pixi]` is a uv target when it has a `[tool.uv]` table or a `uv.lock`
+(see _uv projects_ below), and otherwise not a target.
 
 ## Updates and upgrades
 
@@ -68,3 +69,29 @@ pin is `--accept six===1.17.0`. The staged manifest is then resolved, scanned if
 requested and previewed; manifest and lock apply together, and the validation
 list records what was accepted and why. Accepting when no newer release is
 excluded is an error (exit 2).
+
+## uv projects
+
+A `pyproject.toml` that owns a `uv.lock` is a uv target (`uv:pyproject.toml`):
+it has a `[tool.uv]` table or a `uv.lock` beside it, no `[tool.pixi]` table,
+and is not a member of an enclosing uv workspace. Members listed in
+`[tool.uv.workspace]` (`members` globs, minus `exclude`) belong to the root's
+target. `uv.toml` and `.python-version` are staged with the lock; `.venv` is
+never walked.
+
+- An **update** runs `uv lock --upgrade` in the stage within the declared
+  requirements; `--package NAME` passes `--upgrade-package NAME` instead.
+  Names match after PEP 503 normalisation. Git pins stay unless
+  `--refresh-git` is given. The candidate is checked with `uv lock --locked`,
+  and manifests must not change.
+- `--upgrade` and `--install` are not supported, and `--cooldown-days` is
+  rejected: set uv's `exclude-newer` instead.
+- **Suggestions** cover `[project]` dependencies, optional dependencies,
+  `[dependency-groups]` and `tool.uv.dev-dependencies` of the root and member
+  manifests, except packages with a `[tool.uv.sources]` entry. Evidence comes
+  from the project's indexes in uv's order (`[[tool.uv.index]]` entries other
+  than `explicit` ones, `extra-index-url`, then `index-url` or pypi.org), read
+  from `uv.toml` instead of `[tool.uv]` when it exists. `exclude-newer` is
+  respected as above, except that a bare date leaves availability "not
+  established", because uv reads it in the local time zone.
+- `--accept` rewrites requirements as for PyPI requirements above.

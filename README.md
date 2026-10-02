@@ -10,8 +10,9 @@ disposable copy of the repository. You review the exact file and dependency
 changes, and the reviewed files are then written without resolving again.
 
 - **Supported:** Pixi (`pixi.toml`, Pixi-managed `pyproject.toml`), GitHub
-  Actions workflow references, Cargo (`Cargo.lock` owners) and conda
-  (`environment.yml` locked with conda-lock).
+  Actions workflow references, Cargo (`Cargo.lock` owners), conda
+  (`environment.yml` locked with conda-lock) and uv (`pyproject.toml` locked
+  with `uv.lock`).
 - **Safe by default:** updates keep your constraints. Proposals go stale if the
   repository changes, and interrupted writes can be recovered.
 - **Evidence-backed suggestions** for pins that block newer releases, which you
@@ -26,7 +27,8 @@ changes, and the reviewed files are then written without resolving again.
 
 ```sh
 python -m pip install .   # from a checkout; Python 3.10+
-depsmith doctor           # checks for the native tools (Pixi, cargo, conda-lock, Grype)
+depsmith doctor           # checks for the native tools (Pixi, cargo, conda-lock, uv, Grype)
+depsmith init             # offers to install the missing tools your targets use
 ```
 
 A standalone executable builds with `cargo build --release --locked -p depsmith-cli`
@@ -67,6 +69,7 @@ if not proposal.failures:
 | Actions release lines and commit pins | [GitHub Actions adapter](https://github.com/ArjunRachithcf/depsmith/wiki/GitHub-Actions-adapter) |
 | Cargo lock owners, MSRV-aware updates | [Cargo adapter](https://github.com/ArjunRachithcf/depsmith/wiki/Cargo-adapter) |
 | conda-lock environments, sharded repodata | [Conda adapter](https://github.com/ArjunRachithcf/depsmith/wiki/Conda-adapter) |
+| uv projects and workspaces, project indexes | [Pixi adapter](https://github.com/ArjunRachithcf/depsmith/wiki/Pixi-adapter) |
 | Grype scanning, identities, policy, suppressions | [Vulnerability scanning](https://github.com/ArjunRachithcf/depsmith/wiki/Vulnerability-scanning) |
 | Common errors | [Troubleshooting](https://github.com/ArjunRachithcf/depsmith/wiki/Troubleshooting) |
 | Every command and option | [CLI reference](https://github.com/ArjunRachithcf/depsmith/wiki/CLI-reference) |
@@ -80,7 +83,7 @@ glossary in [`CONTEXT.md`](CONTEXT.md).
 Alpha. The first release will be published to PyPI and as GitHub release
 binaries, with conda-forge after that
 ([Releasing](https://github.com/ArjunRachithcf/depsmith/wiki/Releasing)).
-A uv adapter comes next. Post-install project checks and interactive
+Post-install project checks and interactive
 suggestion prompts are planned. New package managers plug in through one
 adapter module and a shared conformance suite
 ([Architecture](https://github.com/ArjunRachithcf/depsmith/wiki/Architecture)).

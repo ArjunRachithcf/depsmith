@@ -3,8 +3,9 @@
 ## Install
 
 depsmith needs Python 3.10+ (for the package) or Rust 1.89+ (to build from
-source). The native package managers are installed separately: Pixi for Pixi
-targets, and Grype if you scan for vulnerabilities.
+source). The native package managers are installed separately (Pixi for Pixi
+targets, uv for uv targets, and Grype if you scan for vulnerabilities), or
+by `depsmith init` (see below).
 
 ```sh
 python -m pip install .          # from a checkout
@@ -15,9 +16,29 @@ depsmith doctor                  # capabilities and native tool status
 A standalone executable builds with `cargo build --release --locked -p depsmith-cli`.
 
 `depsmith doctor` reports each native tool as `tested`, `untested` or
-`unavailable`. Only Pixi 0.80.0 and Grype 0.119.0 have been exercised; other
-versions are untested, not assumed incompatible. It also lists what each
-adapter supports.
+`unavailable`, and lists the versions that have been exercised (such as Pixi
+0.80.0, uv 0.12.15 and Grype 0.119.0); other versions are untested, not
+assumed incompatible. It also lists what each adapter supports.
+
+## Set up native tools
+
+```sh
+depsmith init --root /path/to/project
+```
+
+`init` checks the native tools the discovered targets use (`--target` narrows
+them; `--scan` adds Grype). For each missing one that has a pinned release for
+this host (Pixi, uv, Grype, and micromamba as the conda solver), it asks
+before downloading that release, checks its SHA-256 and installs it into the
+tool cache: `DEPSMITH_TOOLS_DIR`, or `depsmith/tools` under the user's cache
+directory. `--fetch-tools` installs without asking; noninteractive runs
+otherwise install nothing. cargo and conda-lock are never installed.
+
+A tool on `PATH` or given with `--tool` is used first. A cached tool is used
+only by repositories that `init` installed it for, and only while it is
+unchanged: the install is recorded in `.depsmith/tools.json`, which Git
+ignores. `init` exits 3 when a used tool is still missing. From Python, call
+`init(root, fetch_tools=True)`.
 
 ## Check a project
 
