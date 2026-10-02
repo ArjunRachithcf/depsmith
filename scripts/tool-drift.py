@@ -8,13 +8,18 @@ only that tool at its latest release:
 DOCTOR_JSON is `depsmith doctor --json` (tested versions and pinned
 downloads); RESULTS_DIR holds one `<tool>-<os>` file per Integration job with
 its status. Latest releases and asset digests come from the GitHub API via
-`gh`. A Markdown summary goes to stdout; with --issues, each tool gets at most
-one open issue labelled `latest-tools` (broken, behind, or checksum drift),
-and resolved ones are closed.
+`gh`. A Markdown summary goes to stdout. With --act (run from a checkout of
+main, GH_TOKEN a GitHub App token so pull requests trigger CI), a tool whose
+latest release passes Integration gets a pull request that bumps its tested
+version, pinned downloads and Integration pin together; a tool broken by its
+latest release, a pinned download whose sha256 changed, or a bump that cannot
+be made gets one open issue labelled `latest-tools`. Resolved issues close.
 """
 
 import json
+import os
 import pathlib
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -32,12 +37,40 @@ REPOS = {
 }
 
 
+# Where each tool's tested version, pinned downloads and Integration pin live.
+SPEC_FILES = {
+    "uv": "crates/core/src/uv.rs",
+    "pixi": "crates/core/src/pixi.rs",
+    "grype": "crates/core/src/scan.rs",
+    "conda-lock": "crates/core/src/conda.rs",
+    "conda": "crates/core/src/conda.rs",
+    "cargo": "crates/core/src/cargo.rs",
+}
+CATALOG = "crates/core/src/provision.rs"
+CATALOG_CONSTS = {"uv": "UV", "pixi": "PIXI", "grype": "GRYPE", "conda": "MICROMAMBA"}
+WORKFLOW = ".github/workflows/integration.yml"
+PINS = {
+    "uv": "UV_VERSION",
+    "pixi": "PIXI_VERSION",
+    "grype": "GRYPE_VERSION",
+    "conda-lock": "CONDA_LOCK_PIN",
+    "conda": "MICROMAMBA_PIN",
+}
+
+
 @dataclass(frozen=True)
-class Issue:
+class Action:
+    """A pull request (`bump`) or an issue (any other kind) for one tool."""
+
     tool: str
     kind: str
     title: str
     body: str
+    version: str = ""
+
+
+class BumpError(Exception):
+    pass
 
 
 def version_of(tool, tag):
@@ -83,7 +116,7 @@ def decide(tested, latest, results, mismatched):
         bad = mismatched.get(tool) or []
         if bad:
             issues.append(
-                Issue(
+                Action(
                     tool,
                     "checksum",
                     f"{tool}: pinned download no longer matches its sha256",
@@ -94,7 +127,7 @@ def decide(tested, latest, results, mismatched):
             )
         elif result == "failure":
             issues.append(
-                Issue(
+                Action(
                     tool,
                     "broken",
                     f"{tool}: integration fails with {tool} {newest}",
@@ -102,24 +135,83 @@ def decide(tested, latest, results, mismatched):
                     f"fails; depsmith is tested with {version}.",
                 )
             )
-        elif newest and newest != version:
-            ran = (
-                f"Integration passes with {tool} {newest} (other tools pinned)."
-                if result == "success"
-                else f"Integration was not run against {tool} {newest}."
-            )
+        elif newest and newest != version and result == "success":
             issues.append(
-                Issue(
+                Action(
+                    tool,
+                    "bump",
+                    f"Bump {tool} to {newest}",
+                    f"Integration passes with {tool} {newest} (other tools pinned) "
+                    f"in the weekly Latest tools run; depsmith was tested with "
+                    f"{version}. This moves the adapter's `tested_versions`, the "
+                    f"pinned downloads (with the release's sha256 digests) and the "
+                    f"Integration pin together.",
+                    newest,
+                )
+            )
+        elif newest and newest != version:
+            issues.append(
+                Action(
                     tool,
                     "behind",
-                    f"{tool}: tested {version}, {newest} passes"
-                    if result == "success"
-                    else f"{tool}: tested {version}, {newest} released",
-                    f"{ran} Bump `tested_versions` (and the pinned download in "
-                    f"`provision.rs` and the Integration pin) from {version}.",
+                    f"{tool}: tested {version}, {newest} released",
+                    f"Integration was not run against {tool} {newest} on its own, "
+                    f"so it is not bumped automatically. Bump `tested_versions` "
+                    f"(and any pinned download and Integration pin) from {version} "
+                    f"after checking it.",
                 )
             )
     return issues
+
+
+def bump(root, tool, old, new, new_tag, digest_of):
+    """Move `tool` from `old` to `new` in the spec, the pinned downloads (from
+    release `new_tag`, digests from `digest_of(repo, tag, asset)`) and the
+    Integration pin. Raises BumpError, changing nothing, when an asset is
+    missing or a file does not hold the expected version."""
+    root = pathlib.Path(root)
+    edits = {}
+
+    def text(path):
+        return edits.get(path, (root / path).read_text())
+
+    spec = text(SPEC_FILES[tool])
+    pattern = f'tested_versions: vec!["{old}".into()]'
+    if spec.count(pattern) != 1:
+        raise BumpError(f"{SPEC_FILES[tool]} does not test {tool} {old} exactly once")
+    edits[SPEC_FILES[tool]] = spec.replace(pattern, pattern.replace(old, new))
+
+    if tool in CATALOG_CONSTS:
+        catalog = text(CATALOG)
+        start = catalog.index(f"const {CATALOG_CONSTS[tool]}: &[Asset] = &[")
+        end = catalog.index("];", start)
+        block = catalog[start:end]
+
+        def replace(match):
+            parts = match.group(1).split("/")
+            repo, asset = f"{parts[3]}/{parts[4]}", parts[8].replace(old, new)
+            digest = digest_of(repo, new_tag, asset)
+            if not digest:
+                raise BumpError(f"{repo} {new_tag} has no asset {asset}")
+            url = "/".join(parts[:7] + [new_tag, asset])
+            return f'"{url}", "{digest}"'
+
+        block = re.sub(r'"(https://github\.com/[^"]+)", "[0-9a-f]+"', replace, block)
+        edits[CATALOG] = catalog[:start] + block + catalog[end:]
+
+    if tool in PINS:
+        lines = text(WORKFLOW).splitlines(keepends=True)
+        found = False
+        for index, line in enumerate(lines):
+            if line.strip().startswith(f"{PINS[tool]}:") and old in line:
+                lines[index] = line.replace(old, new)
+                found = True
+        if not found:
+            raise BumpError(f"{WORKFLOW} does not pin {tool} {old}")
+        edits[WORKFLOW] = "".join(lines)
+
+    for path, content in edits.items():
+        (root / path).write_text(content)
 
 
 def summary(tested, latest, results):
@@ -136,20 +228,38 @@ def summary(tested, latest, results):
     return "\n".join(lines)
 
 
-def gh(*args):
+def gh(*args, token=None):
+    """Run gh; `token` replaces GH_TOKEN (issues use the workflow's token)."""
+    env = dict(os.environ, GH_TOKEN=token) if token else None
     return subprocess.run(
-        ["gh", *args], check=True, capture_output=True, text=True
+        ["gh", *args], check=True, capture_output=True, text=True, env=env
     ).stdout
 
 
-def latest_versions(tools):
-    latest = {}
+def latest_tags(tools):
+    """Each tool's latest release tag."""
+    tags = {}
     for tool in tools:
         repo = REPOS.get(tool)
         if repo:
-            tag = gh("api", f"repos/{repo}/releases/latest", "--jq", ".tag_name")
-            latest[tool] = version_of(tool, tag.strip())
-    return latest
+            tags[tool] = gh(
+                "api", f"repos/{repo}/releases/latest", "--jq", ".tag_name"
+            ).strip()
+    return tags
+
+
+def asset_digest(repo, tag, name):
+    """The sha256 GitHub records for a release asset, or None."""
+    try:
+        digest = gh(
+            "api",
+            f"repos/{repo}/releases/tags/{tag}",
+            "--jq",
+            f'.assets[] | select(.name == "{name}") | .digest',
+        ).strip()
+    except subprocess.CalledProcessError:
+        return None
+    return digest.removeprefix("sha256:") or None
 
 
 def mismatched_assets(assets):
@@ -183,7 +293,103 @@ def read_results(directory):
     return results
 
 
+def open_bump(action, old, tag):
+    """Bump `action.tool` on branch latest-tools/<tool> from main and open or
+    retitle its pull request. Raises BumpError when the bump cannot be made."""
+    repository = gh(
+        "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"
+    ).strip()
+    branch = f"latest-tools/{action.tool}"
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    try:
+        bump(".", action.tool, old, action.version, tag, asset_digest)
+        try:
+            gh(
+                "api",
+                "-X",
+                "PATCH",
+                f"repos/{repository}/git/refs/heads/{branch}",
+                "-f",
+                f"sha={base}",
+                "-F",
+                "force=true",
+            )
+        except subprocess.CalledProcessError:
+            gh(
+                "api",
+                f"repos/{repository}/git/refs",
+                "-f",
+                f"ref=refs/heads/{branch}",
+                "-f",
+                f"sha={base}",
+            )
+        subprocess.run(
+            [
+                sys.executable,
+                "scripts/commit-via-api.py",
+                repository,
+                branch,
+                base,
+                action.title,
+            ],
+            check=True,
+        )
+    finally:
+        subprocess.run(["git", "checkout", "--", "."], check=True)
+    number = gh(
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number",
+        "--jq",
+        ".[0].number // empty",
+    ).strip()
+    if number:
+        gh("pr", "edit", number, "--title", action.title, "--body", action.body)
+    else:
+        gh(
+            "pr",
+            "create",
+            "--head",
+            branch,
+            "--base",
+            "main",
+            "--title",
+            action.title,
+            "--body",
+            action.body,
+        )
+
+
+def act(actions, tested, tags):
+    """Open bump pull requests, then keep one `latest-tools` issue per tool."""
+    issues = []
+    for action in actions:
+        if action.kind != "bump":
+            issues.append(action)
+            continue
+        try:
+            open_bump(action, tested[action.tool], tags[action.tool])
+        except (BumpError, subprocess.CalledProcessError) as error:
+            issues.append(
+                Action(
+                    action.tool,
+                    "behind",
+                    f"{action.tool}: {action.version} passes but cannot be bumped automatically",
+                    f"{action.body}\n\nThe automatic bump failed: {error}",
+                )
+            )
+    sync_issues(issues, tested)
+
+
 def sync_issues(issues, tools):
+    token = os.environ.get("ISSUES_TOKEN")
     gh(
         "label",
         "create",
@@ -193,6 +399,7 @@ def sync_issues(issues, tools):
         "--description",
         "Native tool releases ahead of or breaking depsmith",
         "--force",
+        token=token,
     )
     open_issues = json.loads(
         gh(
@@ -204,6 +411,7 @@ def sync_issues(issues, tools):
             "open",
             "--json",
             "number,title",
+            token=token,
         )
     )
     wanted = {issue.tool: issue for issue in issues}
@@ -218,6 +426,7 @@ def sync_issues(issues, tools):
                     str(old["number"]),
                     "--comment",
                     "Resolved or superseded by the latest run.",
+                    token=token,
                 )
         if issue and not any(old["title"] == issue.title for old in existing):
             gh(
@@ -229,6 +438,7 @@ def sync_issues(issues, tools):
                 issue.title,
                 "--body",
                 issue.body,
+                token=token,
             )
 
 
@@ -236,13 +446,14 @@ def main(argv):
     doctor = json.loads(pathlib.Path(argv[1]).read_text())
     results = read_results(argv[2])
     tested = tested_versions(doctor)
-    latest = latest_versions(tested)
-    issues = decide(tested, latest, results, mismatched_assets(pinned_assets(doctor)))
+    tags = latest_tags(tested)
+    latest = {tool: version_of(tool, tag) for tool, tag in tags.items()}
+    actions = decide(tested, latest, results, mismatched_assets(pinned_assets(doctor)))
     print(summary(tested, latest, results))
-    for issue in issues:
-        print(f"\n- **{issue.kind}**: {issue.title}")
-    if "--issues" in argv:
-        sync_issues(issues, tested)
+    for action in actions:
+        print(f"\n- **{action.kind}**: {action.title}")
+    if "--act" in argv:
+        act(actions, tested, tags)
     return 0
 
 

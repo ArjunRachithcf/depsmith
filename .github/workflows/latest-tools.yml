@@ -1,8 +1,10 @@
 # Weekly drift tracking for the native tools depsmith drives: Integration runs
 # once per tool with only that tool at its latest release (others pinned), then
-# scripts/tool-drift.py opens, updates or closes one `latest-tools` issue per
-# tool: broken by its latest release, tested version behind a passing release,
-# or a pinned download whose sha256 changed upstream.
+# scripts/tool-drift.py opens a pull request bumping each tool whose latest
+# release passes (tested version, pinned downloads and Integration pin, as a
+# GitHub-signed commit from the docs App so CI runs on it), and keeps one
+# `latest-tools` issue per tool that its latest release breaks, whose pinned
+# download's sha256 changed, or that cannot be bumped automatically.
 name: Latest tools
 on:
   schedule:
@@ -41,7 +43,15 @@ jobs:
           pattern: latest-*
           merge-multiple: true
           path: results
-      - name: Report drift and sync issues
+      - uses: actions/create-github-app-token@v3
+        id: app
+        with:
+          app-id: ${{ vars.DOCS_APP_ID }}
+          private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+      - name: Report drift, open bump pull requests and sync issues
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ISSUES_TOKEN: ${{ github.token }}
         run: |
           cargo run -q -p depsmith-cli --locked -- doctor --json > doctor.json
-          python scripts/tool-drift.py doctor.json results --issues | tee -a "$GITHUB_STEP_SUMMARY"
+          python scripts/tool-drift.py doctor.json results --act | tee -a "$GITHUB_STEP_SUMMARY"
