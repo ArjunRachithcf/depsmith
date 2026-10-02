@@ -44,7 +44,11 @@ jobs:
           match = re.search(r'^\{% set version = "([^"]+)" %\}$', recipe, re.MULTILINE)
           if not match:
               raise SystemExit('Cannot read conda recipe version')
-          versions = [manifest('Cargo.toml')['workspace']['package']['version'], manifest('pyproject.toml')['project']['version'], match.group(1)]
+          workspace = manifest('Cargo.toml')['workspace']
+          internal = [workspace['dependencies'][name]['version'] for name in ('depsmith-core', 'depsmith')]
+          if internal != [workspace['package']['version']] * 2:
+              raise SystemExit(f'Internal crate dependencies {internal} disagree with the workspace version')
+          versions = [workspace['package']['version'], manifest('pyproject.toml')['project']['version'], match.group(1)]
           # Cargo spells a pre-release 0.1.0-rc1; Python and conda, 0.1.0rc1.
           def canonical(version):
               return re.sub(r'[-_.]?(a|b|rc)[-_.]?(?=[0-9])', r'\1', version.lower())
@@ -81,6 +85,26 @@ jobs:
           name: sdist
           path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1
+  crates:
+    if: inputs.publish
+    needs: [validate, build, integration]
+    runs-on: ubuntu-latest
+    environment: crates
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      # crates.io trusted publishing: a short-lived token from this workflow's
+      # OIDC identity, configured for both crates on crates.io.
+      - uses: rust-lang/crates-io-auth-action@v1.0.5
+        id: auth
+      - name: Publish depsmith-core, then depsmith
+        run: cargo publish --workspace --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
   github-release:
     if: inputs.publish
     needs: [validate, build, integration]
@@ -92,7 +116,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Bundle standalone executables
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          path: source
+      - name: Bundle standalone executables and install scripts
         run: |
           mkdir assets
           for directory in artifacts/cli-*; do
@@ -101,6 +129,7 @@ jobs:
             tar -czf "assets/depsmith-${name#cli-}.tar.gz" -C "$directory" .
           done
           find artifacts -type f \( -name '*.whl' -o -name '*.conda' -o -name '*.tar.gz' \) -exec cp {} assets/ \;
+          cp source/scripts/install.sh source/scripts/install.ps1 assets/
           (cd assets && sha256sum -- * > SHA256SUMS)
       - name: Create draft release
         env:

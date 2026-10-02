@@ -21,21 +21,30 @@ uses the checkout and downloads Cargo dependencies; it is not a feedstock.
 
 ## Manual release workflow
 
-1. Finish release acceptance, keep Cargo, Python and conda recipe versions equal, and create
-   the matching version tag (`v0.1.0`, for example) through the normal review process.
+1. Finish release acceptance, keep Cargo, Python and conda recipe versions equal
+   (and the internal crate versions in the workspace `Cargo.toml`), and create
+   the matching version tag through the normal review process. Spell the tag the
+   Cargo way (`v0.1.0`, `v0.1.0-rc2`): `cargo binstall` downloads from
+   `releases/download/v{cargo version}`. Python and conda spell a pre-release
+   `0.1.0rc2`; the Release workflow compares them normalised.
 2. Run **Release** (`.github/workflows/release.yml`) with that existing tag and
    leave `publish` false. It resolves the tag to a commit, checks all three version
    declarations, and runs all CI build/test jobs and the native integration tests
    (real Pixi, Grype, conda-forge, pypi.org and GitHub API) on that exact commit.
-3. Review the artifacts. Configure GitHub environments `pypi` and `release`
-   with required reviewers before enabling publication. Configure a PyPI
+3. Review the artifacts. Configure GitHub environments `pypi`, `crates` and
+   `release` with required reviewers before enabling publication. Configure a
+   crates.io [trusted publisher](https://crates.io/docs/trusted-publishing) for
+   both `depsmith-core` and `depsmith` (repository `ArjunRachithcf/depsmith`,
+   workflow `release.yml`, environment `crates`). Configure a PyPI
    [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)
    for owner `ArjunRachithcf`, repository `depsmith`, workflow `release.yml`,
    environment `pypi`. Confirm ownership/availability of the PyPI project first.
 4. Run **Release** again with `publish` true. Only after all build/test jobs
    succeed does it request the environment approvals. It uploads those tested
-   wheels and sdist to PyPI and creates a **draft** GitHub release with CLI
-   archives, Python distributions, the Linux conda package and SHA-256 checksums.
+   wheels and sdist to PyPI, publishes `depsmith-core` then `depsmith` to
+   crates.io, and creates a **draft** GitHub release (a pre-release for
+   `a`/`b`/`rc` tags) with the CLI archives named by target triple, the install
+   scripts, Python distributions, the Linux conda package and `SHA256SUMS`.
    Inspect and publish the GitHub draft separately.
 
 PyPI publishing and draft creation are independent jobs: one may succeed while

@@ -35,7 +35,7 @@ jobs:
       - name: Pick tools with a settled newer release
         id: pick
         run: |
-          cargo run -q -p depsmith-cli --locked -- doctor --json > doctor.json
+          cargo run -q -p depsmith --locked -- doctor --json > doctor.json
           tools=$(python scripts/tool-drift.py pick doctor.json)
           echo "Picked: $tools"
           echo "tools=$tools" >> "$GITHUB_OUTPUT"
@@ -86,5 +86,5 @@ jobs:
         run: |
           mkdir -p results
           printf '%s' "$PICKED" > picked.json
-          cargo run -q -p depsmith-cli --locked -- doctor --json > doctor.json
+          cargo run -q -p depsmith --locked -- doctor --json > doctor.json
           python scripts/tool-drift.py report doctor.json results picked.json --act | tee -a "$GITHUB_STEP_SUMMARY"

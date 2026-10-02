@@ -5,7 +5,7 @@
 | Crate | Role |
 |---|---|
 | `depsmith-core` | The engine: discovery, adapters, staging, proposals, scanning and applying. |
-| `depsmith-cli` | The `depsmith` executable: arguments, prompts, reports and exit statuses. |
+| `depsmith` (crates/cli) | The `depsmith` executable: arguments, prompts, reports and exit statuses. |
 | `depsmith-python` | PyO3 bindings (`depsmith._native`) behind the typed Python package in `python/depsmith`. |
 
 The CLI and Python API are thin layers; all behaviour lives in the core.

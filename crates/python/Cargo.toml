@@ -4,16 +4,18 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+# Shipped as the Python wheel, not on crates.io.
+publish = false
 
 [lib]
 name = "_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-depsmith-core = { path = "../core" }
+depsmith-core.workspace = true
 serde_json.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
-depsmith-cli = { path = "../cli" }
+depsmith.workspace = true
 
 [lints]
 workspace = true

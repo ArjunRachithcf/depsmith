@@ -7,7 +7,23 @@ source). Each target is resolved by its native package manager (Pixi, uv,
 cargo, conda-lock and micromamba), and Grype scans for vulnerabilities.
 
 ```sh
-python -m pip install .          # from a checkout
+pip install --pre depsmith         # Python 3.10+: CLI and Python API
+cargo install depsmith             # build the CLI from crates.io (Rust 1.89+)
+cargo binstall depsmith            # the release executable, via cargo-binstall
+curl -fsSL https://github.com/ArjunRachithcf/depsmith/releases/latest/download/install.sh | sh
+```
+
+On Windows, `irm https://github.com/ArjunRachithcf/depsmith/releases/latest/download/install.ps1 | iex`.
+The install scripts download the release executable for your platform, verify
+it against the release's `SHA256SUMS`, and install it to `~/.local/bin`
+(`%LOCALAPPDATA%\depsmith\bin` on Windows); pass `--version`/`-Version` to pin
+a release and `--prefix`/`-Prefix` to choose the directory. The `--pre` flag
+is needed while only release candidates are published.
+
+From a checkout: `python -m pip install .`, or
+`cargo build --release --locked -p depsmith` for the executable alone.
+
+```sh
 depsmith --version
 depsmith init --root /path/to/project   # check the tools its targets use
 depsmith doctor                  # capabilities and every native tool's status
@@ -29,7 +45,7 @@ no longer pins, is not used until `init` installs it again. cargo and
 conda-lock are not downloaded: install them yourself. Tools on `PATH` or given
 with `--tool NAME=PATH` are always used as they are.
 
-A standalone executable builds with `cargo build --release --locked -p depsmith-cli`.
+A standalone executable builds with `cargo build --release --locked -p depsmith`.
 
 `depsmith doctor` reports each native tool as `tested`, `untested` or
 `unavailable`, with where it was found (`configured`, `path`, `downloaded`,

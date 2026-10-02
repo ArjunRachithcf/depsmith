@@ -56,7 +56,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
       - run: cargo test --workspace --locked --no-fail-fast
-      - run: cargo build --release --locked -p depsmith-cli
+      - run: cargo build --release --locked -p depsmith
       - run: python -c "import shutil; shutil.copyfile('LICENSE', 'target/release/LICENSE')"
       - uses: actions/upload-artifact@v4
         with:
@@ -140,6 +140,30 @@ jobs:
           python-version: '3.10'
       - uses: dtolnay/rust-toolchain@1.89.0
       - run: cargo check --workspace --locked
+  crates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Package and verify both crates as crates.io would
+        run: cargo publish --workspace --dry-run --locked
+  install-scripts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: install.sh and install.ps1 against a local release
+        run: python -m unittest discover -s scripts/tests -p "test_install_scripts.py" -v
   sdist:
     runs-on: ubuntu-latest
     steps:

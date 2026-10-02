@@ -8,12 +8,20 @@ version = "0.1.0-rc1"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
+repository = "https://github.com/ArjunRachithcf/depsmith"
+homepage = "https://github.com/ArjunRachithcf/depsmith/wiki"
+keywords = ["dependencies", "lockfile", "update", "vulnerability", "uv"]
+categories = ["development-tools", "command-line-utilities"]
 
 [workspace.lints.rust]
 # Public items document themselves; clippy -D warnings turns gaps into errors.
 missing_docs = "warn"
 
 [workspace.dependencies]
+# Internal crates: the version must equal workspace.package.version (checked
+# by the Release workflow) so the published crates depend on each other.
+depsmith-core = { path = "crates/core", version = "0.1.0-rc1" }
+depsmith = { path = "crates/cli", version = "0.1.0-rc1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

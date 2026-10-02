@@ -26,12 +26,22 @@ changes, and the reviewed files are then written without resolving again.
 ## Install
 
 ```sh
-python -m pip install .   # from a checkout; Python 3.10+
-depsmith init             # checks the native tools your targets use; offers to install missing ones
+pip install --pre depsmith         # Python 3.10+: CLI and Python API
+cargo install depsmith             # build the CLI from crates.io (Rust 1.89+)
+cargo binstall depsmith            # the release executable, via cargo-binstall
+curl -fsSL https://github.com/ArjunRachithcf/depsmith/releases/latest/download/install.sh | sh
 ```
 
-A standalone executable builds with `cargo build --release --locked -p depsmith-cli`
-(Rust 1.89+). See [Getting started](https://github.com/ArjunRachithcf/depsmith/wiki/Getting-started).
+On Windows, `irm https://github.com/ArjunRachithcf/depsmith/releases/latest/download/install.ps1 | iex`.
+The install scripts download the release executable for your platform, verify
+it against the release's `SHA256SUMS`, and install it to `~/.local/bin`
+(`%LOCALAPPDATA%\depsmith\bin` on Windows); pass `--version`/`-Version` to pin
+a release and `--prefix`/`-Prefix` to choose the directory. The `--pre` flag
+is needed while only release candidates are published.
+
+Then `depsmith init` checks the native tools your targets use and offers to
+install the missing ones. See
+[Getting started](https://github.com/ArjunRachithcf/depsmith/wiki/Getting-started).
 
 ## Quick start
 

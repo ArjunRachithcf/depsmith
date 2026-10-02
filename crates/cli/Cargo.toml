@@ -1,16 +1,28 @@
 [package]
-name = "depsmith-cli"
+name = "depsmith"
+description = "Prepare, review and apply dependency updates with each project's own package manager"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+include = ["src/**/*", "Cargo.toml"]
+
+# The CLI's internals, shared with the Python package's `depsmith` entry point.
+[lib]
+name = "depsmith_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "depsmith"
 path = "src/main.rs"
 
 [dependencies]
-depsmith-core = { path = "../core" }
+depsmith-core.workspace = true
 serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 
@@ -25,3 +37,10 @@ harness = false
 
 [lints]
 workspace = true
+
+# `cargo binstall depsmith` installs the release executables (checksummed in
+# the release's SHA256SUMS) instead of building from source.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/depsmith-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "depsmith{ binary-ext }"
