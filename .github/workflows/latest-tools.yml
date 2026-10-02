@@ -1,9 +1,11 @@
-# Weekly drift tracking for the native tools depsmith drives: Integration runs
-# once per tool with only that tool at its latest release (others pinned), then
-# scripts/tool-drift.py opens a pull request bumping each tool whose latest
-# release passes (tested version, pinned downloads and Integration pin, as a
-# GitHub-signed commit from the docs App so CI runs on it), and keeps one
-# `latest-tools` issue per tool that its latest release breaks, whose pinned
+# Weekly drift tracking for the native tools depsmith drives. A tool's
+# "latest" is its newest stable release published at least 7 days ago, so new
+# releases settle first. `pick` lists the tools with such a release newer than
+# the tested one; Integration runs once per picked tool at that version (others
+# pinned); then scripts/tool-drift.py opens a pull request bumping each tool
+# whose release passed (tested version, pinned downloads and Integration pin,
+# as a GitHub-signed commit from the docs App so CI runs on it), and keeps one
+# `latest-tools` issue per tool that the release breaks, whose pinned
 # download's sha256 changed, or that cannot be bumped automatically.
 name: Latest tools
 on:
@@ -13,18 +15,40 @@ on:
 permissions:
   contents: read
 jobs:
+  pick:
+    runs-on: ubuntu-latest
+    outputs:
+      tools: ${{ steps.pick.outputs.tools }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Pick tools with a settled newer release
+        id: pick
+        run: |
+          cargo run -q -p depsmith-cli --locked -- doctor --json > doctor.json
+          tools=$(python scripts/tool-drift.py pick doctor.json)
+          echo "Picked: $tools"
+          echo "tools=$tools" >> "$GITHUB_OUTPUT"
   integration:
+    needs: pick
+    if: needs.pick.outputs.tools != '[]'
     strategy:
       fail-fast: false
       matrix:
-        tool: [pixi, uv, grype, conda-lock, conda]
+        include: ${{ fromJSON(needs.pick.outputs.tools) }}
     uses: ./.github/workflows/integration.yml
     with:
       ref: ${{ github.sha }}
       latest-tool: ${{ matrix.tool }}
+      latest-version: ${{ matrix.version }}
   report:
-    needs: integration
-    if: always()
+    needs: [pick, integration]
+    if: always() && needs.pick.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,6 +63,7 @@ jobs:
         with:
           python-version: '3.10'
       - uses: actions/download-artifact@v4
+        if: needs.integration.result != 'skipped'
         with:
           pattern: latest-*
           merge-multiple: true
@@ -53,5 +78,6 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           ISSUES_TOKEN: ${{ github.token }}
         run: |
+          mkdir -p results
           cargo run -q -p depsmith-cli --locked -- doctor --json > doctor.json
-          python scripts/tool-drift.py doctor.json results --act | tee -a "$GITHUB_STEP_SUMMARY"
+          python scripts/tool-drift.py report doctor.json results --act | tee -a "$GITHUB_STEP_SUMMARY"

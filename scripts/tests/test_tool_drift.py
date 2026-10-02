@@ -91,8 +91,8 @@ const MICROMAMBA: &[Asset] = &[
 ];
 """
 WORKFLOW = """env:
-  UV_VERSION: ${{ inputs.latest-tool == 'uv' && 'latest' || '0.12.15' }}
-  MICROMAMBA_PIN: ${{ inputs.latest-tool != 'conda' && '==2.9.0' || '' }}
+  UV_VERSION: ${{ inputs.latest-tool == 'uv' && inputs.latest-version || '0.12.15' }}
+  MICROMAMBA_PIN: ${{ format('=={0}', inputs.latest-tool == 'conda' && inputs.latest-version || '2.9.0') }}
 """
 
 
@@ -192,28 +192,71 @@ class ResultsTests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as directory:
-            for name, status in files.items():
-                pathlib.Path(directory, name).write_text(status + "\n")
+            for name, content in files.items():
+                pathlib.Path(directory, name).write_text(content + "\n")
             return drift.read_results(directory)
 
     def test_a_tool_fails_when_any_os_fails(self):
         results = self.results(
-            {"uv-Linux": "success", "uv-macOS": "failure", "pixi-Linux": "success"}
+            {
+                "uv-Linux": "success 0.12.22",
+                "uv-macOS": "failure 0.12.22",
+                "pixi-Linux": "success 0.81.0",
+            }
         )
-        self.assertEqual(results["uv"], "failure")
-        self.assertEqual(results["pixi"], "success")
+        self.assertEqual(results["uv"], ("failure", "0.12.22"))
+        self.assertEqual(results["pixi"], ("success", "0.81.0"))
+
+    def test_only_runs_of_the_eligible_release_count(self):
+        results = drift.judged(
+            {"uv": ("success", "0.12.21"), "pixi": ("success", "0.81.0")},
+            latest={"uv": "0.12.22", "pixi": "0.81.0"},
+        )
+        # The uv run tested 0.12.21, not the eligible 0.12.22, so it does
+        # not count; cargo passed in every run.
+        self.assertEqual(results, {"pixi": "success", "cargo": "success"})
 
     def test_cargo_is_judged_only_when_every_run_agrees(self):
+        latest = {"uv": "1", "pixi": "1"}
         self.assertNotIn(
-            "cargo", self.results({"uv-Linux": "failure", "pixi-Linux": "success"})
+            "cargo",
+            drift.judged({"uv": ("failure", "1"), "pixi": ("success", "1")}, latest),
         )
         self.assertEqual(
-            self.results({"uv-Linux": "failure", "pixi-Linux": "failure"})["cargo"],
+            drift.judged({"uv": ("failure", "1"), "pixi": ("failure", "1")}, latest)[
+                "cargo"
+            ],
             "failure",
         )
+
+
+RELEASES = (
+    {"tag_name": "0.12.23", "published_at": "2026-10-01T00:00:00Z"},
+    {
+        "tag_name": "0.13.0rc1",
+        "published_at": "2026-09-20T00:00:00Z",
+        "prerelease": True,
+    },
+    {"tag_name": "0.12.22", "published_at": "2026-09-24T12:00:00Z"},
+    {"tag_name": "0.12.21", "published_at": "2026-09-10T00:00:00Z"},
+    {"tag_name": "0.12.24", "draft": True, "published_at": None},
+)
+
+
+class CooldownTests(unittest.TestCase):
+    def test_the_newest_stable_release_past_the_cooldown_is_eligible(self):
+        now = drift.parse_time("2026-10-02T00:00:00Z")
+        self.assertEqual(drift.eligible(RELEASES, now, days=7), "0.12.22")
+        self.assertEqual(drift.eligible(RELEASES, now, days=0), "0.12.23")
+        self.assertIsNone(drift.eligible(RELEASES, now, days=60))
+
+    def test_pick_runs_only_tools_with_an_eligible_newer_release(self):
+        picked = drift.pick(
+            {"uv": "0.12.15", "pixi": "0.80.0", "cargo": "1.98.1"},
+            {"uv": "0.12.22", "pixi": "v0.80.0", "cargo": "1.99.0"},
+        )
         self.assertEqual(
-            self.results({"uv-Linux": "success", "pixi-Linux": "success"})["cargo"],
-            "success",
+            picked, [{"tool": "uv", "version": "0.12.22", "tag": "0.12.22"}]
         )
 
 
@@ -246,6 +289,7 @@ class ParsingTests(unittest.TestCase):
             results={"uv": "success", "pixi": "success"},
         )
         self.assertIn("| uv | 0.12.15 | 0.12.21 | success |", text)
+        self.assertIn("Latest (past cooldown)", text)
         self.assertIn("| pixi | 0.80.0 | 0.80.0 | success |", text)
 
 

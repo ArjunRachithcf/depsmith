@@ -1,21 +1,25 @@
-"""Report how the native tools depsmith drives drift from their latest releases.
+"""Track the native tools depsmith drives against their releases.
 
-Run by the Latest tools workflow after Integration ran once per tool with
-only that tool at its latest release:
+A tool's "latest" is its newest stable release published at least
+--cooldown-days (default 7) ago, so brand-new releases settle first.
 
-    python scripts/tool-drift.py DOCTOR_JSON RESULTS_DIR [--issues]
+    python scripts/tool-drift.py pick DOCTOR_JSON
+    python scripts/tool-drift.py report DOCTOR_JSON RESULTS_DIR [--act]
 
-DOCTOR_JSON is `depsmith doctor --json` (tested versions and pinned
-downloads); RESULTS_DIR holds one `<tool>-<os>` file per Integration job with
-its status. Latest releases and asset digests come from the GitHub API via
-`gh`. A Markdown summary goes to stdout. With --act (run from a checkout of
-main, GH_TOKEN a GitHub App token so pull requests trigger CI), a tool whose
-latest release passes Integration gets a pull request that bumps its tested
-version, pinned downloads and Integration pin together; a tool broken by its
-latest release, a pinned download whose sha256 changed, or a bump that cannot
-be made gets one open issue labelled `latest-tools`. Resolved issues close.
+`pick` prints, as JSON for the Latest tools matrix, each runnable tool whose
+eligible release differs from its tested version, with that version and tag.
+`report` reads `depsmith doctor --json` (tested versions and pinned
+downloads) and RESULTS_DIR (one `<tool>-<os>` file per Integration job holding
+"<status> <version>"); only runs of the eligible release count. It prints a
+Markdown summary. With --act (run from a checkout of main, GH_TOKEN a GitHub
+App token so pull requests trigger CI, ISSUES_TOKEN for issues), a tool whose
+eligible release passes Integration gets a pull request that bumps its tested
+version, pinned downloads and Integration pin together; a tool broken by it,
+a pinned download whose sha256 changed, or a bump that cannot be made gets
+one open issue labelled `latest-tools`. Resolved issues close.
 """
 
+import datetime
 import json
 import os
 import pathlib
@@ -25,6 +29,9 @@ import sys
 from dataclasses import dataclass
 
 LABEL = "latest-tools"
+COOLDOWN_DAYS = 7
+# Tools Integration can run at a chosen version (cargo is always stable Rust).
+RUNNABLE = ("pixi", "uv", "grype", "conda-lock", "conda")
 
 # Upstream release repository of each tool (by depsmith tool name).
 REPOS = {
@@ -79,6 +86,35 @@ def version_of(tool, tag):
     if tool == "conda":
         version = version.rsplit("-", 1)[0]
     return version
+
+
+def parse_time(text):
+    """An aware datetime from GitHub's `2026-10-01T00:00:00Z`."""
+    return datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def eligible(releases, now, days=COOLDOWN_DAYS):
+    """The tag of the newest stable release published at least `days` before
+    `now`, or None."""
+    cutoff = now - datetime.timedelta(days=days)
+    candidates = [
+        (parse_time(r["published_at"]), r["tag_name"])
+        for r in releases
+        if not r.get("draft") and not r.get("prerelease") and r.get("published_at")
+    ]
+    settled = [c for c in candidates if c[0] <= cutoff]
+    return max(settled)[1] if settled else None
+
+
+def pick(tested, tags):
+    """Runnable tools whose eligible release (by tag) is not the tested one."""
+    return [
+        {"tool": tool, "version": version_of(tool, tags[tool]), "tag": tags[tool]}
+        for tool in RUNNABLE
+        if tool in tested
+        and tags.get(tool)
+        and version_of(tool, tags[tool]) != tested[tool]
+    ]
 
 
 def tested_versions(doctor):
@@ -217,7 +253,7 @@ def bump(root, tool, old, new, new_tag, digest_of):
 def summary(tested, latest, results):
     """A Markdown table of every tool's tested and latest version and result."""
     lines = [
-        "| Tool | Tested | Latest | Integration |",
+        "| Tool | Tested | Latest (past cooldown) | Integration |",
         "|---|---|---|---|",
     ]
     for tool, version in sorted(tested.items()):
@@ -236,16 +272,16 @@ def gh(*args, token=None):
     ).stdout
 
 
-def latest_tags(tools):
-    """Each tool's latest release tag."""
+def eligible_tags(tools, days):
+    """Each tool's eligible release tag (see `eligible`)."""
+    now = datetime.datetime.now(datetime.timezone.utc)
     tags = {}
     for tool in tools:
         repo = REPOS.get(tool)
         if repo:
-            tags[tool] = gh(
-                "api", f"repos/{repo}/releases/latest", "--jq", ".tag_name"
-            ).strip()
-    return tags
+            releases = json.loads(gh("api", f"repos/{repo}/releases?per_page=50"))
+            tags[tool] = eligible(releases, now, days)
+    return {tool: tag for tool, tag in tags.items() if tag}
 
 
 def asset_digest(repo, tag, name):
@@ -278,19 +314,30 @@ def mismatched_assets(assets):
 
 
 def read_results(directory):
-    """Each tool's Integration result: failure if any OS failed."""
+    """Each tool's Integration (status, version): failure if any OS failed."""
     results = {}
     for path in sorted(pathlib.Path(directory).glob("*")):
         tool = path.name.rsplit("-", 1)[0]
-        status = path.read_text().strip()
-        if results.get(tool) != "failure":
-            results[tool] = "success" if status == "success" else "failure"
-    # Every run uses stable Rust: cargo is judged only when all runs agree,
-    # since one tool's failure says nothing about cargo.
-    outcomes = set(results.values())
-    if len(outcomes) == 1:
-        results["cargo"] = outcomes.pop()
+        status, _, version = path.read_text().strip().partition(" ")
+        status = "success" if status == "success" else "failure"
+        if results.get(tool, ("",))[0] != "failure":
+            results[tool] = (status, version)
     return results
+
+
+def judged(results, latest):
+    """Statuses of the runs that tested each tool's eligible release. Every
+    run uses stable Rust: cargo is judged only when all runs agree, since one
+    tool's failure says nothing about cargo."""
+    statuses = {
+        tool: status
+        for tool, (status, version) in results.items()
+        if latest.get(tool) == version
+    }
+    outcomes = {status for status, _ in results.values()}
+    if len(outcomes) == 1:
+        statuses["cargo"] = outcomes.pop()
+    return statuses
 
 
 def open_bump(action, old, tag):
@@ -443,12 +490,19 @@ def sync_issues(issues, tools):
 
 
 def main(argv):
-    doctor = json.loads(pathlib.Path(argv[1]).read_text())
-    results = read_results(argv[2])
+    days = COOLDOWN_DAYS
+    if "--cooldown-days" in argv:
+        days = int(argv[argv.index("--cooldown-days") + 1])
+    command, doctor = argv[1], json.loads(pathlib.Path(argv[2]).read_text())
     tested = tested_versions(doctor)
-    tags = latest_tags(tested)
+    tags = eligible_tags(tested, days)
+    if command == "pick":
+        print(json.dumps(pick(tested, tags)))
+        return 0
     latest = {tool: version_of(tool, tag) for tool, tag in tags.items()}
+    results = judged(read_results(argv[3]), latest)
     actions = decide(tested, latest, results, mismatched_assets(pinned_assets(doctor)))
+    print(f"Releases count once published at least {days} days ago.\n")
     print(summary(tested, latest, results))
     for action in actions:
         print(f"\n- **{action.kind}**: {action.title}")
