@@ -195,7 +195,16 @@ def sync_issues(issues, tools):
         "--force",
     )
     open_issues = json.loads(
-        gh("issue", "list", "--label", LABEL, "--state", "open", "--json", "number,title")
+        gh(
+            "issue",
+            "list",
+            "--label",
+            LABEL,
+            "--state",
+            "open",
+            "--json",
+            "number,title",
+        )
     )
     wanted = {issue.tool: issue for issue in issues}
     for tool in tools:
@@ -203,9 +212,24 @@ def sync_issues(issues, tools):
         issue = wanted.get(tool)
         for old in existing:
             if issue is None or old["title"] != issue.title:
-                gh("issue", "close", str(old["number"]), "--comment", "Resolved or superseded by the latest run.")
+                gh(
+                    "issue",
+                    "close",
+                    str(old["number"]),
+                    "--comment",
+                    "Resolved or superseded by the latest run.",
+                )
         if issue and not any(old["title"] == issue.title for old in existing):
-            gh("issue", "create", "--label", LABEL, "--title", issue.title, "--body", issue.body)
+            gh(
+                "issue",
+                "create",
+                "--label",
+                LABEL,
+                "--title",
+                issue.title,
+                "--body",
+                issue.body,
+            )
 
 
 def main(argv):
