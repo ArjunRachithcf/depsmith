@@ -621,38 +621,17 @@ pub(crate) fn accept(
 mod tests {
     use super::*;
 
-    /// An adapter that only declares whether it can change constraints.
-    struct Changes(crate::adapter::Support);
-    impl Adapter for Changes {
-        fn spec(&self) -> crate::adapter::AdapterSpec {
-            let mut spec = crate::adapter::AdapterSpec::new("changes", &[]);
-            spec.capabilities.constraint_changes = self.0.clone();
-            spec
-        }
-        fn detects(&self, _: &Path, _: &str) -> bool {
-            false
-        }
-        fn prepare(
-            &self,
-            _: &Path,
-            _: &Target,
-            _: &crate::UpdateOptions,
-        ) -> Result<crate::adapter::Candidate> {
-            unreachable!()
-        }
-    }
-
     #[test]
     fn hints_offer_upgrade_only_where_constraints_can_change() {
-        use crate::adapter::Support;
-        let upgrading = review(&Changes(Support::Supported), "six");
+        // Pixi can change constraints itself; uv cannot.
+        let upgrading = review(&crate::pixi::Pixi, "six");
         assert!(
             upgrading.contains("--accept six")
                 && upgrading.contains("--accept six=REQUIREMENT")
                 && upgrading.contains("--package six --upgrade"),
             "{upgrading}"
         );
-        let accepting = review(&Changes(Support::Unsupported("use --accept".into())), "six");
+        let accepting = review(&crate::uv::Uv::default(), "six");
         assert!(
             accepting.contains("--accept six") && !accepting.contains("--upgrade"),
             "{accepting}"
