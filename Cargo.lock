@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "depsmith"
-version = "0.1.0-rc1"
+version = "0.1.0-rc.2"
 dependencies = [
  "clap",
  "depsmith-core",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "depsmith-core"
-version = "0.1.0-rc1"
+version = "0.1.0-rc.2"
 dependencies = [
  "flate2",
  "ignore",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "depsmith-python"
-version = "0.1.0-rc1"
+version = "0.1.0-rc.2"
 dependencies = [
  "depsmith",
  "depsmith-core",

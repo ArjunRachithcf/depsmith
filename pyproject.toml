@@ -4,7 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "depsmith"
-version = "0.1.0rc1"
+# Derived by maturin from the Cargo version (0.1.0-rc.2 -> 0.1.0rc2).
+dynamic = ["version"]
 description = "Review and apply dependency updates with a shared Rust CLI and Python API"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -1,4 +1,6 @@
-{% set version = "0.1.0rc1" %}
+{# The version follows the Cargo workspace version, in conda/PEP 440 form. #}
+{% set cargo = load_file_data("../../Cargo.toml", from_recipe_dir=True) %}
+{% set version = cargo["workspace"]["package"]["version"] | replace("-alpha.", "a") | replace("-beta.", "b") | replace("-rc.", "rc") %}
 package:
   name: depsmith-cli
   version: {{ version }}

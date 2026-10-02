@@ -40,12 +40,12 @@ edit your shell startup files. While only release candidates are published,
 ask for one explicitly:
 
 ```sh
-curl -fsSL https://github.com/ArjunRachithcf/depsmith/releases/download/v0.1.0-rc2/install.sh | sh -s -- --version v0.1.0-rc2
+curl -fsSL https://github.com/ArjunRachithcf/depsmith/releases/download/v0.1.0-rc.2/install.sh | sh -s -- --version v0.1.0-rc.2
 ```
 
 ```powershell
-$env:DEPSMITH_VERSION = "v0.1.0-rc2"
-irm https://github.com/ArjunRachithcf/depsmith/releases/download/v0.1.0-rc2/install.ps1 | iex
+$env:DEPSMITH_VERSION = "v0.1.0-rc.2"
+irm https://github.com/ArjunRachithcf/depsmith/releases/download/v0.1.0-rc.2/install.ps1 | iex
 ```
 
 Other options: `--pre` (newest release including pre-releases), `--prefix DIR`

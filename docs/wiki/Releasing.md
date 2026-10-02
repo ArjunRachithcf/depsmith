@@ -21,15 +21,17 @@ uses the checkout and downloads Cargo dependencies; it is not a feedstock.
 
 ## Manual release workflow
 
-1. Finish release acceptance, keep Cargo, Python and conda recipe versions equal
-   (and the internal crate versions in the workspace `Cargo.toml`), and create
-   the matching version tag through the normal review process. Spell the tag the
-   Cargo way (`v0.1.0`, `v0.1.0-rc2`): `cargo binstall` downloads from
-   `releases/download/v{cargo version}`. Python and conda spell a pre-release
-   `0.1.0rc2`; the Release workflow compares them normalised.
+1. Finish release acceptance and set the one version: `version` in
+   `[workspace.package]` of `Cargo.toml` (and the two internal crate versions
+   beside it). It is SemVer, `X.Y.Z` or a dotted pre-release
+   `X.Y.Z-alpha.N` / `-beta.N` / `-rc.N` (the dot makes `rc.10` sort after
+   `rc.9`). Python and conda derive theirs: maturin turns `0.1.0-rc.2` into
+   `0.1.0rc2`, and the conda recipe reads `Cargo.toml` the same way. Create the
+   tag `v{version}` (`v0.1.0`, `v0.1.0-rc.2`) through the normal review
+   process; `cargo binstall` downloads from `releases/download/v{version}`.
 2. Run **Release** (`.github/workflows/release.yml`) with that existing tag and
-   leave `publish` false. It resolves the tag to a commit, checks all three version
-   declarations, and runs all CI build/test jobs and the native integration tests
+   leave `publish` false. It resolves the tag to a commit, checks the version scheme
+   (tag = v{Cargo version}; Python and conda derived from it), and runs all CI build/test jobs and the native integration tests
    (real Pixi, Grype, conda-forge, pypi.org and GitHub API) on that exact commit.
 3. Review the artifacts. Configure GitHub environments `pypi`, `crates` and
    `release` with required reviewers before enabling publication. crates.io
