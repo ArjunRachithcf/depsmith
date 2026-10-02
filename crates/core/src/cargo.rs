@@ -287,11 +287,7 @@ pub(crate) fn sparse_excluded(
     requirement: &str,
     timeout: u64,
 ) -> Result<Vec<Excluded>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout))
-        .user_agent("depsmith/0.1")
-        .build()
-        .map_err(|_| Error::Operation("cannot construct HTTP client".into()))?;
+    let client = crate::http::client(timeout)?;
     let url = format!("{index}{}", sparse_path(name));
     let response = client
         .get(&url)
@@ -399,6 +395,8 @@ impl Adapter for Cargo {
                 name: "cargo".into(),
                 default: "cargo".into(),
                 tested_versions: vec!["1.98.1".into()],
+
+                downloads: crate::provision::pinned("cargo"),
             }],
             capabilities: Capabilities {
                 package_selection: Support::Supported,

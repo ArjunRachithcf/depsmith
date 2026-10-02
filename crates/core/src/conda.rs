@@ -386,11 +386,7 @@ struct Sharded {
 pub(crate) struct ShardCache(Mutex<BTreeMap<String, Option<Arc<Sharded>>>>);
 
 fn get(url: &str, timeout: u64) -> Result<Option<Vec<u8>>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout))
-        .user_agent("depsmith/0.1")
-        .build()
-        .map_err(|_| Error::Operation("cannot construct HTTP client".into()))?;
+    let client = crate::http::client(timeout)?;
     let response = client
         .get(url)
         .send()
@@ -572,12 +568,16 @@ impl Adapter for Conda {
                     name: "conda-lock".into(),
                     default: "conda-lock".into(),
                     tested_versions: vec!["4.0.2".into()],
+
+                    downloads: crate::provision::pinned("conda-lock"),
                 },
                 ToolSpec {
                     // The solver conda-lock drives: conda, mamba or micromamba.
                     name: "conda".into(),
                     default: "conda".into(),
                     tested_versions: vec!["2.9.0".into()],
+
+                    downloads: crate::provision::pinned("conda"),
                 },
             ],
             capabilities: Capabilities {

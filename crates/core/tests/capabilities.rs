@@ -167,7 +167,7 @@ fn doctor_reports_capabilities_and_unavailable_tools() {
             .into(),
         ..Default::default()
     };
-    let report = depsmith_core::doctor(&options);
+    let report = depsmith_core::doctor(std::path::Path::new("."), &options);
     assert_eq!(report["schema_version"], 1);
     let adapters = report["adapters"].as_array().unwrap();
     assert!(adapters

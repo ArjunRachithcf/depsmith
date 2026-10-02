@@ -222,6 +222,8 @@ impl Adapter for Uv {
                 name: "uv".into(),
                 default: "uv".into(),
                 tested_versions: vec!["0.12.15".into()],
+
+                downloads: crate::provision::pinned("uv"),
             }],
             capabilities: Capabilities {
                 package_selection: Support::Supported,

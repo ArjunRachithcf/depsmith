@@ -9,12 +9,14 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+/// Whether `path` is non-empty and made only of normal components, so that
+/// joining it to a directory stays inside that directory.
+pub(crate) fn contained(path: &Path) -> bool {
+    !path.as_os_str().is_empty() && path.components().all(|c| matches!(c, Component::Normal(_)))
+}
+
 pub(crate) fn relative(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty()
-        || path
-            .components()
-            .any(|c| !matches!(c, Component::Normal(_)))
-    {
+    if !contained(path) {
         return Err(Error::Invalid(format!(
             "expected a relative path inside the repository: {}",
             path.display()

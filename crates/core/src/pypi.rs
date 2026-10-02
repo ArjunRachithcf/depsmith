@@ -120,11 +120,7 @@ pub(crate) fn uv_index_urls(settings: Option<&toml::Value>) -> Vec<String> {
 /// Fetch a project page from a credential-free index URL.
 pub(crate) fn fetch(index: &str, package: &str, timeout: u64) -> Result<Value> {
     const JSON: &str = "application/vnd.pypi.simple.v1+json";
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout))
-        .user_agent("depsmith/0.1")
-        .build()
-        .map_err(|_| Error::Operation("cannot construct HTTP client".into()))?;
+    let client = crate::http::client(timeout)?;
     let url = format!("{index}/{}/", crate::adapter::pypi_key(package));
     let response = client
         .get(&url)

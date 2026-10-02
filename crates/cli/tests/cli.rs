@@ -91,6 +91,54 @@ if [ "$1" = update ]; then printf 'version: 7\npackages: []\n' > pixi.lock; fi
 }
 
 #[test]
+fn noninteractive_init_reports_missing_used_tools_without_installing() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("pyproject.toml"),
+        "[project]\nname = \"p\"\nversion = \"0.1.0\"\n\n[tool.uv]\n",
+    )
+    .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let run = |json: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_depsmith"));
+        command
+            .env("DEPSMITH_TOOLS_DIR", cache.path())
+            .arg("--root")
+            .arg(root.path())
+            .args([
+                "init",
+                "--non-interactive",
+                "--tool",
+                "uv=depsmith-nonexistent-executable",
+            ]);
+        if json {
+            command.arg("--json");
+        }
+        command.output().unwrap()
+    };
+    let output = run(true);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["targets"], serde_json::json!(["uv:pyproject.toml"]));
+    // Only the tools discovered targets use are checked.
+    let tools: Vec<&str> = report["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["tool"].as_str().unwrap())
+        .collect();
+    assert_eq!(tools, ["uv"]);
+    assert_eq!(report["missing"], serde_json::json!(["uv"]));
+    assert_eq!(report["installed"], serde_json::json!([]));
+    assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 0);
+    let text = String::from_utf8(run(false).stdout).unwrap();
+    assert!(
+        text.contains("Still missing: uv") && text.contains("depsmith init --fetch-tools"),
+        "{text}"
+    );
+}
+
+#[test]
 fn doctor_explains_prerequisites_in_plain_text() {
     let output = Command::new(env!("CARGO_BIN_EXE_depsmith"))
         .args([

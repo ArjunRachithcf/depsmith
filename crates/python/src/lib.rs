@@ -105,9 +105,21 @@ fn scan_json(
 }
 #[pyfunction]
 fn doctor_json(py: Python<'_>, root: String, options: String) -> PyResult<String> {
-    py.detach(|| config(&root, &options).map(|settings| core::doctor(&settings.options)))
-        .map(|r| serde_json::to_string(&r).unwrap())
-        .map_err(error)
+    py.detach(|| {
+        config(&root, &options).map(|settings| core::doctor(Path::new(&root), &settings.options))
+    })
+    .map(|r| serde_json::to_string(&r).unwrap())
+    .map_err(error)
+}
+#[pyfunction]
+fn init_json(py: Python<'_>, root: String, options: String, fetch_tools: bool) -> PyResult<String> {
+    py.detach(|| {
+        config(&root, &options).and_then(|settings| {
+            core::init(Path::new(&root), &settings.options, &mut |_| fetch_tools)
+        })
+    })
+    .map(|r| serde_json::to_string(&r).unwrap())
+    .map_err(error)
 }
 #[pyfunction]
 fn recover_json(py: Python<'_>, root: String) -> PyResult<String> {
@@ -126,6 +138,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prepare, m)?)?;
     m.add_function(wrap_pyfunction!(scan_json, m)?)?;
     m.add_function(wrap_pyfunction!(doctor_json, m)?)?;
+    m.add_function(wrap_pyfunction!(init_json, m)?)?;
     m.add_function(wrap_pyfunction!(recover_json, m)?)?;
     m.add_function(wrap_pyfunction!(cli, m)?)?;
     m.add(

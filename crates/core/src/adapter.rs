@@ -49,6 +49,10 @@ pub struct ToolSpec {
     pub default: String,
     /// Versions exercised by depsmith's tests.
     pub tested_versions: Vec<String>,
+    /// Pinned release assets of the first tested version, by host, that
+    /// [`crate::provision`] may download when the tool is missing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub downloads: Vec<crate::provision::ToolDownload>,
 }
 
 /// Files that are resolver inputs of a target even when they are ignored by

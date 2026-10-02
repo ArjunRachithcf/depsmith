@@ -80,6 +80,14 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Check the native tools the discovered targets use, offering to
+    /// install each missing one (pinned, sha256-verified) into the tool
+    /// cache; exit 3 when a used tool is still missing.
+    Init {
+        /// Install every missing used tool without asking.
+        #[arg(long)]
+        fetch_tools: bool,
+    },
     /// List the targets found under the root.
     Discover,
     /// Report adapter capabilities and whether native tools are available.
@@ -183,13 +191,44 @@ fn select_interactively(
     }
     Ok(selected)
 }
+/// Whether to install the missing `tool` during `init`: always with
+/// `--fetch-tools`, after asking when interactive, never otherwise.
+fn consent(
+    tool: &core::adapter::ToolSpec,
+    fetch_tools: bool,
+    interactive: bool,
+    prompt: &mut dyn FnMut(&str) -> Result<bool>,
+) -> bool {
+    if fetch_tools {
+        return true;
+    }
+    if !interactive {
+        return false;
+    }
+    let cache = core::provision::cache_dir()
+        .map_or_else(|| "the tool cache".to_owned(), |d| d.display().to_string());
+    let version = tool.tested_versions.first().map_or("", String::as_str);
+    let name = &tool.name;
+    prompt(&format!(
+        "{name} is not installed. Download {name} {version} (sha256-verified) into {cache}?"
+    ))
+    .unwrap_or(false)
+}
 fn execute(cli: &Cli) -> Result<(Value, u8)> {
     if cli.json && cli.markdown {
         return Err(Error::Invalid("choose JSON or Markdown output".into()));
     }
     let config = core::config::settings(&cli.root, &overrides(cli)?)?;
     if matches!(cli.command, Command::Doctor) {
-        return Ok((core::doctor(&config.options), 0));
+        return Ok((core::doctor(&cli.root, &config.options), 0));
+    }
+    if let Command::Init { fetch_tools } = cli.command {
+        let interactive = io::stdin().is_terminal() && !cli.non_interactive && !cli.json;
+        let report = core::init(&cli.root, &config.options, &mut |tool| {
+            consent(tool, fetch_tools, interactive, &mut confirm)
+        })?;
+        let missing = report["missing"].as_array().is_some_and(|m| !m.is_empty());
+        return Ok((report, if missing { 3 } else { 0 }));
     }
     if matches!(cli.command, Command::Recover) {
         return Ok((
@@ -220,8 +259,9 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
             "no targets selected; pass --target, --all, or configure targets".into(),
         ));
     }
+    let options = config.options;
     if matches!(cli.command, Command::Scan) {
-        let reports = core::scan_existing(&cli.root, &selected, &config.options)?;
+        let reports = core::scan_existing(&cli.root, &selected, &options)?;
         let status = if reports.iter().all(|r| r.policy_passed) {
             0
         } else {
@@ -229,7 +269,7 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
         };
         return Ok((json!({"schema_version":1, "scans":reports}), status));
     }
-    let proposal = core::Engine::default().prepare(&cli.root, &selected, config.options)?;
+    let proposal = core::Engine::default().prepare(&cli.root, &selected, options)?;
     let mut status = proposal.exit_code(matches!(cli.command, Command::Check));
     let mut applied = None;
     if let Command::Update {
@@ -348,7 +388,62 @@ fn render_scans(reports: &[Value], lines: &mut Vec<String>) {
         }
     }
 }
+fn render_init(value: &Value) -> String {
+    let names = |key: &str| -> Vec<&str> {
+        value[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect()
+    };
+    let mut lines = vec![format!(
+        "Native tools used by {} target(s)",
+        names("targets").len()
+    )];
+    for tool in value["tools"].as_array().into_iter().flatten() {
+        let used_by: Vec<_> = tool["used_by"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let state = match tool["source"].as_str() {
+            Some("missing") => "missing".to_owned(),
+            Some("untrusted") => format!(
+                "not trusted ({})",
+                tool["untrusted"].as_str().unwrap_or("unknown reason")
+            ),
+            source => format!(
+                "{} ({}, version {})",
+                tool["status"].as_str().unwrap_or("?"),
+                source.unwrap_or("?"),
+                tool["version"].as_str().unwrap_or("unknown")
+            ),
+        };
+        lines.push(format!(
+            "- {}: {state}; used by {}",
+            tool["tool"].as_str().unwrap_or("?"),
+            used_by.join(", ")
+        ));
+    }
+    let installed = names("installed");
+    if !installed.is_empty() {
+        lines.push(format!("Installed: {}", installed.join(", ")));
+    }
+    let missing = names("missing");
+    if !missing.is_empty() {
+        lines.push(format!(
+            "Still missing: {}. Install them, pass --tool NAME=PATH, or run `depsmith init --fetch-tools`.",
+            missing.join(", ")
+        ));
+    }
+    lines.join("\n")
+}
 fn render(value: &Value, markdown: bool) -> String {
+    if value.get("installed").is_some() && value.get("tools").is_some() {
+        return render_init(value);
+    }
     if value.get("adapters").is_some() && value.get("tools").is_some() {
         return render_doctor(value);
     }
@@ -496,6 +591,53 @@ mod tests {
             asked.push(question.to_owned());
             Ok(*answers.next().expect("unexpected prompt"))
         }
+    }
+
+    fn tool(name: &str, downloadable: bool) -> core::adapter::ToolSpec {
+        core::adapter::ToolSpec {
+            name: name.into(),
+            default: name.into(),
+            tested_versions: vec!["1.0.0".into()],
+            downloads: if downloadable {
+                vec![core::provision::ToolDownload {
+                    os: std::env::consts::OS.into(),
+                    arch: std::env::consts::ARCH.into(),
+                    url: format!("https://example.invalid/{name}"),
+                    sha256: "0".repeat(64),
+                    archive: core::provision::Archive::Binary,
+                    executable: name.into(),
+                }]
+            } else {
+                vec![]
+            },
+        }
+    }
+
+    #[test]
+    fn init_installs_with_the_flag_or_a_confirmed_prompt_only() {
+        let uv = tool("uv", true);
+        let mut asked = vec![];
+        assert!(consent(&uv, true, true, &mut scripted(&[], &mut asked)));
+        assert!(!consent(&uv, false, false, &mut scripted(&[], &mut asked)));
+        assert!(asked.is_empty());
+        assert!(consent(
+            &uv,
+            false,
+            true,
+            &mut scripted(&[true], &mut asked)
+        ));
+        assert!(!consent(
+            &uv,
+            false,
+            true,
+            &mut scripted(&[false], &mut asked)
+        ));
+        assert_eq!(asked.len(), 2);
+        assert!(
+            asked[0].starts_with("uv is not installed. Download uv 1.0.0 (sha256-verified)"),
+            "{}",
+            asked[0]
+        );
     }
 
     #[test]

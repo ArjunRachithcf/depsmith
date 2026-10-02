@@ -524,6 +524,33 @@ def doctor(root: Path = ".", *, options: UpdateOptions | None = None) -> dict[st
     )
 
 
+def init(
+    root: Path = ".",
+    *,
+    fetch_tools: bool = False,
+    options: UpdateOptions | None = None,
+) -> dict[str, Any]:
+    """Check the native tools the targets under ``root`` use.
+
+    Never prompts: a missing used tool is installed (its pinned,
+    sha256-verified release, into the tool cache) only with ``fetch_tools``.
+
+    Args:
+        root: Repository root to scan.
+        fetch_tools: Install every missing used tool that has a download for
+            this host.
+        options: Options overriding the repository settings; ``scan`` adds
+            the scanner to the tools checked.
+
+    Returns:
+        The same report as ``depsmith init --json``: ``targets``, ``tools``
+        (each with ``used_by``), ``installed`` and ``missing``.
+    """
+    return json.loads(
+        _native.init_json(str(root), (options or UpdateOptions())._json(), fetch_tools)
+    )
+
+
 def recover(root: Path = ".") -> tuple[str, ...]:
     """Restore the files of an interrupted apply from its journal.
 

@@ -13,6 +13,8 @@ pub fn scanner_tool() -> crate::adapter::ToolSpec {
         name: "grype".into(),
         default: "grype".into(),
         tested_versions: vec!["0.119.0".into()],
+
+        downloads: crate::provision::pinned("grype"),
     }
 }
 

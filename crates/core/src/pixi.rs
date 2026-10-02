@@ -31,6 +31,8 @@ impl Adapter for Pixi {
                 name: "pixi".into(),
                 default: "pixi".into(),
                 tested_versions: vec!["0.80.0".into()],
+
+                downloads: crate::provision::pinned("pixi"),
             }],
             capabilities: Capabilities {
                 package_selection: Support::Supported,

@@ -33,6 +33,7 @@ mod constraint;
 pub mod constraints;
 mod cutoff;
 mod ecosystem;
+mod http;
 /// Reading resolved packages from lockfiles.
 pub mod inventory;
 mod model;
@@ -42,6 +43,8 @@ pub mod pixi;
 /// Running package managers and scanners: timeouts, cancellation of whole
 /// process trees, and redacted diagnostics.
 pub mod process;
+/// Downloading missing native tools, with consent, into a checksum-verified cache.
+pub mod provision;
 mod pypi;
 mod pyproject;
 /// Vulnerability scanning of inventories.
@@ -274,7 +277,7 @@ impl Engine {
         &self,
         root: &Path,
         selected: &[String],
-        options: UpdateOptions,
+        mut options: UpdateOptions,
     ) -> Result<Proposal> {
         let root = working_tree::canonical(root)?;
         options.validate()?;
@@ -294,7 +297,8 @@ impl Engine {
                 targets.push(target.clone());
             }
         }
-        let notes = self.enforce_capabilities(&targets, &options)?;
+        let mut notes = self.enforce_capabilities(&targets, &options)?;
+        notes.extend(self.use_cached_tools(&root, &targets, &mut options));
         // Resolve --package once, against the source manifests, so a typo fails
         // before any backend runs and each target only receives names it declares.
         let mut selections = vec![];
@@ -539,15 +543,16 @@ pub mod config;
 /// Report adapter capabilities and whether each native tool is available and
 /// a tested version, for troubleshooting an installation. Uses the default
 /// adapters; see [`Engine::doctor`].
-pub fn doctor(options: &UpdateOptions) -> serde_json::Value {
-    Engine::default().doctor(options)
+pub fn doctor(root: &Path, options: &UpdateOptions) -> serde_json::Value {
+    Engine::default().doctor(root, options)
 }
 
 impl Engine {
     /// Report this engine's adapter specs and, for every native tool they or
     /// the scanner declare, whether it is available and a tested version.
-    /// Tool paths come from [`UpdateOptions::tool`].
-    pub fn doctor(&self, options: &UpdateOptions) -> serde_json::Value {
+    /// Tool paths come from [`UpdateOptions::tool`], then `PATH`, then the
+    /// installs `depsmith init` recorded for the repository at `root`.
+    pub fn doctor(&self, root: &Path, options: &UpdateOptions) -> serde_json::Value {
         let specs = self.specs();
         let mut seen = std::collections::BTreeSet::new();
         let tools: Vec<_> = specs
@@ -555,9 +560,132 @@ impl Engine {
             .flat_map(|spec| spec.tools.iter().cloned())
             .chain([scan::scanner_tool()])
             .filter(|tool| seen.insert(tool.name.clone()))
-            .map(|tool| tool_report(&tool, &options.tool(&tool.name), options))
+            .map(|tool| tool_report(&tool, options, root))
             .collect();
         serde_json::json!({"schema_version": 1, "tools": tools, "adapters": specs})
+    }
+
+    /// The native tools `targets` need (and the scanner when `options.scan`),
+    /// once each, in adapter order.
+    fn needed_tools(&self, targets: &[Target], options: &UpdateOptions) -> Vec<adapter::ToolSpec> {
+        let mut seen = std::collections::BTreeSet::new();
+        targets
+            .iter()
+            .flat_map(|t| self.spec(t).tools.clone())
+            .chain(options.scan.then(scan::scanner_tool))
+            .filter(|tool| seen.insert(tool.name.clone()))
+            .collect()
+    }
+
+    /// The tools `targets` under `root` need (and the scanner when
+    /// `options.scan`) that `depsmith init` should install: neither
+    /// configured nor on `PATH`, and not a verified install recorded for
+    /// `root` (absent, or changed, outdated or unrecorded in the tool cache).
+    pub fn missing_tools(
+        &self,
+        root: &Path,
+        targets: &[Target],
+        options: &UpdateOptions,
+    ) -> Vec<adapter::ToolSpec> {
+        self.needed_tools(targets, options)
+            .into_iter()
+            .filter(|tool| {
+                matches!(
+                    locate(tool, options, root).1,
+                    ToolSource::Missing | ToolSource::Untrusted(_)
+                )
+            })
+            .collect()
+    }
+
+    /// Point `options` at the verified installs recorded for `root` of the
+    /// tools `targets` need; returns a note for each install that is no
+    /// longer trusted, which is not used.
+    fn use_cached_tools(
+        &self,
+        root: &Path,
+        targets: &[Target],
+        options: &mut UpdateOptions,
+    ) -> Vec<String> {
+        let mut notes = vec![];
+        for tool in self.needed_tools(targets, options) {
+            match locate(&tool, options, root) {
+                (program, ToolSource::Downloaded) => {
+                    options.tools.insert(tool.name.clone(), program);
+                }
+                (_, ToolSource::Untrusted(reason)) => notes.push(format!(
+                    "{reason}; not used: run `depsmith init` to install {} again",
+                    tool.name
+                )),
+                _ => {}
+            }
+        }
+        notes
+    }
+
+    /// Check the native tools the targets under `root` use (and the scanner
+    /// when `options.scan`), and reinstall each one that has a pinned
+    /// download for this host and that `consent` accepts, when it is
+    /// missing, no longer the recorded install, or fails to run. Nothing is
+    /// downloaded without consent; installs are recorded (with their
+    /// sha256) in the repository's `.depsmith` directory, which ignores
+    /// itself in Git.
+    ///
+    /// Returns a report with the discovered `targets`, a `doctor`-style
+    /// entry per used tool (with the targets using it), the tools
+    /// `installed`, and the tools still `missing` (unavailable).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `root` cannot be read, there is no tool cache
+    /// directory, or an accepted install fails (see [`provision::install`]).
+    pub fn init(
+        &self,
+        root: &Path,
+        options: &UpdateOptions,
+        consent: &mut dyn FnMut(&adapter::ToolSpec) -> bool,
+    ) -> Result<serde_json::Value> {
+        options.validate()?;
+        let targets = self.discover(root)?;
+        let mut installed = vec![];
+        for tool in self.needed_tools(&targets, options) {
+            let needs_install = match locate(&tool, options, root).1 {
+                ToolSource::Missing | ToolSource::Untrusted(_) => true,
+                // A recorded install that no longer runs is offered again.
+                ToolSource::Downloaded => tool_report(&tool, options, root)["available"] != true,
+                ToolSource::Configured | ToolSource::Path => false,
+            };
+            if needs_install && provision::host_download(&tool).is_some() && consent(&tool) {
+                let cache = provision::cache_dir().ok_or_else(|| {
+                    Error::Invalid("no tool cache directory; set DEPSMITH_TOOLS_DIR".into())
+                })?;
+                provision::reinstall(root, &tool, &cache, options.timeout_seconds)?;
+                installed.push(tool.name.clone());
+            }
+        }
+        let mut missing = vec![];
+        let tools: Vec<_> = self
+            .needed_tools(&targets, options)
+            .into_iter()
+            .map(|tool| {
+                let mut report = tool_report(&tool, options, root);
+                if report["available"] != true {
+                    missing.push(tool.name.clone());
+                }
+                let used_by: Vec<&str> = targets
+                    .iter()
+                    .filter(|t| self.spec(t).tools.iter().any(|u| u.name == tool.name))
+                    .map(|t| t.id.as_str())
+                    .collect();
+                report["used_by"] = serde_json::json!(used_by);
+                report
+            })
+            .collect();
+        let ids: Vec<&str> = targets.iter().map(|t| t.id.as_str()).collect();
+        Ok(
+            serde_json::json!({"schema_version": 1, "targets": ids, "tools": tools,
+            "installed": installed, "missing": missing}),
+        )
     }
 
     /// Scan the current locks of the `selected` targets under `root` without
@@ -577,14 +705,20 @@ impl Engine {
             return Err(Error::Invalid("select targets for scanning".into()));
         }
         let targets = self.discover(root)?;
-        let mut reports = vec![];
+        let mut inventories = vec![];
         for id in selected {
             let target = targets
                 .iter()
                 .find(|t| &t.id == id)
                 .ok_or_else(|| Error::Invalid(format!("unknown target: {id}")))?;
-            let packages = self.adapter(target).inventory(root, target)?;
-            reports.push(scan::scan_pair(id, None, &packages, options, root)?);
+            inventories.push((id, self.adapter(target).inventory(root, target)?));
+        }
+        let mut options = options.clone();
+        options.scan = true;
+        self.use_cached_tools(root, &[], &mut options);
+        let mut reports = vec![];
+        for (id, packages) in inventories {
+            reports.push(scan::scan_pair(id, None, &packages, &options, root)?);
         }
         Ok(reports)
     }
@@ -592,14 +726,20 @@ impl Engine {
 
 fn tool_report(
     tool: &adapter::ToolSpec,
-    program: &str,
     options: &UpdateOptions,
+    root: &Path,
 ) -> serde_json::Value {
+    let (program, source) = locate(tool, options, root);
+    let downloadable = provision::host_download(tool).is_some();
+    let untrusted = match &source {
+        ToolSource::Untrusted(reason) => Some(reason.clone()),
+        _ => None,
+    };
     let name = &tool.name;
     let tested = &tool.tested_versions;
     let tested_refs: Vec<&str> = tested.iter().map(String::as_str).collect();
     let result = process::run(
-        program,
+        &program,
         &["--version".into()],
         Path::new("."),
         options.timeout_seconds,
@@ -608,11 +748,112 @@ fn tool_report(
         Ok(output) => {
             let (status, version) = adapter::tool_status(&output, &tested_refs);
             serde_json::json!({"tool": name, "program": program, "available": true,
-                "status": status, "version": version, "tested_versions": tested})
+                "status": status, "version": version, "tested_versions": tested,
+                "source": source.label(), "downloadable": downloadable, "untrusted": untrusted})
         }
         Err(error) => serde_json::json!({"tool": name, "program": program, "available": false,
-            "status": "unavailable", "error": error.to_string(), "tested_versions": tested}),
+            "status": "unavailable", "error": error.to_string(), "tested_versions": tested,
+            "source": source.label(), "downloadable": downloadable, "untrusted": untrusted}),
     }
+}
+
+/// Whether `program` names an executable file: a path, or a name found on
+/// `PATH` (with `PATHEXT` extensions on Windows).
+fn on_path(program: &str) -> bool {
+    let path = Path::new(program);
+    if path.components().count() > 1 {
+        return path.is_file();
+    }
+    let extensions: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into())
+            .split(';')
+            .map(str::to_owned)
+            .chain([String::new()])
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| {
+            extensions
+                .iter()
+                .any(|e| dir.join(format!("{program}{e}")).is_file())
+        })
+    })
+}
+
+/// Where the executable run for a tool comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ToolSource {
+    /// A tool path option names it.
+    Configured,
+    /// The default executable is on `PATH`.
+    Path,
+    /// The verified install `depsmith init` recorded for the repository.
+    Downloaded,
+    /// A tool cache entry the repository cannot trust, and why.
+    Untrusted(String),
+    /// Nowhere: the default executable is absent.
+    Missing,
+}
+
+impl ToolSource {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Path => "path",
+            Self::Downloaded => "downloaded",
+            Self::Untrusted(_) => "untrusted",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// The executable to run for `tool` in the repository at `root` and where
+/// it comes from. A configured path is used as given, even when it does not
+/// exist: the user chose it. A tool cache entry is used only while it is
+/// the unchanged install recorded for `root`.
+fn locate(tool: &adapter::ToolSpec, options: &UpdateOptions, root: &Path) -> (String, ToolSource) {
+    let program = options.tool(&tool.name);
+    if program != tool.default {
+        return (program, ToolSource::Configured);
+    }
+    if on_path(&program) {
+        return (program, ToolSource::Path);
+    }
+    let Some(cache) = provision::cache_dir() else {
+        return (program, ToolSource::Missing);
+    };
+    match provision::trust(root, tool, &cache) {
+        provision::Trust::Verified(path) => {
+            (path.to_string_lossy().into_owned(), ToolSource::Downloaded)
+        }
+        provision::Trust::Untrusted(reason) => (program, ToolSource::Untrusted(reason)),
+        provision::Trust::Unrecorded => (
+            program,
+            ToolSource::Untrusted(format!(
+                "{} is in the tool cache but was not installed by `depsmith init` for this repository",
+                tool.name
+            )),
+        ),
+        provision::Trust::Absent => (program, ToolSource::Missing),
+    }
+}
+
+/// Check the native tools the targets under `root` use and install the
+/// missing ones `consent` accepts, with the default adapters; see
+/// [`Engine::init`].
+///
+/// # Errors
+///
+/// As for [`Engine::init`].
+pub fn init(
+    root: &Path,
+    options: &UpdateOptions,
+    consent: &mut dyn FnMut(&adapter::ToolSpec) -> bool,
+) -> Result<serde_json::Value> {
+    Engine::default().init(root, options, consent)
 }
 
 /// Scan the current locks of the `selected` targets under `root` without

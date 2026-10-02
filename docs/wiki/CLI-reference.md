@@ -15,6 +15,7 @@ Review and apply dependency updates across package managers
 Usage: depsmith [OPTIONS] <COMMAND>
 
 Commands:
+  init      Check the native tools the discovered targets use, offering to install each missing one (pinned, sha256-verified) into the tool cache; exit 3 when a used tool is still missing
   discover  List the targets found under the root
   doctor    Report adapter capabilities and whether native tools are available
   check     Prepare a proposal without writing; exit 1 when updates are pending

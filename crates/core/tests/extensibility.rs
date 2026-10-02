@@ -25,6 +25,7 @@ impl Adapter for Demo {
                 name: "demo-tool".into(),
                 default: "demo-tool".into(),
                 tested_versions: vec!["1.0.0".into()],
+                downloads: vec![],
             }],
             capabilities: Capabilities {
                 package_selection: Support::Supported,
@@ -109,7 +110,7 @@ fn a_new_adapter_is_discovered_through_its_spec() {
 
 #[test]
 fn doctor_reports_a_new_adapters_tool_from_the_tools_map() {
-    let report = Engine::new(vec![Box::new(Demo)]).doctor(&options());
+    let report = Engine::new(vec![Box::new(Demo)]).doctor(std::path::Path::new("."), &options());
     let tool = report["tools"]
         .as_array()
         .unwrap()

@@ -16,7 +16,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
-    time::Duration,
 };
 
 /// A published release of an action repository.
@@ -403,11 +402,7 @@ impl ReleaseSource for GitHub {
         }) {
             return Err(Error::Invalid("invalid GitHub repository".into()));
         }
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(timeout))
-            .user_agent("depsmith/0.1")
-            .build()
-            .map_err(|_| Error::Operation("cannot construct GitHub client".into()))?;
+        let client = crate::http::client(timeout)?;
         let mut tags = BTreeMap::new();
         let mut stable = BTreeSet::new();
         for endpoint in ["tags", "releases"] {

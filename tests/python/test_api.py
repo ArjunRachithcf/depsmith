@@ -68,6 +68,22 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(pixi["cooldown"]["status"], "unsupported")
         self.assertEqual({t["status"] for t in report["tools"]}, {"unavailable"})
 
+    def test_init_reports_used_tools_without_installing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pathlib.Path(directory, "pyproject.toml").write_text(
+                '[project]\nname = "p"\nversion = "0.1.0"\n\n[tool.uv]\n'
+            )
+            report = updater.init(
+                directory,
+                options=updater.UpdateOptions(tools={"uv": "missing-uv-binary"}),
+            )
+        self.assertEqual(report["targets"], ["uv:pyproject.toml"])
+        self.assertEqual([t["tool"] for t in report["tools"]], ["uv"])
+        self.assertEqual(report["tools"][0]["source"], "configured")
+        self.assertTrue(report["tools"][0]["downloadable"])
+        self.assertEqual(report["missing"], ["uv"])
+        self.assertEqual(report["installed"], [])
+
     def test_undeclared_package_selection_raises_before_backend(self):
         with tempfile.TemporaryDirectory() as directory:
             pathlib.Path(directory, "pixi.toml").write_text(
