@@ -1,12 +1,13 @@
 # Weekly drift tracking for the native tools depsmith drives. A tool's
-# "latest" is its newest stable release published at least 7 days ago, so new
-# releases settle first. `pick` lists the tools with such a release newer than
-# the tested one; Integration runs once per picked tool at that version (others
-# pinned); then scripts/tool-drift.py opens a pull request bumping each tool
-# whose release passed (tested version, pinned downloads and Integration pin,
-# as a GitHub-signed commit from the docs App so CI runs on it), and keeps one
-# `latest-tools` issue per tool that the release breaks, whose pinned
-# download's sha256 changed, or that cannot be bumped automatically.
+# candidate is its highest stable release published at least 7 days ago and
+# newer than the tested one, so new releases settle first. `pick` lists the
+# candidates Integration can install; Integration runs once per picked tool at
+# that version (others pinned); then scripts/tool-drift.py opens a pull request
+# bumping each tool whose candidate passed (tested version, pinned downloads
+# and .github/tool-versions.json, as a GitHub-signed commit from the docs App
+# so CI runs on it), and keeps one `latest-tools` issue per tool that the
+# candidate breaks, whose pinned download changed or vanished, or that cannot
+# be bumped automatically (including cargo, which CI runs as stable Rust).
 name: Latest tools
 on:
   schedule:
@@ -14,6 +15,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# One run at a time: the report force-updates the latest-tools/<tool> branches.
+concurrency:
+  group: latest-tools
+  cancel-in-progress: false
 jobs:
   pick:
     runs-on: ubuntu-latest
@@ -77,7 +82,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           ISSUES_TOKEN: ${{ github.token }}
+          PICKED: ${{ needs.pick.outputs.tools }}
         run: |
           mkdir -p results
+          printf '%s' "$PICKED" > picked.json
           cargo run -q -p depsmith-cli --locked -- doctor --json > doctor.json
-          python scripts/tool-drift.py report doctor.json results --act | tee -a "$GITHUB_STEP_SUMMARY"
+          python scripts/tool-drift.py report doctor.json results picked.json --act | tee -a "$GITHUB_STEP_SUMMARY"

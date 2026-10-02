@@ -1,10 +1,10 @@
 # Native integration: real Pixi, uv, Grype, cargo and conda-lock plus conda-forge,
 # pypi.org, crates.io and the GitHub API. Informational on pull requests;
 # blocking as a gate in the Release workflow. Nightly failures open or update
-# a tracking issue (integration-alert.yml). The Latest tools workflow calls it
-# with `latest-tool` and `latest-version` to run one tool at a newer release,
-# others pinned; the pins below must equal the adapters' tested versions
-# (checked by a test).
+# a tracking issue (integration-alert.yml). Tool versions come from
+# .github/tool-versions.json, which must equal the adapters' tested versions
+# (checked by a test); the Latest tools workflow calls this one with
+# `latest-tool` and `latest-version` to run one tool at a newer release.
 name: Integration
 on:
   push:
@@ -29,12 +29,6 @@ on:
         default: ''
 permissions:
   contents: read
-env:
-  PIXI_VERSION: ${{ inputs.latest-tool == 'pixi' && format('v{0}', inputs.latest-version) || 'v0.80.0' }}
-  GRYPE_VERSION: ${{ inputs.latest-tool == 'grype' && inputs.latest-version || '0.119.0' }}
-  UV_VERSION: ${{ inputs.latest-tool == 'uv' && inputs.latest-version || '0.12.15' }}
-  CONDA_LOCK_PIN: ${{ format('=={0}', inputs.latest-tool == 'conda-lock' && inputs.latest-version || '4.0.2') }}
-  MICROMAMBA_PIN: ${{ format('=={0}', inputs.latest-tool == 'conda' && inputs.latest-version || '2.9.0') }}
 jobs:
   native:
     strategy:
@@ -61,6 +55,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+      - name: Resolve tool versions
+        shell: bash
+        env:
+          LATEST_TOOL: ${{ inputs.latest-tool }}
+          LATEST_VERSION: ${{ inputs.latest-version }}
+        run: |
+          version() {
+            if [ "$LATEST_TOOL" = "$1" ]; then echo "$LATEST_VERSION"
+            else python -c 'import json, sys; print(json.load(open(".github/tool-versions.json"))[sys.argv[1]])' "$1"; fi
+          }
+          {
+            echo "PIXI_VERSION=v$(version pixi)"
+            echo "UV_VERSION=$(version uv)"
+            echo "GRYPE_VERSION=$(version grype)"
+            echo "CONDA_LOCK_VERSION=$(version conda-lock)"
+            echo "MICROMAMBA_VERSION=$(version conda)"
+          } >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
@@ -84,7 +95,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          pixi global install "conda-lock${CONDA_LOCK_PIN}" "micromamba${MICROMAMBA_PIN}"
+          pixi global install "conda-lock==${CONDA_LOCK_VERSION}" "micromamba==${MICROMAMBA_VERSION}"
           echo "CONDA_LOCK=$(command -v conda-lock)" >> "$GITHUB_ENV"
           echo "CONDA_SOLVER=$(command -v micromamba)" >> "$GITHUB_ENV"
       - name: Native Rust tests (one retry for network flakes)
@@ -113,9 +124,13 @@ jobs:
       - name: Record the result for the Latest tools report
         if: always() && inputs.latest-tool != ''
         shell: bash
+        env:
+          STATUS: ${{ job.status }}
+          LATEST_TOOL: ${{ inputs.latest-tool }}
+          LATEST_VERSION: ${{ inputs.latest-version }}
         run: |
           mkdir -p latest-result
-          echo "${{ job.status }} ${{ inputs.latest-version }}" > "latest-result/${{ inputs.latest-tool }}-${{ runner.os }}"
+          echo "$STATUS $LATEST_VERSION" > "latest-result/$LATEST_TOOL-$RUNNER_OS"
       - uses: actions/upload-artifact@v4
         if: always() && inputs.latest-tool != ''
         with:
