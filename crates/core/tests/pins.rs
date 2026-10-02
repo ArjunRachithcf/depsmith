@@ -29,3 +29,16 @@ fn integration_pins_are_the_tested_versions() {
         assert_eq!(Some(pin), tested.get(tool), "{tool} in {}", path.display());
     }
 }
+
+/// The published crates carry the MIT license text, copied from the root.
+#[test]
+fn published_crates_carry_the_root_license() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let Ok(license) = std::fs::read_to_string(root.join("LICENSE")) else {
+        return;
+    };
+    for krate in ["crates/core", "crates/cli"] {
+        let copy = std::fs::read_to_string(root.join(krate).join("LICENSE")).unwrap();
+        assert_eq!(copy, license, "{krate}/LICENSE differs from LICENSE");
+    }
+}

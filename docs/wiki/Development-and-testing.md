@@ -20,7 +20,10 @@ cargo test --workspace --locked                      # unit, integration, end-to
 python -m pip install . && python -m unittest discover -s tests/python -v
 ```
 
-Python tests need the built package installed. Three layers:
+Python tests need the built package installed. `python -m unittest discover
+-s scripts/tests` covers the repository scripts, including the install
+scripts against a local fake release (`install.ps1` too, when `pwsh` is
+installed). Three layers:
 
 1. **Offline end-to-end** (`crates/cli/tests/e2e.rs`): the real executable with
    a cross-platform Pixi stand-in on every CI host.
@@ -45,6 +48,9 @@ fails when they are stale or a wiki link is broken.
 - **CI** builds and tests on Linux, Windows and macOS (Intel and Apple
   Silicon), checks Rust 1.89, the sdist, the conda recipe, the end-to-end tests
   and prek.
+- **Distribution:** the `crates` job packages and verifies both crates as
+  crates.io would (`cargo publish --workspace --dry-run`); `install-scripts`
+  runs the install script tests on macOS and Windows.
 - **Coverage:** Codecov requires 80% of changed lines covered, and the in-repo
   gate requires 75% total line coverage.
 - **Integration** runs the native tests on pull requests (informational), on

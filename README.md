@@ -34,10 +34,22 @@ curl -fsSL https://github.com/ArjunRachithcf/depsmith/releases/latest/download/i
 
 On Windows, `irm https://github.com/ArjunRachithcf/depsmith/releases/latest/download/install.ps1 | iex`.
 The install scripts download the release executable for your platform, verify
-it against the release's `SHA256SUMS`, and install it to `~/.local/bin`
-(`%LOCALAPPDATA%\depsmith\bin` on Windows); pass `--version`/`-Version` to pin
-a release and `--prefix`/`-Prefix` to choose the directory. The `--pre` flag
-is needed while only release candidates are published.
+it against the release's `SHA256SUMS` before installing anything, and install
+it to `~/.local/bin` (`%LOCALAPPDATA%\depsmith\bin` on Windows); they never
+edit your shell startup files. While only release candidates are published,
+ask for one explicitly:
+
+```sh
+curl -fsSL https://github.com/ArjunRachithcf/depsmith/releases/download/v0.1.0-rc2/install.sh | sh -s -- --version v0.1.0-rc2
+```
+
+```powershell
+$env:DEPSMITH_VERSION = "v0.1.0-rc2"
+irm https://github.com/ArjunRachithcf/depsmith/releases/download/v0.1.0-rc2/install.ps1 | iex
+```
+
+Other options: `--pre` (newest release including pre-releases), `--prefix DIR`
+(`$env:DEPSMITH_PREFIX`), and `--help`.
 
 Then `depsmith init` checks the native tools your targets use and offers to
 install the missing ones. See

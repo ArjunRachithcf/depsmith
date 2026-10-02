@@ -32,10 +32,15 @@ uses the checkout and downloads Cargo dependencies; it is not a feedstock.
    declarations, and runs all CI build/test jobs and the native integration tests
    (real Pixi, Grype, conda-forge, pypi.org and GitHub API) on that exact commit.
 3. Review the artifacts. Configure GitHub environments `pypi`, `crates` and
-   `release` with required reviewers before enabling publication. Configure a
-   crates.io [trusted publisher](https://crates.io/docs/trusted-publishing) for
-   both `depsmith-core` and `depsmith` (repository `ArjunRachithcf/depsmith`,
-   workflow `release.yml`, environment `crates`). Configure a PyPI
+   `release` with required reviewers before enabling publication. crates.io
+   [trusted publishers](https://crates.io/docs/trusted-publishing) can only be
+   added to crates that exist, so the first publish uses a crates.io API token
+   (scope `publish-new`) stored as the `CARGO_REGISTRY_TOKEN` secret of the
+   `crates` environment. Afterwards add a trusted publisher to both
+   `depsmith-core` and `depsmith` (repository `ArjunRachithcf/depsmith`,
+   workflow `release.yml`, environment `crates`) and delete the secret; the
+   workflow then uses trusted publishing. Publishing skips crate versions that
+   already exist, so a re-run after a partial failure is safe. Configure a PyPI
    [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)
    for owner `ArjunRachithcf`, repository `depsmith`, workflow `release.yml`,
    environment `pypi`. Confirm ownership/availability of the PyPI project first.

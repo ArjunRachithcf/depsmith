@@ -149,11 +149,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Package and verify both crates as crates.io would
         run: cargo publish --workspace --dry-run --locked
+  # Linux runs these in docs-guard's script tests; here macOS (BSD tools) and
+  # Windows (install.ps1 with bsdtar).
   install-scripts:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
