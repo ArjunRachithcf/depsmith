@@ -195,24 +195,24 @@ fn select_interactively(
 /// `--fetch-tools`, after asking when interactive, never otherwise.
 fn consent(
     tool: &core::adapter::ToolSpec,
+    reason: &str,
     fetch_tools: bool,
     interactive: bool,
     prompt: &mut dyn FnMut(&str) -> Result<bool>,
-) -> bool {
+) -> Result<bool> {
     if fetch_tools {
-        return true;
+        return Ok(true);
     }
     if !interactive {
-        return false;
+        return Ok(false);
     }
     let cache = core::provision::cache_dir()
         .map_or_else(|| "the tool cache".to_owned(), |d| d.display().to_string());
-    let version = tool.tested_versions.first().map_or("", String::as_str);
+    let version = tool.pinned_version().unwrap_or("");
     let name = &tool.name;
     prompt(&format!(
-        "{name} is not installed. Download {name} {version} (sha256-verified) into {cache}?"
+        "{name}: {reason}. Download {name} {version} (sha256-verified) into {cache}?"
     ))
-    .unwrap_or(false)
 }
 fn execute(cli: &Cli) -> Result<(Value, u8)> {
     if cli.json && cli.markdown {
@@ -223,10 +223,28 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
         return Ok((core::doctor(&cli.root, &config.options), 0));
     }
     if let Command::Init { fetch_tools } = cli.command {
-        let interactive = io::stdin().is_terminal() && !cli.non_interactive && !cli.json;
-        let report = core::init(&cli.root, &config.options, &mut |tool| {
-            consent(tool, fetch_tools, interactive, &mut confirm)
-        })?;
+        for (used, flag) in [
+            (!cli.package.is_empty(), "--package"),
+            (!cli.accept.is_empty(), "--accept"),
+            (cli.upgrade, "--upgrade"),
+            (cli.refresh_git, "--refresh-git"),
+            (cli.install, "--install"),
+        ] {
+            if used {
+                return Err(Error::Invalid(format!("{flag} is not used by init")));
+            }
+        }
+        if cli.all && !cli.target.is_empty() {
+            return Err(Error::Invalid("choose --all or --target".into()));
+        }
+        // Prompts go to stderr, so they work alongside --json.
+        let interactive = io::stdin().is_terminal() && !cli.non_interactive;
+        let report = core::init(
+            &cli.root,
+            &cli.target,
+            &config.options,
+            &mut |tool, reason| consent(tool, reason, fetch_tools, interactive, &mut confirm),
+        )?;
         let missing = report["missing"].as_array().is_some_and(|m| !m.is_empty());
         return Ok((report, if missing { 3 } else { 0 }));
     }
@@ -431,6 +449,13 @@ fn render_init(value: &Value) -> String {
     if !installed.is_empty() {
         lines.push(format!("Installed: {}", installed.join(", ")));
     }
+    for failure in value["failed"].as_array().into_iter().flatten() {
+        lines.push(format!(
+            "Failed to install {}: {}",
+            failure["tool"].as_str().unwrap_or("?"),
+            failure["error"].as_str().unwrap_or("?")
+        ));
+    }
     let missing = names("missing");
     if !missing.is_empty() {
         lines.push(format!(
@@ -617,27 +642,31 @@ mod tests {
     fn init_installs_with_the_flag_or_a_confirmed_prompt_only() {
         let uv = tool("uv", true);
         let mut asked = vec![];
-        assert!(consent(&uv, true, true, &mut scripted(&[], &mut asked)));
-        assert!(!consent(&uv, false, false, &mut scripted(&[], &mut asked)));
+        let ask = |fetch, interactive, answers: &[bool], asked: &mut Vec<String>| {
+            consent(
+                &uv,
+                "not installed",
+                fetch,
+                interactive,
+                &mut scripted(answers, asked),
+            )
+            .unwrap()
+        };
+        assert!(ask(true, true, &[], &mut asked));
+        assert!(!ask(false, false, &[], &mut asked));
         assert!(asked.is_empty());
-        assert!(consent(
-            &uv,
-            false,
-            true,
-            &mut scripted(&[true], &mut asked)
-        ));
-        assert!(!consent(
-            &uv,
-            false,
-            true,
-            &mut scripted(&[false], &mut asked)
-        ));
+        assert!(ask(false, true, &[true], &mut asked));
+        assert!(!ask(false, true, &[false], &mut asked));
         assert_eq!(asked.len(), 2);
         assert!(
-            asked[0].starts_with("uv is not installed. Download uv 1.0.0 (sha256-verified)"),
+            asked[0].starts_with("uv: not installed. Download uv 1.0.0 (sha256-verified)"),
             "{}",
             asked[0]
         );
+        let failing = consent(&uv, "not installed", false, true, &mut |_| {
+            Err(Error::Invalid("no terminal".into()))
+        });
+        assert!(failing.is_err());
     }
 
     #[test]

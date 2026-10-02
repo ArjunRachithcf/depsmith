@@ -15,7 +15,7 @@ struct Journal {
     changes: Vec<FileChange>,
 }
 
-fn safe_path(root: &Path, path: &Path) -> Result<()> {
+pub(crate) fn safe_path(root: &Path, path: &Path) -> Result<()> {
     working_tree::relative(path)?;
     let mut current = root.to_path_buf();
     for part in path.components() {
@@ -52,7 +52,7 @@ fn content(path: &Path) -> Result<Option<String>> {
 
 /// Exclusive for the life of the returned handle, across processes. The OS
 /// releases it if the holder crashes, so a stale lock cannot wedge recovery.
-fn operation_lock(root: &Path) -> Result<fs::File> {
+pub(crate) fn operation_lock(root: &Path) -> Result<fs::File> {
     safe_path(root, Path::new(".depsmith/lock"))?;
     fs::create_dir_all(root.join(".depsmith"))?;
     let file = OpenOptions::new()

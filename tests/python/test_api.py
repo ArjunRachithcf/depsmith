@@ -75,6 +75,7 @@ class ApiTests(unittest.TestCase):
             )
             report = updater.init(
                 directory,
+                targets=["uv:pyproject.toml"],
                 options=updater.UpdateOptions(tools={"uv": "missing-uv-binary"}),
             )
         self.assertEqual(report["targets"], ["uv:pyproject.toml"])

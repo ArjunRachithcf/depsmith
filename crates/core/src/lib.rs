@@ -623,52 +623,89 @@ impl Engine {
         notes
     }
 
-    /// Check the native tools the targets under `root` use (and the scanner
-    /// when `options.scan`), and reinstall each one that has a pinned
-    /// download for this host and that `consent` accepts, when it is
-    /// missing, no longer the recorded install, or fails to run. Nothing is
-    /// downloaded without consent; installs are recorded (with their
-    /// sha256) in the repository's `.depsmith` directory, which ignores
-    /// itself in Git.
+    /// Check the native tools the `selected` targets under `root` use (all
+    /// discovered targets when empty; the scanner too when `options.scan`),
+    /// and reinstall each one that has a pinned download for this host when
+    /// it is missing, no longer the recorded install, or fails to run, if
+    /// `consent` accepts it. `consent` is asked with the tool and why it is
+    /// offered. Nothing is downloaded without consent; installs are recorded
+    /// (with their sha256) in the repository's `.depsmith` directory, which
+    /// ignores itself in Git. A failed install is reported and does not stop
+    /// the others.
     ///
-    /// Returns a report with the discovered `targets`, a `doctor`-style
-    /// entry per used tool (with the targets using it), the tools
-    /// `installed`, and the tools still `missing` (unavailable).
+    /// Returns a report with the `targets`, a `doctor`-style entry per used
+    /// tool (with the targets using it), the tools `installed`, the installs
+    /// that `failed` (with the error), and the tools still `missing`
+    /// (unavailable).
     ///
     /// # Errors
     ///
-    /// Returns an error when `root` cannot be read, there is no tool cache
-    /// directory, or an accepted install fails (see [`provision::install`]).
+    /// Returns an error when `root` cannot be read, a selected target is
+    /// unknown, there is no tool cache directory, or `consent` fails.
     pub fn init(
         &self,
         root: &Path,
+        selected: &[String],
         options: &UpdateOptions,
-        consent: &mut dyn FnMut(&adapter::ToolSpec) -> bool,
+        consent: &mut dyn FnMut(&adapter::ToolSpec, &str) -> Result<bool>,
     ) -> Result<serde_json::Value> {
         options.validate()?;
-        let targets = self.discover(root)?;
+        let found = self.discover(root)?;
+        let targets: Vec<Target> = if selected.is_empty() {
+            found
+        } else {
+            selected
+                .iter()
+                .map(|id| {
+                    found
+                        .iter()
+                        .find(|t| &t.id == id)
+                        .cloned()
+                        .ok_or_else(|| Error::Invalid(format!("unknown target: {id}")))
+                })
+                .collect::<Result<_>>()?
+        };
+        let tools = self.needed_tools(&targets, options);
         let mut installed = vec![];
-        for tool in self.needed_tools(&targets, options) {
-            let needs_install = match locate(&tool, options, root).1 {
-                ToolSource::Missing | ToolSource::Untrusted(_) => true,
+        let mut failed = vec![];
+        for tool in &tools {
+            let reason = match locate(tool, options, root).1 {
+                ToolSource::Missing => Some("not installed".to_owned()),
+                ToolSource::Untrusted(reason) => Some(reason),
                 // A recorded install that no longer runs is offered again.
-                ToolSource::Downloaded => tool_report(&tool, options, root)["available"] != true,
-                ToolSource::Configured | ToolSource::Path => false,
+                ToolSource::Downloaded => {
+                    let report = tool_report(tool, options, root);
+                    (report["available"] != true).then(|| {
+                        format!(
+                            "the installed {} does not run: {}",
+                            tool.name,
+                            report["error"].as_str().unwrap_or("unknown error")
+                        )
+                    })
+                }
+                ToolSource::Configured | ToolSource::Path => None,
             };
-            if needs_install && provision::host_download(&tool).is_some() && consent(&tool) {
-                let cache = provision::cache_dir().ok_or_else(|| {
-                    Error::Invalid("no tool cache directory; set DEPSMITH_TOOLS_DIR".into())
-                })?;
-                provision::reinstall(root, &tool, &cache, options.timeout_seconds)?;
-                installed.push(tool.name.clone());
+            let Some(reason) = reason else {
+                continue;
+            };
+            if provision::host_download(tool).is_none() || !consent(tool, &reason)? {
+                continue;
+            }
+            let cache = provision::cache_dir().ok_or_else(|| {
+                Error::Invalid("no tool cache directory; set DEPSMITH_TOOLS_DIR".into())
+            })?;
+            match provision::reinstall(root, tool, &cache, options.timeout_seconds) {
+                Ok(_) => installed.push(tool.name.clone()),
+                Err(error) => {
+                    failed.push(serde_json::json!({"tool": tool.name, "error": error.to_string()}))
+                }
             }
         }
         let mut missing = vec![];
-        let tools: Vec<_> = self
-            .needed_tools(&targets, options)
-            .into_iter()
+        let reports: Vec<_> = tools
+            .iter()
             .map(|tool| {
-                let mut report = tool_report(&tool, options, root);
+                let mut report = tool_report(tool, options, root);
                 if report["available"] != true {
                     missing.push(tool.name.clone());
                 }
@@ -683,8 +720,8 @@ impl Engine {
             .collect();
         let ids: Vec<&str> = targets.iter().map(|t| t.id.as_str()).collect();
         Ok(
-            serde_json::json!({"schema_version": 1, "targets": ids, "tools": tools,
-            "installed": installed, "missing": missing}),
+            serde_json::json!({"schema_version": 1, "targets": ids, "tools": reports,
+            "installed": installed, "failed": failed, "missing": missing}),
         )
     }
 
@@ -715,7 +752,10 @@ impl Engine {
         }
         let mut options = options.clone();
         options.scan = true;
-        self.use_cached_tools(root, &[], &mut options);
+        // A scan needs the scanner: say why a cached copy is not used.
+        if let Some(note) = self.use_cached_tools(root, &[], &mut options).pop() {
+            return Err(Error::Invalid(note));
+        }
         let mut reports = vec![];
         for (id, packages) in inventories {
             reports.push(scan::scan_pair(id, None, &packages, &options, root)?);
@@ -850,10 +890,11 @@ fn locate(tool: &adapter::ToolSpec, options: &UpdateOptions, root: &Path) -> (St
 /// As for [`Engine::init`].
 pub fn init(
     root: &Path,
+    selected: &[String],
     options: &UpdateOptions,
-    consent: &mut dyn FnMut(&adapter::ToolSpec) -> bool,
+    consent: &mut dyn FnMut(&adapter::ToolSpec, &str) -> Result<bool>,
 ) -> Result<serde_json::Value> {
-    Engine::default().init(root, options, consent)
+    Engine::default().init(root, selected, options, consent)
 }
 
 /// Scan the current locks of the `selected` targets under `root` without

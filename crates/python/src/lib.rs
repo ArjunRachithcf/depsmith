@@ -112,10 +112,21 @@ fn doctor_json(py: Python<'_>, root: String, options: String) -> PyResult<String
     .map_err(error)
 }
 #[pyfunction]
-fn init_json(py: Python<'_>, root: String, options: String, fetch_tools: bool) -> PyResult<String> {
+fn init_json(
+    py: Python<'_>,
+    root: String,
+    targets: Vec<String>,
+    options: String,
+    fetch_tools: bool,
+) -> PyResult<String> {
     py.detach(|| {
         config(&root, &options).and_then(|settings| {
-            core::init(Path::new(&root), &settings.options, &mut |_| fetch_tools)
+            core::init(
+                Path::new(&root),
+                &targets,
+                &settings.options,
+                &mut |_, _| Ok(fetch_tools),
+            )
         })
     })
     .map(|r| serde_json::to_string(&r).unwrap())

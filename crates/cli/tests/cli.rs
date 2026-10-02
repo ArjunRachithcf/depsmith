@@ -131,6 +131,13 @@ fn noninteractive_init_reports_missing_used_tools_without_installing() {
     assert_eq!(report["missing"], serde_json::json!(["uv"]));
     assert_eq!(report["installed"], serde_json::json!([]));
     assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 0);
+    let refused = Command::new(env!("CARGO_BIN_EXE_depsmith"))
+        .arg("--root")
+        .arg(root.path())
+        .args(["init", "--package", "six"])
+        .output()
+        .unwrap();
+    assert_eq!(refused.status.code(), Some(2), "{refused:?}");
     let text = String::from_utf8(run(false).stdout).unwrap();
     assert!(
         text.contains("Still missing: uv") && text.contains("depsmith init --fetch-tools"),

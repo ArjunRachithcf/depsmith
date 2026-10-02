@@ -527,16 +527,20 @@ def doctor(root: Path = ".", *, options: UpdateOptions | None = None) -> dict[st
 def init(
     root: Path = ".",
     *,
+    targets: Sequence[str] = (),
     fetch_tools: bool = False,
     options: UpdateOptions | None = None,
 ) -> dict[str, Any]:
     """Check the native tools the targets under ``root`` use.
 
-    Never prompts: a missing used tool is installed (its pinned,
-    sha256-verified release, into the tool cache) only with ``fetch_tools``.
+    Never prompts: a missing used tool (or a cached copy that changed, is
+    outdated or fails to run) is installed from its pinned, sha256-verified
+    release into the tool cache only with ``fetch_tools``.
 
     Args:
         root: Repository root to scan.
+        targets: Target identifiers to check; every discovered target when
+            empty.
         fetch_tools: Install every missing used tool that has a download for
             this host.
         options: Options overriding the repository settings; ``scan`` adds
@@ -544,10 +548,12 @@ def init(
 
     Returns:
         The same report as ``depsmith init --json``: ``targets``, ``tools``
-        (each with ``used_by``), ``installed`` and ``missing``.
+        (each with ``used_by``), ``installed``, ``failed`` and ``missing``.
     """
     return json.loads(
-        _native.init_json(str(root), (options or UpdateOptions())._json(), fetch_tools)
+        _native.init_json(
+            str(root), list(targets), (options or UpdateOptions())._json(), fetch_tools
+        )
     )
 
 

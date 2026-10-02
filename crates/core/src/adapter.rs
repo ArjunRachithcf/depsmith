@@ -55,6 +55,13 @@ pub struct ToolSpec {
     pub downloads: Vec<crate::provision::ToolDownload>,
 }
 
+impl ToolSpec {
+    /// The version depsmith pins and installs: the first tested version.
+    pub fn pinned_version(&self) -> Option<&str> {
+        self.tested_versions.first().map(String::as_str)
+    }
+}
+
 /// Files that are resolver inputs of a target even when they are ignored by
 /// Git, such as a lockfile or native configuration next to the manifest. They
 /// are staged and fingerprinted like any other input.

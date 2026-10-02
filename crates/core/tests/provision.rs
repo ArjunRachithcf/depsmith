@@ -369,3 +369,86 @@ fn recorded_installs_are_trusted_only_while_unchanged() {
         Trust::Verified(path)
     );
 }
+
+#[test]
+fn a_checksum_mismatch_is_an_operation_failure() {
+    let (base, _) = serve(vec![("/tool-bin", PROGRAM.to_vec())]);
+    let mut d = download(&base, "/tool-bin", PROGRAM, Archive::Binary, "tool");
+    d.sha256 = sha256(b"other");
+    let cache = tempfile::tempdir().unwrap();
+    let error = provision::install("tool", "1.2.3", &d, cache.path(), 30).unwrap_err();
+    assert!(
+        matches!(error, depsmith_core::Error::Operation(_)),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn redirects_to_plain_http_are_refused_even_locally() {
+    let (target, _) = serve(vec![("/tool-bin", PROGRAM.to_vec())]);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                line.clear();
+            }
+            let mut stream = &stream;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 302 Found\r\nLocation: {target}/tool-bin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        }
+    });
+    let d = download(&base, "/tool", PROGRAM, Archive::Binary, "tool");
+    let cache = tempfile::tempdir().unwrap();
+    let error = installed(cache.path(), &d).unwrap_err().to_string();
+    assert!(error.contains("redirect"), "{error}");
+}
+
+#[test]
+fn reinstalling_an_identical_cached_copy_keeps_it_in_place() {
+    let (base, log) = serve(vec![("/tool-bin", PROGRAM.to_vec())]);
+    let d = download(&base, "/tool-bin", PROGRAM, Archive::Binary, "tool");
+    let cache = tempfile::tempdir().unwrap();
+    let tool = spec("1.2.3", &d);
+    let first = tempfile::tempdir().unwrap();
+    let path = provision::reinstall(first.path(), &tool, cache.path(), 30).unwrap();
+    let marker = path.parent().unwrap().join("in-use");
+    fs::write(&marker, b"another repository is using this copy").unwrap();
+    // A second repository verifies against a fresh download, then records
+    // the same copy instead of replacing a directory others may be using.
+    let second = tempfile::tempdir().unwrap();
+    assert_eq!(
+        provision::trust(second.path(), &tool, cache.path()),
+        provision::Trust::Unrecorded
+    );
+    let again = provision::reinstall(second.path(), &tool, cache.path(), 30).unwrap();
+    assert_eq!(again, path);
+    assert!(marker.exists());
+    assert_eq!(log.lock().unwrap().len(), 2);
+    assert_eq!(
+        provision::trust(second.path(), &tool, cache.path()),
+        provision::Trust::Verified(path)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn records_are_never_written_through_a_symlink() {
+    let (base, _) = serve(vec![("/tool-bin", PROGRAM.to_vec())]);
+    let d = download(&base, "/tool-bin", PROGRAM, Archive::Binary, "tool");
+    let (repo, cache, elsewhere) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    std::os::unix::fs::symlink(elsewhere.path(), repo.path().join(".depsmith")).unwrap();
+    let error = provision::reinstall(repo.path(), &spec("1.2.3", &d), cache.path(), 30)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("symlink"), "{error}");
+    assert_eq!(fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+}

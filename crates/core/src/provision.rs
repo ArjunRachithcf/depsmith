@@ -72,7 +72,7 @@ pub fn host_download(tool: &ToolSpec) -> Option<&ToolDownload> {
 }
 
 /// A relative path with only normal components, or an error naming `what`.
-fn contained(path: &Path, what: &str) -> Result<PathBuf> {
+fn confined(path: &Path, what: &str) -> Result<PathBuf> {
     if !crate::working_tree::contained(path) {
         return Err(Error::Invalid(format!(
             "{what} {} escapes the tool directory",
@@ -83,13 +83,13 @@ fn contained(path: &Path, what: &str) -> Result<PathBuf> {
 }
 
 fn version_dir(name: &str, version: &str, cache: &Path) -> Result<PathBuf> {
-    Ok(cache.join(contained(&Path::new(name).join(version), "tool")?))
+    Ok(cache.join(confined(&Path::new(name).join(version), "tool")?))
 }
 
 /// The installed executable of `download` for `name` `version` in `cache`,
 /// if it is there.
 pub fn cached(name: &str, version: &str, download: &ToolDownload, cache: &Path) -> Option<PathBuf> {
-    let executable = contained(Path::new(&download.executable), "executable").ok()?;
+    let executable = confined(Path::new(&download.executable), "executable").ok()?;
     let path = version_dir(name, version, cache).ok()?.join(executable);
     path.is_file().then_some(path)
 }
@@ -109,11 +109,12 @@ fn fetch(url: &str, timeout: u64) -> Result<Vec<u8>> {
             "refusing to download {url}: only https URLs (or http to this machine) are fetched"
         )));
     }
-    // Every redirect hop is held to the same rule as the first URL.
+    // Redirects must be HTTPS: only the first URL may be plain HTTP to this
+    // machine (local test servers).
     let policy = reqwest::redirect::Policy::custom(|attempt| {
         if attempt.previous().len() > 10 {
             attempt.error("too many redirects")
-        } else if allowed(attempt.url()) {
+        } else if attempt.url().scheme() == "https" {
             attempt.follow()
         } else {
             let url = attempt.url().to_string();
@@ -141,7 +142,7 @@ fn fetch(url: &str, timeout: u64) -> Result<Vec<u8>> {
 }
 
 fn write_entry(out: &Path, relative: &Path, reader: &mut dyn Read) -> Result<()> {
-    let path = out.join(contained(relative, "archive entry")?);
+    let path = out.join(confined(relative, "archive entry")?);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -188,36 +189,23 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
     }
 }
 
-/// Download `download` for `name` `version` into `cache` and return the
-/// executable, reusing an earlier install. The asset is checked against its
-/// sha256 before it is unpacked, and the version directory appears only once
-/// complete.
-///
-/// # Errors
-///
-/// Fails for a URL that is neither HTTPS nor loopback, a failed download, a
-/// checksum mismatch, an unreadable archive, an entry escaping the tool
-/// directory, or an archive without the executable.
-pub fn install(
-    name: &str,
-    version: &str,
+/// Download `download`, check its sha256 and unpack it into a staging
+/// directory beside `target`; returns the staging directory (removed when
+/// dropped) and the unpacked tree holding the executable.
+fn fetch_verified(
     download: &ToolDownload,
-    cache: &Path,
+    target: &Path,
     timeout: u64,
-) -> Result<PathBuf> {
-    let executable = contained(Path::new(&download.executable), "executable")?;
-    if let Some(path) = cached(name, version, download, cache) {
-        return Ok(path);
-    }
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    let executable = confined(Path::new(&download.executable), "executable")?;
     let bytes = fetch(&download.url, timeout)?;
     let actual = format!("{:x}", Sha256::digest(&bytes));
     if !actual.eq_ignore_ascii_case(&download.sha256) {
-        return Err(Error::Policy(format!(
+        return Err(Error::Operation(format!(
             "{} does not match its pinned sha256 (expected {}, got {actual}); nothing was installed",
             download.url, download.sha256
         )));
     }
-    let target = version_dir(name, version, cache)?;
     let parent = target.parent().expect("a version directory has a parent");
     fs::create_dir_all(parent)?;
     let staging = tempfile::tempdir_in(parent)?;
@@ -237,11 +225,46 @@ pub fn install(
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755))?;
     }
-    if target.exists() && !target.join(&executable).is_file() {
-        // An earlier install stopped part-way; replace it.
-        fs::remove_dir_all(&target)?;
+    Ok((staging, out))
+}
+
+/// Move the verified tree `out` to `target`, swapping out whatever is there.
+fn place(out: &Path, target: &Path) -> Result<()> {
+    if target.exists() {
+        let parent = target.parent().expect("a version directory has a parent");
+        let old = tempfile::Builder::new()
+            .prefix(".replaced-")
+            .tempdir_in(parent)?;
+        fs::rename(target, old.path().join("tree"))?;
     }
-    match fs::rename(&out, &target) {
+    fs::rename(out, target)?;
+    Ok(())
+}
+
+/// Download `download` for `name` `version` into `cache` and return the
+/// executable, reusing an earlier install. The asset is checked against its
+/// sha256 before it is unpacked, and the version directory appears only once
+/// complete.
+///
+/// # Errors
+///
+/// Fails for a URL that is neither HTTPS nor loopback, a failed download, a
+/// checksum mismatch, an unreadable archive, an entry escaping the tool
+/// directory, or an archive without the executable.
+pub fn install(
+    name: &str,
+    version: &str,
+    download: &ToolDownload,
+    cache: &Path,
+    timeout: u64,
+) -> Result<PathBuf> {
+    let executable = confined(Path::new(&download.executable), "executable")?;
+    if let Some(path) = cached(name, version, download, cache) {
+        return Ok(path);
+    }
+    let target = version_dir(name, version, cache)?;
+    let (_staging, out) = fetch_verified(download, &target, timeout)?;
+    match place(&out, &target) {
         // Another process finished the same install first.
         Err(_) if target.join(&executable).is_file() => {}
         result => result?,
@@ -361,7 +384,7 @@ pub enum Trust {
 /// Check the tool cache entry of `tool` against the record in `root`: the
 /// version depsmith pins, the executable's presence and its sha256.
 pub fn trust(root: &Path, tool: &ToolSpec, cache: &Path) -> Trust {
-    let version = tool.tested_versions.first().map_or("", String::as_str);
+    let version = tool.pinned_version().unwrap_or("");
     let Some(record) = read_records(root).remove(&tool.name) else {
         let cached = host_download(tool).and_then(|d| cached(&tool.name, version, d, cache));
         return if cached.is_some() {
@@ -394,6 +417,9 @@ pub fn trust(root: &Path, tool: &ToolSpec, cache: &Path) -> Trust {
 /// Record in `root` that `executable` is the install of `tool`, with its
 /// sha256, creating a self-ignoring `.depsmith` directory if needed.
 fn record(root: &Path, tool: &ToolSpec, executable: &Path) -> Result<()> {
+    crate::transaction::safe_path(root, Path::new(RECORDS))?;
+    // Concurrent runs in this repository must not lose each other's records.
+    let _lock = crate::transaction::operation_lock(root)?;
     let directory = root.join(".depsmith");
     fs::create_dir_all(&directory)?;
     let ignore = directory.join(".gitignore");
@@ -404,7 +430,7 @@ fn record(root: &Path, tool: &ToolSpec, executable: &Path) -> Result<()> {
     records.insert(
         tool.name.clone(),
         ToolRecord {
-            version: tool.tested_versions.first().cloned().unwrap_or_default(),
+            version: tool.pinned_version().unwrap_or_default().to_owned(),
             executable: executable.to_path_buf(),
             sha256: file_sha256(executable)?,
         },
@@ -419,14 +445,17 @@ fn record(root: &Path, tool: &ToolSpec, executable: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Download `tool` afresh into `cache` (discarding any cached copy, which
-/// cannot be verified once unpacked) and record the install in `root`.
+/// Download `tool` afresh and record it in `root`. A cached copy, which
+/// cannot be verified once unpacked, is compared with the fresh download:
+/// kept when identical (other repositories may be running it), otherwise
+/// replaced.
 ///
 /// # Errors
 ///
-/// As for [`install`], plus failures to remove the old copy or to write the
-/// record.
+/// As for [`install`], plus failures to replace the old copy or to write the
+/// record (including a symlinked `.depsmith`).
 pub fn reinstall(root: &Path, tool: &ToolSpec, cache: &Path, timeout: u64) -> Result<PathBuf> {
+    crate::transaction::safe_path(root, Path::new(RECORDS))?;
     let download = host_download(tool).ok_or_else(|| {
         Error::Invalid(format!(
             "{} has no download for {}-{}",
@@ -436,14 +465,17 @@ pub fn reinstall(root: &Path, tool: &ToolSpec, cache: &Path, timeout: u64) -> Re
         ))
     })?;
     let version = tool
-        .tested_versions
-        .first()
+        .pinned_version()
         .ok_or_else(|| Error::Invalid(format!("{} has no tested version to install", tool.name)))?;
-    let directory = version_dir(&tool.name, version, cache)?;
-    if directory.exists() {
-        fs::remove_dir_all(&directory)?;
+    let executable = confined(Path::new(&download.executable), "executable")?;
+    let target = version_dir(&tool.name, version, cache)?;
+    let (_staging, out) = fetch_verified(download, &target, timeout)?;
+    let identical = fs::read(target.join(&executable))
+        .is_ok_and(|bytes| fs::read(out.join(&executable)).is_ok_and(|fresh| fresh == bytes));
+    if !identical {
+        place(&out, &target)?;
     }
-    let path = install(&tool.name, version, download, cache, timeout)?;
+    let path = target.join(executable);
     record(root, tool, &path)?;
     Ok(path)
 }
