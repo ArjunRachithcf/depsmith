@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag (for example v0.1.0)
+        description: Existing version tag (for example v0.1.0 or v0.1.0rc1)
         required: true
         type: string
       publish:
@@ -45,7 +45,10 @@ jobs:
           if not match:
               raise SystemExit('Cannot read conda recipe version')
           versions = [manifest('Cargo.toml')['workspace']['package']['version'], manifest('pyproject.toml')['project']['version'], match.group(1)]
-          if versions != [tag[1:]] * 3:
+          # Cargo spells a pre-release 0.1.0-rc1; Python and conda, 0.1.0rc1.
+          def canonical(version):
+              return re.sub(r'[-_.]?(a|b|rc)[-_.]?(?=[0-9])', r'\1', version.lower())
+          if [canonical(v) for v in versions] != [canonical(tag[1:])] * 3:
               raise SystemExit(f'Tag {tag} disagrees with Rust/Python/conda versions: {versions}')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'sha={sha}\n')
@@ -104,4 +107,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release create "$RELEASE_TAG" assets/* --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
+        run: |
+          prerelease=()
+          if [[ "$RELEASE_TAG" =~ (a|b|rc)[0-9]+$ ]]; then prerelease=(--prerelease); fi
+          gh release create "$RELEASE_TAG" assets/* --verify-tag --draft "${prerelease[@]}" \
+            --title "$RELEASE_TAG" --generate-notes
