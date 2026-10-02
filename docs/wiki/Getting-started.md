@@ -3,20 +3,38 @@
 ## Install
 
 depsmith needs Python 3.10+ (for the package) or Rust 1.89+ (to build from
-source). The native package managers are installed separately: Pixi for Pixi
-targets, and Grype if you scan for vulnerabilities.
+source). Each target is resolved by its native package manager (Pixi, uv,
+cargo, conda-lock and micromamba), and Grype scans for vulnerabilities.
 
 ```sh
 python -m pip install .          # from a checkout
 depsmith --version
-depsmith doctor                  # capabilities and native tool status
+depsmith init --root /path/to/project   # check the tools its targets use
+depsmith doctor                  # capabilities and every native tool's status
 ```
+
+`depsmith init` discovers the targets, checks only the native tools they use
+(and Grype when `scan` is configured), and offers to install each missing one:
+the release depsmith is tested with, downloaded over HTTPS and checked against
+its pinned sha256, into a per-user tool cache (`DEPSMITH_TOOLS_DIR` overrides
+it). Each question says why the tool is offered (not installed, changed,
+outdated, or failing to run). Answer per tool, or pass `--fetch-tools` to
+install without asking (in CI); in Python, `depsmith.init(root,
+fetch_tools=True)` never prompts. `--target` limits the check to selected
+targets. A failed install is reported and the others continue; `init` exits
+3 while a used tool is still missing. Each
+install is recorded with its sha256 in the project's `.depsmith/` directory
+(which ignores itself in Git); a cached tool that changed, or that depsmith
+no longer pins, is not used until `init` installs it again. cargo and
+conda-lock are not downloaded: install them yourself. Tools on `PATH` or given
+with `--tool NAME=PATH` are always used as they are.
 
 A standalone executable builds with `cargo build --release --locked -p depsmith-cli`.
 
 `depsmith doctor` reports each native tool as `tested`, `untested` or
-`unavailable`. Only Pixi 0.80.0 and Grype 0.119.0 have been exercised; other
-versions are untested, not assumed incompatible. It also lists what each
+`unavailable`, with where it was found (`configured`, `path`, `downloaded`,
+`untrusted` or `missing`). Other versions than the tested ones are untested,
+not assumed incompatible. It also lists what each
 adapter supports.
 
 ## Check a project

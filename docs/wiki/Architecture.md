@@ -73,7 +73,12 @@ that ecosystem.
 2. Implement `declarations` and `rewrite` to get suggestions and `--accept`
    for free; describe registries in `availability`. A `Fixture` registry
    keeps tests offline.
-3. Register the adapter in `Engine::default`.
+3. Register the adapter in `Engine::default`. If its native tool ships
+   standalone release binaries, pin them (URL and sha256 per host) in
+   `provision.rs` so `depsmith init` can install it. For CI, pin the tested
+   version in `.github/tool-versions.json`, install it in the Integration
+   workflow, and describe the tool in `TOOLS` in `scripts/tool-drift.py` so
+   the weekly Latest tools run tracks its releases.
 4. Test it with `depsmith_core::conformance::check`, which runs the contract
    offline: spec round-trip and shape, discovery, managed files, selection,
    capability enforcement, and declarations round-tripping through `rewrite`.
@@ -92,7 +97,10 @@ adapter can speak the same contract over a subprocess bridge of JSON lines
 | `adapter` | The adapter contract, specs and capabilities |
 | `conformance` | Contract checks every adapter's tests run |
 | `constraints`, `ecosystem` | Declarations, registries, generic suggestions and acceptance; version schemes and scan identities |
-| `pixi`, `actions`, `cargo`, `conda` | The Pixi, GitHub Actions, Cargo and conda adapters |
+| `pixi`, `actions`, `cargo`, `conda`, `uv` | The Pixi, GitHub Actions, Cargo, conda and uv adapters |
+| `pyproject` | PEP 508 requirement lists of `pyproject.toml`, shared by the Python-aware adapters |
+| `provision` | Pinned tool downloads, the tool cache and per-repository tool records (`init`) |
+| `http` | The shared HTTP client |
 | `working_tree` | Listing, fingerprinting and staging repository files; path safety |
 | `scm` | Data-only Git staging for SCM-derived versions |
 | `transaction` | Applying proposals: stale checks, locking, journal, recovery |

@@ -32,6 +32,22 @@ _Avoid_: Plugin, driver
 A behaviour an adapter declares as supported, unsupported or not applicable, such as package selection or install validation.
 _Avoid_: Feature flag
 
+**Native tool**:
+An executable an adapter or the scanner runs, such as Pixi, uv, cargo or Grype, with the versions depsmith is tested with.
+_Avoid_: Binary, dependency
+
+**Init**:
+Checking the native tools a repository's targets use and, with consent, installing each missing one from its pinned, checksum-verified release.
+_Avoid_: Setup, bootstrap
+
+**Tool cache**:
+The per-user directory where init installs native tools, one directory per tool and version.
+_Avoid_: Tool directory, vendor directory
+
+**Tool record**:
+A repository's note of a tool init installed for it, with the executable's SHA-256; a cached tool runs only while it matches.
+_Avoid_: Lock (reserved for package locks), manifest
+
 **Direct dependency**:
 A package named in a target's own declarations, as opposed to one resolved only because another package needs it.
 _Avoid_: Top-level package

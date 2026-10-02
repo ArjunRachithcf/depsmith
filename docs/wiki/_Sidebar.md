@@ -8,6 +8,7 @@
 - [GitHub Actions adapter](GitHub-Actions-adapter)
 - [Cargo adapter](Cargo-adapter)
 - [Conda adapter](Conda-adapter)
+- [uv adapter](uv-adapter)
 - [Vulnerability scanning](Vulnerability-scanning)
 - [CI integration](CI-integration)
 - [Troubleshooting](Troubleshooting)

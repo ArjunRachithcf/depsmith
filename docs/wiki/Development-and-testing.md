@@ -24,10 +24,11 @@ Python tests need the built package installed. Three layers:
 
 1. **Offline end-to-end** (`crates/cli/tests/e2e.rs`): the real executable with
    a cross-platform Pixi stand-in on every CI host.
-2. **Native integration** (ignored by default): real Pixi, Grype, pypi.org and
-   the GitHub API.
-   `PIXI=… GRYPE=… GITHUB_TOKEN=… cargo test --workspace -- --ignored`, and
-   `PIXI=…` for the native Python tests.
+2. **Native integration** (ignored by default): real Pixi, uv, cargo,
+   conda-lock, Grype, pypi.org, crates.io and the GitHub API, plus a download
+   of the pinned uv.
+   `PIXI=… UV=… CARGO=… CONDA_LOCK=… CONDA_SOLVER=… GRYPE=… GITHUB_TOKEN=… cargo test --workspace -- --ignored`,
+   and `PIXI=…` for the native Python tests.
 3. **CLI/Python parity** (`tests/python/test_parity.py`).
 
 ## Documentation
@@ -49,5 +50,18 @@ fails when they are stale or a wiki link is broken.
 - **Integration** runs the native tests on pull requests (informational), on
   `main`, nightly (failures open a `nightly-integration` issue) and before
   releases.
+- **Latest tools** runs weekly. A tool's candidate is its highest stable
+  release published at least 7 days ago and newer than the tested one, so new
+  releases settle first and nothing moves back. Integration runs once per
+  candidate with only that tool changed. When it passes on every OS,
+  `scripts/tool-drift.py` opens a pull request on `latest-tools/<tool>` that
+  bumps the adapter's `tested_versions`, its pinned downloads in
+  `provision.rs` (with the release's sha256 digests) and its pin in
+  `.github/tool-versions.json` together; review and land it like any other.
+  A candidate that breaks Integration, a pinned download that is gone or whose
+  sha256 changed, or a bump that cannot be made opens a `latest-tools` issue
+  instead (one per tool). cargo, which CI runs as stable Rust, is never bumped
+  automatically. `crates/core/tests/pins.rs` checks the pins agree with the
+  tested versions.
 - Changes reach `main` through pull requests with signed commits; the required
   checks must pass.

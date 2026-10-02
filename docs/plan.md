@@ -4,11 +4,11 @@
 
 Build a Rust package updater with a consistent local and CI workflow, plus a typed Python API through PyO3. Distribute it as a standalone executable, a pip package, and a conda-forge package.
 
-**The first release targets a representative Pixi project:** update `pixi.lock`, suggest dependency-health improvements in `pixi.toml` and `pyproject.toml`, update GitHub Actions references (including commit-pin conversion), and optionally compare vulnerabilities before and after updates. It also ships Cargo and conda (conda-lock) adapters built on the extensible adapter seam (§8).
+**The first release targets a representative Pixi project:** update `pixi.lock`, suggest dependency-health improvements in `pixi.toml` and `pyproject.toml`, update GitHub Actions references (including commit-pin conversion), and optionally compare vulnerabilities before and after updates. It also ships Cargo, conda (conda-lock) and uv adapters built on the extensible adapter seam (§8).
 
 Release 0.1.0 is a public alpha on PyPI plus a draft GitHub release with standalone executables. The conda-forge recipe is prepared and validated in CI; feedstock submission follows the release and does not block it.
 
-A uv adapter follows this first release. The broader roadmap includes npm, vcpkg, prek/pre-commit, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
+The broader roadmap includes npm, vcpkg, prek/pre-commit, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
 
 ## 2. Architecture and public interfaces
 
@@ -121,7 +121,9 @@ Use Maturin for PyO3 wheels and source distributions, with Python type stubs. De
 
 Build and test standalone binaries and Python packages on Linux, Windows, and macOS. Initially target Linux/Windows x86-64 and macOS Intel/Apple Silicon.
 
-Prepare the conda-forge recipe and release automation. Feedstock acceptance and publishing credentials are external release prerequisites. Native backend tools remain separately installed; `doctor` explains missing or incompatible prerequisites.
+Prepare the conda-forge recipe and release automation. Feedstock acceptance and publishing credentials are external release prerequisites.
+
+**Native tools.** Package managers and Grype are separate executables. `depsmith init` checks the ones a repository's targets use and, only with consent (an interactive prompt per tool, `init --fetch-tools`, or `fetch_tools=True` in Python, which never prompts), installs each missing one from its pinned tested release: HTTPS only, sha256 verified before unpacking, confined unpacking, atomic install into a per-user tool cache. Each install is recorded with its sha256 in the repository's self-ignoring `.depsmith/tools.json`; a cached tool runs only while it matches that record at the pinned version, and is otherwise reported and offered again by `init`. Updates and scans never block on a missing tool. cargo and conda-lock are not downloaded. `doctor` explains every tool's source and version.
 
 ## 5. Implementation sequence and acceptance tests
 
@@ -144,20 +146,20 @@ Release tests must cover:
 Tests run in three layers, in priority order:
 
 1. **Offline CLI end-to-end** (every CI run, all four hosts, required): the built executable against disposable fixtures with a cross-platform scripted backend stand-in — check/apply/recheck exit codes, JSON stdout, stale proposals, and cancellation killing a backend's descendants on Unix and Windows.
-2. **Native integration** (pull requests to and pushes on `main`, nightly, and as a gate in the Release workflow; informational on pull requests): real Pixi 0.80.0 and Grype 0.119.0, pinned, plus pypi.org and the GitHub API — `[project]` suggestion acceptance, mixed conda/PyPI across multiple platforms, Actions tags/SHA pins/reusable workflows/major suggestions, and scanner comparisons (a native Git-pin preservation scenario is deferred; offline tests cover the policy). Failed native tests are retried once; nightly failures open or update a `nightly-integration` issue. Linux runs everything; Windows and macOS run the Pixi tests.
+2. **Native integration** (pull requests to and pushes on `main`, nightly, and as a gate in the Release workflow; informational on pull requests): real Pixi 0.80.0, uv 0.12.15, cargo, conda-lock 4.0.2 with micromamba 2.9.0 and Grype 0.119.0, pinned, plus pypi.org, crates.io and the GitHub API — `[project]` suggestion acceptance, mixed conda/PyPI across multiple platforms, Actions tags/SHA pins/reusable workflows/major suggestions, and scanner comparisons (a native Git-pin preservation scenario is deferred; offline tests cover the policy). Failed native tests are retried once; nightly failures open or update a `nightly-integration` issue. Linux runs everything; Windows and macOS run the Pixi and uv tests. A weekly **Latest tools** run repeats Integration once per tool with only that tool at its newest stable release published at least 7 days ago; it opens a pull request bumping each tool whose release passes (tested version, pinned downloads and Integration pin together), and keeps one `latest-tools` issue per tool that the release breaks, whose pinned checksum drifted, or that cannot be bumped automatically.
 3. **CLI/Python parity**: one fixture through both interfaces yields equal proposals.
 
-The **conda** adapter ships in this release (§8); **uv** follows. Conda locking uses conda-lock's artifact-exact unified YAML format, following conda-lock's own lock path (`environment.conda-lock.yml` is recognised). Reproduce any reported conda environment-creation failure before adding an ordering workaround; preserve it as a regression test if recovered.
+The **conda** and **uv** adapters ship in this release (§8). Conda locking uses conda-lock's artifact-exact unified YAML format, following conda-lock's own lock path (`environment.conda-lock.yml` is recognised). Reproduce any reported conda environment-creation failure before adding an ordering workaround; preserve it as a regression test if recovered.
 
 ## 6. Path to 0.1.0
 
 **A. Repository gates and merge.** `main` is protected by a ruleset (signed commits, linear history, pull requests, required checks, CodeQL). Codecov tracks coverage history per flag and component and gates patch coverage (80% of changed lines; its project status needs a paid plan); the in-repo `coverage` check fails below 75% combined Rust and Python line coverage, which also keeps a gate if Codecov is unavailable. GitHub's Code Quality coverage uploads are not available to this personal repository. Changes land through pull requests using a *local signed fast-forward*: rebase and sign locally, push the branch, wait for required checks, then fast-forward `main` from the verified branch (GitHub's server-side rebase-merge cannot sign commits). Repository administrators bypass the update restriction for this step only. Required checks cover every offline job (Rust ×4, MSRV, wheels ×4, sdist, conda, prek hooks, CLI end-to-end, coverage); native integration is not required on pull requests. Repository hooks run through prek locally and in CI.
 
-**B. Remaining release scope.** Saved interactive selection; offline CLI end-to-end tests including Windows process-tree termination; the native integration workflow; CLI/Python parity.
+**B. Release scope (done).** Saved interactive selection, offline CLI end-to-end tests including Windows process-tree termination, the native integration workflow and CLI/Python parity are merged; the uv adapter, `depsmith init` tool provisioning and the Latest tools workflow were added before the release.
 
 **C. Release.** Tag `v0.1.0` on `main`, run the Release workflow without publishing, review the artifacts, then publish only with explicit approval. PyPI trusted publishing and the `pypi`/`release` environments are configured beforehand. Submit the conda-forge feedstock afterwards.
 
-**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, then a uv adapter and an out-of-tree adapter bridge.
+**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, and an out-of-tree adapter bridge.
 
 ## 7. Documentation automation
 
@@ -176,6 +178,6 @@ Folded into 0.1.0 (ADR 0001). A new package manager is one adapter module plus o
 - **Seam:** an adapter is described by an owned, serde-serialisable `AdapterSpec` (manager, ecosystems, discovery patterns, managed files, skipped directories, native tools, capabilities). It reports `Declaration`s, applies `Edit`s with `rewrite`, names registries as data (`RegistryConfig`), may `pin` movable references, and prepares candidates in the stage. Discovery, staging, `doctor`, tool paths (`--tool NAME=PATH`), suggestions and `--accept` are generic.
 - **Ecosystems:** conda, PyPI, Cargo and GitHub Actions each have one version scheme (ordering, caps, restyling, explicit-requirement checks, pins) and one scan identity rule, shared by every manager that resolves them.
 - **Registries:** `pixi search`, PEP 691 indexes, the crates.io sparse index, conda sharded repodata (CEP 16, full repodata as fallback) and an inline fixture for tests, all feeding one evidence format.
-- **Adapters:** Pixi and GitHub Actions were ported without behaviour changes; Actions gained commit-pin suggestions and `--accept` to `@<sha> # vX.Y.Z`; Cargo targets each `Cargo.lock` owner with MSRV-aware resolution; conda targets `environment.yml` locked with conda-lock.
+- **Adapters:** Pixi and GitHub Actions were ported without behaviour changes; Actions gained commit-pin suggestions and `--accept` to `@<sha> # vX.Y.Z`; Cargo targets each `Cargo.lock` owner with MSRV-aware resolution; conda targets `environment.yml` locked with conda-lock; uv targets each `uv.lock` owner (workspace roots), reading `[project]`, `[dependency-groups]` and `tool.uv.dev-dependencies` through a shared `pyproject` module, keeping Git pins and following uv's index priority.
 - **Conformance:** `depsmith_core::conformance::check` runs the contract offline (spec round-trip, discovery, managed files, selection, capability enforcement, declarations round-tripping through `rewrite`). Each adapter also has a native live round trip in the Integration workflow.
 - **Protocol-ready:** every seam type holds owned data only, so an out-of-tree subprocess bridge (`{method, params}` JSON lines) can be added later without redesign.
