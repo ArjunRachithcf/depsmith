@@ -1,7 +1,9 @@
 # Native integration: real Pixi, uv, Grype, cargo and conda-lock plus conda-forge,
 # pypi.org, crates.io and the GitHub API. Informational on pull requests;
 # blocking as a gate in the Release workflow. Nightly failures open or update
-# a tracking issue (integration-alert.yml).
+# a tracking issue (integration-alert.yml). The Latest tools workflow calls it
+# with `latest-tool` to run one tool at its newest release, others pinned; the
+# pins below must equal the adapters' tested versions (checked by a test).
 name: Integration
 on:
   push:
@@ -16,12 +18,18 @@ on:
       ref:
         type: string
         required: true
+      latest-tool:
+        description: Tool to run at its latest release (pixi, uv, grype, conda-lock, conda)
+        type: string
+        default: ''
 permissions:
   contents: read
 env:
-  PIXI_VERSION: v0.80.0
-  GRYPE_VERSION: 0.119.0
-  UV_VERSION: 0.12.15
+  PIXI_VERSION: ${{ inputs.latest-tool == 'pixi' && 'latest' || 'v0.80.0' }}
+  GRYPE_VERSION: ${{ inputs.latest-tool == 'grype' && 'latest' || '0.119.0' }}
+  UV_VERSION: ${{ inputs.latest-tool == 'uv' && 'latest' || '0.12.15' }}
+  CONDA_LOCK_PIN: ${{ inputs.latest-tool != 'conda-lock' && '==4.0.2' || '' }}
+  MICROMAMBA_PIN: ${{ inputs.latest-tool != 'conda' && '==2.9.0' || '' }}
 jobs:
   native:
     strategy:
@@ -60,6 +68,9 @@ jobs:
       - name: Install Grype (checksum-verified)
         if: runner.os == 'Linux'
         run: |
+          if [ "$GRYPE_VERSION" = latest ]; then
+            GRYPE_VERSION=$(gh release view --repo anchore/grype --json tagName --jq .tagName | sed 's/^v//')
+          fi
           base="https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}"
           cd "$RUNNER_TEMP"
           curl -fsSLO "$base/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
@@ -71,7 +82,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          pixi global install conda-lock==4.0.2 micromamba==2.9.0
+          pixi global install "conda-lock${CONDA_LOCK_PIN}" "micromamba${MICROMAMBA_PIN}"
           echo "CONDA_LOCK=$(command -v conda-lock)" >> "$GITHUB_ENV"
           echo "CONDA_SOLVER=$(command -v micromamba)" >> "$GITHUB_ENV"
       - name: Native Rust tests (one retry for network flakes)
@@ -97,3 +108,14 @@ jobs:
             echo "::warning::Python tests failed; retrying once"
             run
           fi
+      - name: Record the result for the Latest tools report
+        if: always() && inputs.latest-tool != ''
+        shell: bash
+        run: |
+          mkdir -p latest-result
+          echo "${{ job.status }}" > "latest-result/${{ inputs.latest-tool }}-${{ runner.os }}"
+      - uses: actions/upload-artifact@v4
+        if: always() && inputs.latest-tool != ''
+        with:
+          name: latest-${{ inputs.latest-tool }}-${{ runner.os }}
+          path: latest-result/

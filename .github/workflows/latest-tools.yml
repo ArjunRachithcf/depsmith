@@ -1,0 +1,47 @@
+# Weekly drift tracking for the native tools depsmith drives: Integration runs
+# once per tool with only that tool at its latest release (others pinned), then
+# scripts/tool-drift.py opens, updates or closes one `latest-tools` issue per
+# tool: broken by its latest release, tested version behind a passing release,
+# or a pinned download whose sha256 changed upstream.
+name: Latest tools
+on:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [pixi, uv, grype, conda-lock, conda]
+    uses: ./.github/workflows/integration.yml
+    with:
+      ref: ${{ github.sha }}
+      latest-tool: ${{ matrix.tool }}
+  report:
+    needs: integration
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: latest-*
+          merge-multiple: true
+          path: results
+      - name: Report drift and sync issues
+        run: |
+          cargo run -q -p depsmith-cli --locked -- doctor --json > doctor.json
+          python scripts/tool-drift.py doctor.json results --issues | tee -a "$GITHUB_STEP_SUMMARY"

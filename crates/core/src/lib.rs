@@ -789,11 +789,13 @@ fn tool_report(
             let (status, version) = adapter::tool_status(&output, &tested_refs);
             serde_json::json!({"tool": name, "program": program, "available": true,
                 "status": status, "version": version, "tested_versions": tested,
-                "source": source.label(), "downloadable": downloadable, "untrusted": untrusted})
+                "source": source.label(), "downloadable": downloadable, "untrusted": untrusted,
+                "downloads": tool.downloads})
         }
         Err(error) => serde_json::json!({"tool": name, "program": program, "available": false,
             "status": "unavailable", "error": error.to_string(), "tested_versions": tested,
-            "source": source.label(), "downloadable": downloadable, "untrusted": untrusted}),
+            "source": source.label(), "downloadable": downloadable, "untrusted": untrusted,
+                "downloads": tool.downloads}),
     }
 }
 
