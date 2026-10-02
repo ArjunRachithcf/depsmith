@@ -535,6 +535,12 @@ mod stand_in {
             .find(|s| s.package == "six")
             .unwrap_or_else(|| panic!("{:?}", run.proposal.suggestions));
         assert_eq!(six.requirement, "==1.15.0");
+        // uv cannot change constraints itself: the hint points at --accept.
+        assert!(
+            six.reason.contains("--accept six") && !six.reason.contains("--upgrade"),
+            "{}",
+            six.reason
+        );
         assert!(six.evidence[0].contains("1.17.0"), "{:?}", six.evidence);
     }
 

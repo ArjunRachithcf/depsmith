@@ -28,7 +28,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15-intel, macos-latest]
+        # Release executables are named after their target triple.
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +60,7 @@ jobs:
       - run: python -c "import shutil; shutil.copyfile('LICENSE', 'target/release/LICENSE')"
       - uses: actions/upload-artifact@v4
         with:
-          name: cli-${{ matrix.os }}
+          name: cli-${{ matrix.target }}
           path: |
             target/release/depsmith
             target/release/depsmith.exe

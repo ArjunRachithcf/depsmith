@@ -124,8 +124,20 @@ pub struct FixtureRelease {
     pub sha256: String,
 }
 
-const REVIEW: &str =
-    "Preserve intentional pins; select this direct package with --upgrade to review a newly resolved constraint.";
+/// How to act on a suggestion for `package`: accept it, or, where the
+/// adapter can change constraints itself, review it with an upgrade.
+fn review(adapter: &dyn Adapter, package: &str) -> String {
+    let mut text = format!(
+        "Preserve intentional pins; accept the evidenced release with --accept {package}, or set one with --accept {package}=REQUIREMENT"
+    );
+    if adapter.spec().capabilities.constraint_changes == crate::adapter::Support::Supported {
+        text.push_str(&format!(
+            ", or review a newly resolved constraint with --package {package} --upgrade"
+        ));
+    }
+    text.push('.');
+    text
+}
 
 /// Any version newer than a declared one; restyling it succeeds exactly when
 /// the requirement's style is unambiguous.
@@ -449,7 +461,8 @@ pub(crate) fn suggest(
             continue;
         }
         seen.push(key);
-        let unestablished = format!("Declared pin or upper bound can exclude newer releases. {REVIEW} Newer availability has not been established.");
+        let review = review(adapter, &declaration.package);
+        let unestablished = format!("Declared pin or upper bound can exclude newer releases. {review} Newer availability has not been established.");
         let (reason, evidence) = match lookup.excluded(
             &declaration.ecosystem,
             &declaration.package,
@@ -458,7 +471,7 @@ pub(crate) fn suggest(
             Ok((excluded, failures)) if excluded.is_empty() && failures.is_empty() => continue,
             Ok((excluded, failures)) if excluded.is_empty() => (unestablished, failures),
             Ok((excluded, failures)) => (
-                format!("Declared pin or upper bound excludes a newer release. {REVIEW}"),
+                format!("Declared pin or upper bound excludes a newer release. {review}"),
                 excluded
                     .iter()
                     .map(ToString::to_string)
@@ -607,6 +620,44 @@ pub(crate) fn accept(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An adapter that only declares whether it can change constraints.
+    struct Changes(crate::adapter::Support);
+    impl Adapter for Changes {
+        fn spec(&self) -> crate::adapter::AdapterSpec {
+            let mut spec = crate::adapter::AdapterSpec::new("changes", &[]);
+            spec.capabilities.constraint_changes = self.0.clone();
+            spec
+        }
+        fn detects(&self, _: &Path, _: &str) -> bool {
+            false
+        }
+        fn prepare(
+            &self,
+            _: &Path,
+            _: &Target,
+            _: &crate::UpdateOptions,
+        ) -> Result<crate::adapter::Candidate> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn hints_offer_upgrade_only_where_constraints_can_change() {
+        use crate::adapter::Support;
+        let upgrading = review(&Changes(Support::Supported), "six");
+        assert!(
+            upgrading.contains("--accept six")
+                && upgrading.contains("--accept six=REQUIREMENT")
+                && upgrading.contains("--package six --upgrade"),
+            "{upgrading}"
+        );
+        let accepting = review(&Changes(Support::Unsupported("use --accept".into())), "six");
+        assert!(
+            accepting.contains("--accept six") && !accepting.contains("--upgrade"),
+            "{accepting}"
+        );
+    }
 
     fn records(versions: &[(&str, &[&str])]) -> serde_json::Value {
         let map: serde_json::Map<_, _> = versions
