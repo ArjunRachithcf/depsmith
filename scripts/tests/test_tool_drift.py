@@ -168,7 +168,7 @@ class BumpTests(unittest.TestCase):
                 (root / "crates/core/src/provision.rs").read_text(),
             )
             self.assertIn(
-                "'==2.10.0'", (root / ".github/workflows/integration.yml").read_text()
+                "|| '2.10.0')", (root / ".github/workflows/integration.yml").read_text()
             )
 
     def test_a_missing_asset_stops_the_bump(self):
