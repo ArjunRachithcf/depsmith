@@ -55,7 +55,7 @@ pub use model::*;
 use std::{fs, path::Path};
 
 /// Discovers targets and prepares proposals with a set of adapters. The
-/// default engine has the Pixi, GitHub Actions, Cargo and conda adapters.
+/// default engine has the Pixi, GitHub Actions, Cargo, conda and uv adapters.
 pub struct Engine {
     adapters: Vec<(Box<dyn Adapter>, adapter::AdapterSpec)>,
 }
