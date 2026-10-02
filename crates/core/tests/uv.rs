@@ -2,7 +2,10 @@
 //! rewrites, and suggestions, `--accept` and Git-pin preservation with a
 //! fixture registry and a stand-in uv.
 use depsmith_core::{adapter::Adapter, conformance, uv::Uv, Engine, Target};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 fn write(root: &Path, files: &[(&str, &str)]) {
     for (path, content) in files {
@@ -100,18 +103,13 @@ fn lock_owners_are_targets_and_members_are_not() {
 fn registry_requirements_of_the_workspace_are_declarations() {
     let root = tempfile::tempdir().unwrap();
     workspace(root.path());
-    let declared: Vec<(String, String, String, String)> = Uv::default()
+    let declared: Vec<(PathBuf, String, String, String)> = Uv::default()
         .declarations(root.path(), &target("pyproject.toml"))
         .unwrap()
         .into_iter()
         .map(|d| {
             assert_eq!(d.ecosystem, "pypi");
-            (
-                d.file.to_string_lossy().into_owned(),
-                d.location,
-                d.package,
-                d.requirement,
-            )
+            (d.file, d.location, d.package, d.requirement)
         })
         .collect();
     let expected = [
@@ -141,7 +139,7 @@ fn registry_requirements_of_the_workspace_are_declarations() {
             ">=3",
         ),
     ]
-    .map(|(f, l, p, r)| (f.to_owned(), l.to_owned(), p.to_owned(), r.to_owned()));
+    .map(|(f, l, p, r)| (PathBuf::from(f), l.to_owned(), p.to_owned(), r.to_owned()));
     assert_eq!(declared, expected);
 
     let selected = Uv::default()
