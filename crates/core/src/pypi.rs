@@ -1,5 +1,6 @@
 //! PyPI availability evidence through the PEP 691 JSON Simple API. Index URLs
-//! come from the manifest's `[pypi-options]`; credentials are never sent.
+//! come from the manifest's `[pypi-options]` (Pixi) or its uv settings;
+//! credentials are never sent.
 use crate::{Error, Result};
 use serde_json::Value;
 
