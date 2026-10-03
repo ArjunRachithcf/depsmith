@@ -631,6 +631,7 @@ mod tests {
                     sha256: "0".repeat(64),
                     archive: core::provision::Archive::Binary,
                     executable: name.into(),
+                    ..Default::default()
                 }]
             } else {
                 vec![]

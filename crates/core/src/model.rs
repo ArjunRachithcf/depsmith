@@ -75,6 +75,10 @@ pub struct UpdateOptions {
     pub pixi: String,
     /// Deprecated alias for `tools["grype"]`.
     pub grype: String,
+    /// Environment of tools `depsmith init` installed, by tool name, filled
+    /// by the engine from the tool records; never configured.
+    #[serde(skip)]
+    pub tool_envs: BTreeMap<String, Vec<(String, String)>>,
     /// Time limit for each package-manager or scanner process, in seconds.
     pub timeout_seconds: u64,
     /// Reviewed identity mappings used when scanning.
@@ -97,6 +101,7 @@ impl Default for UpdateOptions {
             tools: BTreeMap::new(),
             pixi: "pixi".into(),
             grype: "grype".into(),
+            tool_envs: BTreeMap::new(),
             timeout_seconds: 300,
             identity_mappings: vec![],
             suppressions: vec![],
@@ -272,6 +277,12 @@ impl Proposal {
 }
 
 impl UpdateOptions {
+    /// The environment the tool `name` runs with (empty unless installed by
+    /// `depsmith init`); pass it to [`crate::process::run_env`].
+    pub fn tool_env(&self, name: &str) -> &[(String, String)] {
+        self.tool_envs.get(name).map_or(&[], Vec::as_slice)
+    }
+
     /// The executable to run for the tool named `name`: its `tools` entry,
     /// else the deprecated `pixi`/`grype` field, else `name` itself.
     pub fn tool(&self, name: &str) -> String {

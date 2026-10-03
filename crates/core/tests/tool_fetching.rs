@@ -85,7 +85,13 @@ impl Adapter for Fetching {
         _: &Target,
         options: &UpdateOptions,
     ) -> depsmith_core::Result<Candidate> {
-        let output = depsmith_core::process::run(&options.tool(TOOL), &[], stage, 30)?;
+        let output = depsmith_core::process::run_env(
+            &options.tool(TOOL),
+            &[],
+            stage,
+            30,
+            options.tool_env(TOOL),
+        )?;
         Ok(Candidate {
             validation: vec![output.trim().to_owned()],
             ..Default::default()
@@ -126,7 +132,9 @@ fn names(value: &serde_json::Value) -> Vec<&str> {
 fn init_installs_missing_used_tools_only_with_consent() {
     let cache = tempfile::tempdir().unwrap();
     std::env::set_var("DEPSMITH_TOOLS_DIR", cache.path());
-    let program = b"#!/bin/sh\necho 'fetched tool ran'\n".to_vec();
+    // The tool reports whether it runs with its install's environment.
+    let program =
+        b"#!/bin/sh\necho \"fetched tool ran${FETCHED_HOME:+ in $FETCHED_HOME}\"\n".to_vec();
     let (base, requests) = serve(program.clone());
     let download = |name: &str, path: &str| ToolDownload {
         os: std::env::consts::OS.into(),
@@ -135,6 +143,8 @@ fn init_installs_missing_used_tools_only_with_consent() {
         sha256: format!("{:x}", Sha256::digest(&program)),
         archive: Archive::Binary,
         executable: name.into(),
+        env: [("FETCHED_HOME".to_owned(), "{prefix}/home".to_owned())].into(),
+        ..Default::default()
     };
     let engine = Engine::new(vec![Box::new(Fetching {
         downloads: vec![download(TOOL, "/tool"), download(BROKEN, "/broken")],
@@ -203,7 +213,10 @@ fn init_installs_missing_used_tools_only_with_consent() {
     assert_eq!(again["tools"][0]["source"], "downloaded");
     let fetched = engine.prepare(root.path(), &targets, none.clone()).unwrap();
     assert!(fetched.failures.is_empty(), "{:?}", fetched.failures);
-    assert!(fetched.validation.iter().any(|v| v == "fetched tool ran"));
+    assert!(fetched
+        .validation
+        .iter()
+        .any(|v| v.starts_with("fetched tool ran in ") && v.ends_with("/home")));
     assert_eq!(*requests.lock().unwrap(), 2);
 
     // A changed install is not run; init says why and downloads afresh.
@@ -225,5 +238,8 @@ fn init_installs_missing_used_tools_only_with_consent() {
     );
     assert_eq!(names(&restored["installed"]), [TOOL]);
     let fetched = engine.prepare(root.path(), &targets, none).unwrap();
-    assert!(fetched.validation.iter().any(|v| v == "fetched tool ran"));
+    assert!(fetched
+        .validation
+        .iter()
+        .any(|v| v.starts_with("fetched tool ran in ") && v.ends_with("/home")));
 }

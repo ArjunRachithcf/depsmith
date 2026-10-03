@@ -598,6 +598,36 @@ impl Engine {
             .collect()
     }
 
+    /// The tool named `name` as some adapter (or the scanner) declares it.
+    fn known_tool(&self, name: &str) -> Option<adapter::ToolSpec> {
+        self.specs()
+            .into_iter()
+            .flat_map(|spec| spec.tools)
+            .chain([scan::scanner_tool()])
+            .find(|tool| tool.name == name)
+    }
+
+    /// Executables of every known tool that can run now (configured, on
+    /// `PATH`, or a verified install recorded for `root`), for setup steps
+    /// that use another tool.
+    fn companions(
+        &self,
+        options: &UpdateOptions,
+        root: &Path,
+    ) -> std::collections::BTreeMap<String, String> {
+        self.specs()
+            .into_iter()
+            .flat_map(|spec| spec.tools)
+            .chain([scan::scanner_tool()])
+            .filter_map(|tool| match locate(&tool, options, root) {
+                (program, ToolSource::Configured | ToolSource::Path | ToolSource::Downloaded) => {
+                    Some((tool.name, program))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Point `options` at the verified installs recorded for `root` of the
     /// tools `targets` need; returns a note for each install that is no
     /// longer trusted, which is not used.
@@ -611,6 +641,10 @@ impl Engine {
         for tool in self.needed_tools(targets, options) {
             match locate(&tool, options, root) {
                 (program, ToolSource::Downloaded) => {
+                    if let Some(download) = provision::host_download(&tool) {
+                        let env = provision::runtime_env(download, Path::new(&program));
+                        options.tool_envs.insert(tool.name.clone(), env);
+                    }
                     options.tools.insert(tool.name.clone(), program);
                 }
                 (_, ToolSource::Untrusted(reason)) => notes.push(format!(
@@ -694,7 +728,35 @@ impl Engine {
             let cache = provision::cache_dir().ok_or_else(|| {
                 Error::Invalid("no tool cache directory; set DEPSMITH_TOOLS_DIR".into())
             })?;
-            match provision::reinstall(root, tool, &cache, options.timeout_seconds) {
+            let mut companions = self.companions(options, root);
+            // A Python tool is installed with uv: offer uv first if missing.
+            let needs_uv = matches!(
+                provision::host_download(tool).and_then(|d| d.setup.as_ref()),
+                Some(provision::Setup::UvVenv { .. })
+            );
+            if needs_uv && !companions.contains_key("uv") {
+                if let Some(uv) = self.known_tool("uv") {
+                    let reason = format!("needed to install {}", tool.name);
+                    if provision::host_download(&uv).is_some() && consent(&uv, &reason)? {
+                        match provision::reinstall(root, &uv, &cache, options.timeout_seconds) {
+                            Ok(path) => {
+                                companions.insert("uv".into(), path.to_string_lossy().into());
+                                installed.push(uv.name.clone());
+                            }
+                            Err(error) => failed.push(
+                                serde_json::json!({"tool": uv.name, "error": error.to_string()}),
+                            ),
+                        }
+                    }
+                }
+            }
+            match provision::reinstall_with(
+                root,
+                tool,
+                &cache,
+                options.timeout_seconds,
+                &companions,
+            ) {
                 Ok(_) => installed.push(tool.name.clone()),
                 Err(error) => {
                     failed.push(serde_json::json!({"tool": tool.name, "error": error.to_string()}))
@@ -778,11 +840,18 @@ fn tool_report(
     let name = &tool.name;
     let tested = &tool.tested_versions;
     let tested_refs: Vec<&str> = tested.iter().map(String::as_str).collect();
-    let result = process::run(
+    let env = match (&source, provision::host_download(tool)) {
+        (ToolSource::Downloaded, Some(download)) => {
+            provision::runtime_env(download, Path::new(&program))
+        }
+        _ => vec![],
+    };
+    let result = process::run_env(
         &program,
         &["--version".into()],
         Path::new("."),
         options.timeout_seconds,
+        &env,
     );
     match result {
         Ok(output) => {

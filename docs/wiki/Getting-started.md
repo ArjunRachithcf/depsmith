@@ -53,8 +53,10 @@ targets. A failed install is reported and the others continue; `init` exits
 3 while a used tool is still missing. Each
 install is recorded with its sha256 in the project's `.depsmith/` directory
 (which ignores itself in Git); a cached tool that changed, or that depsmith
-no longer pins, is not used until `init` installs it again. cargo and
-conda-lock are not downloaded: install them yourself. Tools on `PATH` or given
+no longer pins, is not used until `init` installs it again. cargo comes with the
+tested Rust toolchain (a pinned rustup, kept inside the cache), conda-lock
+is installed with uv from hash-locked requirements (uv is offered first when
+missing), and npm with a pinned Node.js LTS. Tools on `PATH` or given
 with `--tool NAME=PATH` are always used as they are.
 
 A standalone executable builds with `cargo build --release --locked -p depsmith`.

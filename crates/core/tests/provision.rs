@@ -93,6 +93,7 @@ fn download(
         sha256: sha256(bytes),
         archive,
         executable: executable.into(),
+        ..Default::default()
     }
 }
 
@@ -275,9 +276,19 @@ fn every_pinned_download_is_https_with_a_sha256_for_each_ci_host() {
         .filter(|t| !t.downloads.is_empty())
         .map(|t| t.name.as_str())
         .collect();
-    assert_eq!(downloadable, ["pixi", "conda", "uv", "grype"]);
+    assert_eq!(
+        downloadable,
+        ["pixi", "cargo", "conda-lock", "conda", "uv", "grype"]
+    );
     for tool in &tools {
         for d in &tool.downloads {
+            // A Python tool comes from its embedded hash-locked requirements
+            // through uv, not from a URL of its own.
+            if let Some(provision::Setup::UvVenv { lock, .. }) = &d.setup {
+                assert!(d.url.is_empty() && d.sha256.is_empty(), "{d:?}");
+                assert_eq!(lock, &tool.name);
+                continue;
+            }
             assert!(d.url.starts_with("https://"), "{}", d.url);
             assert!(
                 d.sha256.len() == 64 && d.sha256.chars().all(|c| c.is_ascii_hexdigit()),
@@ -285,8 +296,14 @@ fn every_pinned_download_is_https_with_a_sha256_for_each_ci_host() {
                 tool.name,
                 d.sha256
             );
+            // The asset is the tested version, or installs it (rustup-init
+            // installs the tested toolchain).
+            let installs = match &d.setup {
+                Some(provision::Setup::Run { args, .. }) => args.contains(&tool.tested_versions[0]),
+                _ => false,
+            };
             assert!(
-                d.url.contains(&tool.tested_versions[0]),
+                d.url.contains(&tool.tested_versions[0]) || installs,
                 "{} is not the tested {}",
                 d.url,
                 tool.tested_versions[0]
@@ -451,4 +468,208 @@ fn records_are_never_written_through_a_symlink() {
         .to_string();
     assert!(error.contains("symlink"), "{error}");
     assert_eq!(fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+mod installers {
+    use super::*;
+    use provision::Setup;
+
+    /// An installer that writes `{prefix}/tool/bin/tool` from its first
+    /// argument and records its environment.
+    const INSTALLER: &[u8] = b"#!/bin/sh\nset -e\nmkdir -p \"$1/tool/bin\"\nprintf '#!/bin/sh\\necho installed\\n' > \"$1/tool/bin/tool\"\nchmod 755 \"$1/tool/bin/tool\"\necho \"$TOOL_HOME\" > \"$1/home\"\n";
+
+    fn installer(base: &str, bytes: &[u8]) -> ToolDownload {
+        ToolDownload {
+            setup: Some(Setup::Run {
+                installer: "tool-init".into(),
+                args: vec!["{prefix}".into()],
+                env: [("TOOL_HOME".to_owned(), "{prefix}/tool".to_owned())].into(),
+            }),
+            env: [("TOOL_HOME".to_owned(), "{prefix}/tool".to_owned())].into(),
+            path: vec!["tool/bin".into()],
+            ..download(base, "/tool-init", bytes, Archive::Binary, "tool/bin/tool")
+        }
+    }
+
+    #[test]
+    fn an_installer_runs_in_the_version_directory() {
+        let (base, _) = serve(vec![("/tool-init", INSTALLER.to_vec())]);
+        let d = installer(&base, INSTALLER);
+        let cache = tempfile::tempdir().unwrap();
+        let path = provision::install("tool", "1.2.3", &d, cache.path(), 30).unwrap();
+        let prefix = cache.path().join("tool").join("1.2.3");
+        assert_eq!(path, prefix.join("tool/bin/tool"));
+        assert!(path.is_file());
+        // The installer ran in the staging directory with expanded arguments.
+        assert!(fs::read_to_string(prefix.join("home"))
+            .unwrap()
+            .trim()
+            .ends_with("/tool"));
+        let env = provision::runtime_env(&d, &path);
+        assert_eq!(
+            env.iter()
+                .find(|(k, _)| k == "TOOL_HOME")
+                .map(|(_, v)| v.clone()),
+            Some(prefix.join("tool").to_string_lossy().into_owned())
+        );
+        let path_var = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone())
+            .unwrap();
+        assert!(
+            path_var.starts_with(&*prefix.join("tool/bin").to_string_lossy()),
+            "{path_var}"
+        );
+    }
+
+    #[test]
+    fn a_failing_or_incomplete_installer_installs_nothing() {
+        let broken: &[u8] = b"#!/bin/sh\nexit 3\n";
+        let silent: &[u8] = b"#!/bin/sh\nexit 0\n";
+        let (base, _) = serve(vec![
+            ("/broken", broken.to_vec()),
+            ("/silent", silent.to_vec()),
+        ]);
+        for (path, bytes, needle) in [
+            ("/broken", broken, "installer"),
+            ("/silent", silent, "tool/bin/tool"),
+        ] {
+            let mut d = installer(&base, bytes);
+            d.url = format!("{base}{path}");
+            let cache = tempfile::tempdir().unwrap();
+            let error = provision::install("tool", "1.2.3", &d, cache.path(), 30)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(needle), "{error}");
+            assert!(!cache.path().join("tool").join("1.2.3").exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+mod python_tools {
+    use super::*;
+    use provision::Setup;
+    use std::collections::BTreeMap;
+
+    /// A uv that makes `venv DIR` a directory with bin/python and, for
+    /// `pip install --python DIR ... -r FILE`, keeps FILE and adds the tool.
+    fn stub_uv(dir: &Path) -> String {
+        let uv = dir.join("uv");
+        fs::write(
+            &uv,
+            "#!/bin/sh\nset -e\ncase \"$1\" in\n  venv) for a; do last=$a; done; mkdir -p \"$last/bin\"; echo \"$*\" > \"$last/venv-args\";;\n  pip) shift 2; venv=\"\"; req=\"\"; while [ $# -gt 0 ]; do case \"$1\" in --python) venv=$2; shift 2;; -r) req=$2; shift 2;; *) echo \"$1\" >> \"$venv/pip-flags\"; shift;; esac; done; cp \"$req\" \"$venv/requirements\"; printf '#!/bin/sh\\necho conda-lock 4.0.2\\n' > \"$venv/bin/conda-lock\"; chmod 755 \"$venv/bin/conda-lock\";;\n  *) exit 2;;\nesac\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
+        uv.to_string_lossy().into_owned()
+    }
+
+    fn conda_lock() -> ToolDownload {
+        provision::host_download(&depsmith_core::adapter::ToolSpec {
+            name: "conda-lock".into(),
+            default: "conda-lock".into(),
+            tested_versions: vec!["4.0.2".into()],
+            downloads: provision::pinned("conda-lock"),
+        })
+        .expect("conda-lock for this host")
+        .clone()
+    }
+
+    #[test]
+    fn python_tools_install_hash_locked_into_a_relocatable_venv() {
+        let d = conda_lock();
+        assert!(matches!(d.setup, Some(Setup::UvVenv { .. })), "{d:?}");
+        let (stub, cache) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let tools = BTreeMap::from([("uv".to_owned(), stub_uv(stub.path()))]);
+        let path =
+            provision::install_with("conda-lock", "4.0.2", &d, cache.path(), 30, &tools).unwrap();
+        let venv = cache.path().join("conda-lock/4.0.2/venv");
+        assert_eq!(path, venv.join("bin/conda-lock"));
+        assert!(fs::read_to_string(venv.join("venv-args"))
+            .unwrap()
+            .contains("--relocatable"));
+        let flags = fs::read_to_string(venv.join("pip-flags")).unwrap();
+        assert!(
+            flags.contains("--require-hashes") && flags.contains("--no-deps"),
+            "{flags}"
+        );
+        let requirements = fs::read_to_string(venv.join("requirements")).unwrap();
+        assert!(requirements.contains("conda-lock==4.0.2"), "{requirements}");
+        assert!(requirements.contains("--hash=sha256:"));
+    }
+
+    #[test]
+    fn python_tools_need_uv() {
+        let cache = tempfile::tempdir().unwrap();
+        let error = provision::install_with(
+            "conda-lock",
+            "4.0.2",
+            &conda_lock(),
+            cache.path(),
+            30,
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("needs uv"), "{error}");
+    }
+}
+
+#[cfg(unix)]
+mod symlinks {
+    use super::*;
+
+    fn with_link(link: &str, target: &str) -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(vec![], flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        let mut file = tar::Header::new_gnu();
+        file.set_size(PROGRAM.len() as u64);
+        file.set_mode(0o755);
+        file.set_cksum();
+        builder
+            .append_data(&mut file, "tool-x/lib/real-tool", PROGRAM)
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        builder.append_link(&mut header, link, target).unwrap();
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn links_inside_the_archive_are_kept() {
+        let tarball = with_link("tool-x/bin/tool", "../lib/real-tool");
+        let (base, _) = serve(vec![("/t.tar.gz", tarball.clone())]);
+        let d = download(
+            &base,
+            "/t.tar.gz",
+            &tarball,
+            Archive::TarGz,
+            "tool-x/bin/tool",
+        );
+        let cache = tempfile::tempdir().unwrap();
+        assert_eq!(installed(cache.path(), &d).unwrap(), PROGRAM);
+    }
+
+    #[test]
+    fn links_leaving_the_archive_are_refused() {
+        let tarball = with_link("tool-x/bin/tool", "../../../../etc/passwd");
+        let (base, _) = serve(vec![("/t.tar.gz", tarball.clone())]);
+        let d = download(
+            &base,
+            "/t.tar.gz",
+            &tarball,
+            Archive::TarGz,
+            "tool-x/lib/real-tool",
+        );
+        let cache = tempfile::tempdir().unwrap();
+        let error = installed(cache.path(), &d).unwrap_err().to_string();
+        assert!(error.contains("escapes"), "{error}");
+        assert!(!cache.path().join("tool").join("1.2.3").exists());
+    }
 }

@@ -9,7 +9,7 @@ use crate::{
     },
     constraint::Excluded,
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
-    process::{run, run_env_output},
+    process::{run_env, run_env_output},
     Error, Package, Result, Suggestion, Target, UpdateOptions,
 };
 use std::{
@@ -365,8 +365,8 @@ fn held_back(report: &str, target: &Target) -> Vec<Suggestion> {
 }
 
 /// Reject cargo older than 1.84, which cannot resolve MSRV-aware.
-fn check_version(cargo: &str, stage: &Path, timeout: u64) -> Result<()> {
-    let output = run(cargo, &["--version".into()], stage, timeout)?;
+fn check_version(cargo: &str, stage: &Path, timeout: u64, env: &[(String, String)]) -> Result<()> {
+    let output = run_env(cargo, &["--version".into()], stage, timeout, env)?;
     let version = output
         .split_whitespace()
         .nth(1)
@@ -516,7 +516,7 @@ impl Adapter for Cargo {
         }
         let cargo = options.tool("cargo");
         let timeout = options.timeout_seconds;
-        check_version(&cargo, stage, timeout)?;
+        check_version(&cargo, stage, timeout, options.tool_env("cargo"))?;
         let manifest = stage.join(&target.manifest);
         let manifest_arg: String = manifest.to_string_lossy().into();
         let check = LockCheck::take(
@@ -538,10 +538,13 @@ impl Adapter for Cargo {
         for package in &options.packages {
             args.extend(["-p".into(), package.clone()]);
         }
-        let msrv = [(
+        // MSRV-aware resolution, in the toolchain's own environment when
+        // `depsmith init` installed it.
+        let mut msrv = vec![(
             "CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS".to_owned(),
             "fallback".to_owned(),
         )];
+        msrv.extend(options.tool_env("cargo").iter().cloned());
         let (_, report) = run_env_output(&cargo, &args, stage, timeout, &msrv)?;
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env_output(

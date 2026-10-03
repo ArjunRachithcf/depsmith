@@ -16,7 +16,7 @@ versions have been tested, and what each adapter supports.
 | "the selected root is inside a Git repository" | Select the repository root, not a subdirectory. |
 | Git layout rejected (submodules, sparse checkout, includes, …) | These layouts cannot be staged reproducibly yet. |
 | "local dependency escapes the repository" | Local path dependencies must be inside the repository. |
-| A backend "not found", or `init` exits 3 | The tool is not installed. Run `depsmith init` (or `init --fetch-tools` in CI) to install the tested release, install it yourself, or pass `--tool NAME=PATH`. cargo and conda-lock are never downloaded. |
+| A backend "not found", or `init` exits 3 | The tool is not installed. Run `depsmith init` (or `init --fetch-tools` in CI) to install the tested release, install it yourself, or pass `--tool NAME=PATH`. cargo comes with a pinned rustup toolchain and conda-lock is installed with uv (offered first when missing). |
 | Validation note "… changed since depsmith installed it" or "… now uses …" | A tool `init` installed was modified, or depsmith now pins another version. It is not used; run `depsmith init` to install it again. |
 | Exit 3 with a backend's error | The last 40 stderr lines are shown with credentials redacted. Timeouts: raise `--timeout-seconds`. |
 | Exit 5 | Some targets failed; others can be applied with `--allow-partial`. |

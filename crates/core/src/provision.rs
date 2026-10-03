@@ -6,13 +6,14 @@ use crate::{adapter::ToolSpec, Error, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
 };
 
 /// How a release asset packages its executable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Archive {
     /// A gzip-compressed tarball.
@@ -20,11 +21,48 @@ pub enum Archive {
     /// A zip archive.
     Zip,
     /// The executable itself.
+    #[default]
     Binary,
 }
 
-/// A pinned release asset of a tool for one host.
+/// A step that turns a verified download into the installed tool, when
+/// unpacking alone does not. `{prefix}` in its strings is the directory being
+/// installed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Setup {
+    /// Run the downloaded installer (a [`Archive::Binary`] saved as
+    /// `installer`) with `args` and `env`; it must produce the executable.
+    Run {
+        /// File name the downloaded installer is saved as.
+        installer: String,
+        /// Arguments to the installer.
+        args: Vec<String>,
+        /// Environment for the installer.
+        env: BTreeMap<String, String>,
+    },
+    /// Install a Python tool with uv into a relocatable venv (`venv` under
+    /// the install directory) from an embedded, hash-locked requirements
+    /// file; nothing is downloaded outside uv's own verified fetches.
+    UvVenv {
+        /// Name of the embedded lock, such as `conda-lock`.
+        lock: String,
+        /// Python version for the venv.
+        python: String,
+    },
+}
+
+/// The embedded, universal, hash-locked requirements of the Python tools
+/// depsmith installs (`uv pip compile --universal --generate-hashes`).
+fn locked_requirements(name: &str) -> Option<&'static str> {
+    match name {
+        "conda-lock" => Some(include_str!("pins/conda-lock.txt")),
+        _ => None,
+    }
+}
+
+/// A pinned release asset of a tool for one host.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolDownload {
     /// Host operating system, as [`std::env::consts::OS`] (`linux`, `macos`,
     /// `windows`).
@@ -38,8 +76,46 @@ pub struct ToolDownload {
     /// How the asset packages the executable.
     pub archive: Archive,
     /// Path of the executable inside the archive (its file name for a
-    /// [`Archive::Binary`]).
+    /// [`Archive::Binary`]), or produced by [`ToolDownload::setup`].
     pub executable: String,
+    /// A step after unpacking, such as running an installer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Setup>,
+    /// Environment the tool runs with; `{prefix}` is its install directory.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// Directories of the install, relative to it, put first on `PATH` when
+    /// the tool runs (for companions such as `rustc` or `node`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+}
+
+/// `text` with `{prefix}` replaced by `prefix`.
+fn expand(text: &str, prefix: &Path) -> String {
+    text.replace("{prefix}", &prefix.to_string_lossy())
+}
+
+/// The environment `download`'s tool runs with, installed with its
+/// executable at `executable`: its `env` and, first on `PATH`, its `path`
+/// directories, all under the install directory.
+pub fn runtime_env(download: &ToolDownload, executable: &Path) -> Vec<(String, String)> {
+    let depth = Path::new(&download.executable).components().count();
+    let Some(prefix) = executable.ancestors().nth(depth) else {
+        return vec![];
+    };
+    let mut env: Vec<(String, String)> = download
+        .env
+        .iter()
+        .map(|(key, value)| (key.clone(), expand(value, prefix)))
+        .collect();
+    if !download.path.is_empty() {
+        let dirs = download.path.iter().map(|dir| prefix.join(dir));
+        let current = std::env::var_os("PATH").unwrap_or_default();
+        let joined =
+            std::env::join_paths(dirs.chain(std::env::split_paths(&current))).unwrap_or(current);
+        env.push(("PATH".into(), joined.to_string_lossy().into_owned()));
+    }
+    env
 }
 
 /// The tool cache: `DEPSMITH_TOOLS_DIR`, else `depsmith/tools` under the
@@ -150,6 +226,50 @@ fn write_entry(out: &Path, relative: &Path, reader: &mut dyn Read) -> Result<()>
     Ok(())
 }
 
+/// Create the archive link `relative` -> `target` under `out` when the target,
+/// resolved from the link's directory, stays inside `out` (Node ships
+/// `bin/npm` as a link into `lib/`); refuse any other link.
+fn write_link(out: &Path, relative: &Path, target: &Path) -> Result<()> {
+    let link = confined(relative, "archive entry")?;
+    let mut depth: Vec<&std::ffi::OsStr> = vec![];
+    for component in link
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .chain(target.components())
+    {
+        match component {
+            std::path::Component::Normal(part) => depth.push(part),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir if depth.pop().is_some() => {}
+            _ => {
+                return Err(Error::Invalid(format!(
+                    "archive link {} -> {} escapes the tool directory",
+                    relative.display(),
+                    target.display()
+                )))
+            }
+        }
+    }
+    let path = out.join(link);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, &path)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        Err(Error::Operation(format!(
+            "archive link {} cannot be created on this platform ({})",
+            relative.display(),
+            path.display()
+        )))
+    }
+}
+
 /// Unpack the regular files of `bytes` into `out`, refusing any entry whose
 /// path would leave it.
 fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
@@ -158,13 +278,26 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
     };
     match download.archive {
         Archive::Binary => {
-            let name = Path::new(&download.executable);
+            let name = match &download.setup {
+                Some(Setup::Run { installer, .. }) => Path::new(installer),
+                _ => Path::new(&download.executable),
+            };
             write_entry(out, name, &mut &bytes[..])
         }
         Archive::TarGz => {
             let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
             for entry in archive.entries().map_err(|e| unreadable(&e))? {
                 let mut entry = entry.map_err(|e| unreadable(&e))?;
+                if entry.header().entry_type().is_symlink() {
+                    let path = entry.path().map_err(|e| unreadable(&e))?.into_owned();
+                    let target = entry
+                        .link_name()
+                        .map_err(|e| unreadable(&e))?
+                        .ok_or_else(|| unreadable(&"a link without a target"))?
+                        .into_owned();
+                    write_link(out, &path, &target)?;
+                    continue;
+                }
                 if !entry.header().entry_type().is_file() {
                     continue;
                 }
@@ -196,7 +329,11 @@ fn fetch_verified(
     download: &ToolDownload,
     target: &Path,
     timeout: u64,
+    tools: &BTreeMap<String, String>,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
+    if let Some(Setup::UvVenv { lock, python }) = &download.setup {
+        return uv_venv(download, target, timeout, tools, lock, python);
+    }
     let executable = confined(Path::new(&download.executable), "executable")?;
     let bytes = fetch(&download.url, timeout)?;
     let actual = format!("{:x}", Sha256::digest(&bytes));
@@ -212,6 +349,26 @@ fn fetch_verified(
     let out = staging.path().join("out");
     fs::create_dir(&out)?;
     unpack(&bytes, download, &out)?;
+    if let Some(Setup::Run {
+        installer,
+        args,
+        env,
+    }) = &download.setup
+    {
+        let installer = out.join(confined(Path::new(installer), "installer")?);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))?;
+        }
+        let args: Vec<String> = args.iter().map(|a| expand(a, &out)).collect();
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| (k.clone(), expand(v, &out)))
+            .collect();
+        crate::process::run_env(&installer.to_string_lossy(), &args, &out, timeout, &env)
+            .map_err(|e| Error::Operation(format!("installer {} failed: {e}", download.url)))?;
+    }
     let program = out.join(&executable);
     if !program.is_file() {
         return Err(Error::Operation(format!(
@@ -224,6 +381,65 @@ fn fetch_verified(
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok((staging, out))
+}
+
+/// Build a Python tool's venv in a staging directory beside `target`.
+fn uv_venv(
+    download: &ToolDownload,
+    target: &Path,
+    timeout: u64,
+    tools: &BTreeMap<String, String>,
+    lock: &str,
+    python: &str,
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    let executable = confined(Path::new(&download.executable), "executable")?;
+    let requirements = locked_requirements(lock)
+        .ok_or_else(|| Error::Invalid(format!("no embedded requirements named {lock}")))?;
+    let uv = tools.get("uv").ok_or_else(|| {
+        Error::Invalid(format!(
+            "installing {lock} needs uv: install it, pass --tool uv=PATH, or let depsmith init install uv first"
+        ))
+    })?;
+    let parent = target.parent().expect("a version directory has a parent");
+    fs::create_dir_all(parent)?;
+    let staging = tempfile::tempdir_in(parent)?;
+    let out = staging.path().join("out");
+    fs::create_dir(&out)?;
+    let venv: String = out.join("venv").to_string_lossy().into();
+    let pinned = out.join("requirements.txt");
+    fs::write(&pinned, requirements)?;
+    let failed = |e: Error| Error::Operation(format!("installing {lock} with uv failed: {e}"));
+    crate::process::run(
+        uv,
+        &["venv", "--relocatable", "--python", python, &venv].map(str::to_owned),
+        &out,
+        timeout,
+    )
+    .map_err(failed)?;
+    crate::process::run(
+        uv,
+        &[
+            "pip",
+            "install",
+            "--python",
+            &venv,
+            "--require-hashes",
+            "--no-deps",
+            "-r",
+            &pinned.to_string_lossy(),
+        ]
+        .map(str::to_owned),
+        &out,
+        timeout,
+    )
+    .map_err(failed)?;
+    if !out.join(&executable).is_file() {
+        return Err(Error::Operation(format!(
+            "installing {lock} produced no {}",
+            executable.display()
+        )));
     }
     Ok((staging, out))
 }
@@ -258,12 +474,29 @@ pub fn install(
     cache: &Path,
     timeout: u64,
 ) -> Result<PathBuf> {
+    install_with(name, version, download, cache, timeout, &BTreeMap::new())
+}
+
+/// [`install`], with the executables of companion tools a setup step needs
+/// (`uv` for [`Setup::UvVenv`]).
+///
+/// # Errors
+///
+/// As for [`install`], plus a missing companion tool or a failed setup step.
+pub fn install_with(
+    name: &str,
+    version: &str,
+    download: &ToolDownload,
+    cache: &Path,
+    timeout: u64,
+    tools: &BTreeMap<String, String>,
+) -> Result<PathBuf> {
     let executable = confined(Path::new(&download.executable), "executable")?;
     if let Some(path) = cached(name, version, download, cache) {
         return Ok(path);
     }
     let target = version_dir(name, version, cache)?;
-    let (_staging, out) = fetch_verified(download, &target, timeout)?;
+    let (_staging, out) = fetch_verified(download, &target, timeout, tools)?;
     match place(&out, &target) {
         // Another process finished the same install first.
         Err(_) if target.join(&executable).is_file() => {}
@@ -318,10 +551,214 @@ const MICROMAMBA: &[Asset] = &[
     ("windows", "aarch64", "https://github.com/mamba-org/micromamba-releases/releases/download/2.9.0-0/micromamba-win-arm64.exe", "f0da836d2398c00ac0b43e01f7581ba3430224a04405075c39eb3dd78bf0339a", Archive::Binary, "micromamba.exe"),
 ];
 
+/// A Python tool installed with uv from its embedded lock, on every host uv
+/// supports.
+fn python_tool(name: &str) -> Vec<ToolDownload> {
+    [
+        ("linux", "x86_64"),
+        ("linux", "aarch64"),
+        ("macos", "x86_64"),
+        ("macos", "aarch64"),
+        ("windows", "x86_64"),
+        ("windows", "aarch64"),
+    ]
+    .iter()
+    .map(|&(os, arch)| ToolDownload {
+        os: os.into(),
+        arch: arch.into(),
+        executable: if os == "windows" {
+            format!("venv/Scripts/{name}.exe")
+        } else {
+            format!("venv/bin/{name}")
+        },
+        setup: Some(Setup::UvVenv {
+            lock: name.into(),
+            python: "3.12".into(),
+        }),
+        ..Default::default()
+    })
+    .collect()
+}
+
+/// Node.js LTS by host, as (os, arch, Node platform, archive, sha256 from
+/// the release's SHASUMS256.txt).
+const NODE: &[(&str, &str, &str, Archive, &str)] = &[
+    (
+        "linux",
+        "x86_64",
+        "linux-x64",
+        Archive::TarGz,
+        "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
+    ),
+    (
+        "linux",
+        "aarch64",
+        "linux-arm64",
+        Archive::TarGz,
+        "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5",
+    ),
+    (
+        "macos",
+        "x86_64",
+        "darwin-x64",
+        Archive::TarGz,
+        "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097",
+    ),
+    (
+        "macos",
+        "aarch64",
+        "darwin-arm64",
+        Archive::TarGz,
+        "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057",
+    ),
+    (
+        "windows",
+        "x86_64",
+        "win-x64",
+        Archive::Zip,
+        "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+    ),
+    (
+        "windows",
+        "aarch64",
+        "win-arm64",
+        Archive::Zip,
+        "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
+    ),
+];
+/// The Node.js release whose bundled npm depsmith installs.
+pub(crate) const NODE_VERSION: &str = "24.21.0";
+
+/// npm as bundled with a pinned Node.js LTS; Node's directory is first on
+/// `PATH` so npm runs on that Node.
+fn node_downloads() -> Vec<ToolDownload> {
+    NODE.iter()
+        .map(|&(os, arch, platform, archive, sha256)| {
+            let root = format!("node-v{NODE_VERSION}-{platform}");
+            let (url, executable, bin) = if os == "windows" {
+                ("zip", format!("{root}/npm.cmd"), root.clone())
+            } else {
+                ("tar.gz", format!("{root}/bin/npm"), format!("{root}/bin"))
+            };
+            ToolDownload {
+                os: os.into(),
+                arch: arch.into(),
+                url: format!("https://nodejs.org/dist/v{NODE_VERSION}/{root}.{url}"),
+                sha256: sha256.into(),
+                archive,
+                executable,
+                path: vec![bin],
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+/// rustup-init, by host, as (os, arch, target triple, sha256).
+const RUSTUP: &[(&str, &str, &str, &str)] = &[
+    (
+        "linux",
+        "x86_64",
+        "x86_64-unknown-linux-gnu",
+        "dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71",
+    ),
+    (
+        "linux",
+        "aarch64",
+        "aarch64-unknown-linux-gnu",
+        "15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433",
+    ),
+    (
+        "macos",
+        "x86_64",
+        "x86_64-apple-darwin",
+        "259e2b84274434085163fe8d556510571772cda2aa6d87ca6aa664f57bc644e3",
+    ),
+    (
+        "macos",
+        "aarch64",
+        "aarch64-apple-darwin",
+        "ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a",
+    ),
+    (
+        "windows",
+        "x86_64",
+        "x86_64-pc-windows-msvc",
+        "6f4bef66261261fcb43131be8720bab817d403a09edec7455c371974b90bdb7e",
+    ),
+    (
+        "windows",
+        "aarch64",
+        "aarch64-pc-windows-msvc",
+        "01aa49cf9574a8bd0ae52005d7de2590e8f27181ded6748236e702c92aef826d",
+    ),
+];
+const RUSTUP_VERSION: &str = "1.29.1";
+/// The toolchain `depsmith init` installs for cargo: its tested version.
+const RUST_TOOLCHAIN: &str = "1.98.1";
+
+/// cargo through a pinned rustup-init, which installs the pinned toolchain
+/// (minimal profile, verified by rustup) into the install directory without
+/// touching the user's PATH or shell profile.
+fn rustup_downloads() -> Vec<ToolDownload> {
+    let homes = |home: &str| {
+        [
+            ("RUSTUP_HOME".to_owned(), format!("{{prefix}}/{home}rustup")),
+            ("CARGO_HOME".to_owned(), format!("{{prefix}}/{home}cargo")),
+        ]
+    };
+    RUSTUP
+        .iter()
+        .map(|&(os, arch, triple, sha256)| {
+            let exe = if os == "windows" { ".exe" } else { "" };
+            let mut setup_env: BTreeMap<String, String> = homes("").into_iter().collect();
+            setup_env.insert("RUSTUP_INIT_SKIP_PATH_CHECK".into(), "yes".into());
+            let mut env: BTreeMap<String, String> = homes("").into_iter().collect();
+            // A project's rust-toolchain file must not make rustup download
+            // another toolchain while depsmith resolves.
+            env.insert("RUSTUP_TOOLCHAIN".into(), RUST_TOOLCHAIN.into());
+            ToolDownload {
+                os: os.into(),
+                arch: arch.into(),
+                url: format!(
+                    "https://static.rust-lang.org/rustup/archive/{RUSTUP_VERSION}/{triple}/rustup-init{exe}"
+                ),
+                sha256: sha256.into(),
+                archive: Archive::Binary,
+                executable: format!("cargo/bin/cargo{exe}"),
+                setup: Some(Setup::Run {
+                    installer: format!("rustup-init{exe}"),
+                    args: [
+                        "-y",
+                        "--no-modify-path",
+                        "--profile",
+                        "minimal",
+                        "--default-toolchain",
+                        RUST_TOOLCHAIN,
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                    env: setup_env,
+                }),
+                env,
+                path: vec!["cargo/bin".into()],
+            }
+        })
+        .collect()
+}
+
 /// The pinned downloads of the tool named `name` (its first tested
-/// version); empty for tools depsmith does not install, such as cargo
-/// (rustup's job) and conda-lock (a Python package).
+/// version); empty for tools depsmith does not install.
 pub fn pinned(name: &str) -> Vec<ToolDownload> {
+    if name == "cargo" {
+        return rustup_downloads();
+    }
+    if name == "conda-lock" {
+        return python_tool("conda-lock");
+    }
+    if name == "npm" {
+        return node_downloads();
+    }
     let assets = match name {
         "uv" => UV,
         "pixi" => PIXI,
@@ -339,6 +776,7 @@ pub fn pinned(name: &str) -> Vec<ToolDownload> {
                 sha256: sha256.into(),
                 archive,
                 executable: executable.into(),
+                ..Default::default()
             },
         )
         .collect()
@@ -455,6 +893,22 @@ fn record(root: &Path, tool: &ToolSpec, executable: &Path) -> Result<()> {
 /// As for [`install`], plus failures to replace the old copy or to write the
 /// record (including a symlinked `.depsmith`).
 pub fn reinstall(root: &Path, tool: &ToolSpec, cache: &Path, timeout: u64) -> Result<PathBuf> {
+    reinstall_with(root, tool, cache, timeout, &BTreeMap::new())
+}
+
+/// [`reinstall`], with the executables of companion tools a setup step
+/// needs (see [`install_with`]).
+///
+/// # Errors
+///
+/// As for [`reinstall`] and [`install_with`].
+pub fn reinstall_with(
+    root: &Path,
+    tool: &ToolSpec,
+    cache: &Path,
+    timeout: u64,
+    tools: &BTreeMap<String, String>,
+) -> Result<PathBuf> {
     crate::transaction::safe_path(root, Path::new(RECORDS))?;
     let download = host_download(tool).ok_or_else(|| {
         Error::Invalid(format!(
@@ -469,7 +923,7 @@ pub fn reinstall(root: &Path, tool: &ToolSpec, cache: &Path, timeout: u64) -> Re
         .ok_or_else(|| Error::Invalid(format!("{} has no tested version to install", tool.name)))?;
     let executable = confined(Path::new(&download.executable), "executable")?;
     let target = version_dir(&tool.name, version, cache)?;
-    let (_staging, out) = fetch_verified(download, &target, timeout)?;
+    let (_staging, out) = fetch_verified(download, &target, timeout, tools)?;
     let identical = fs::read(target.join(&executable))
         .is_ok_and(|bytes| fs::read(out.join(&executable)).is_ok_and(|fresh| fresh == bytes));
     if !identical {
