@@ -289,14 +289,34 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
     output
 }
 
-/// Directories under `root` matching `pattern` (with `*` components),
-/// relative to `base`.
+/// `dir` and the directories below it, in order, skipping hidden ones and
+/// `node_modules` as workspace globs do.
+fn descendants(root: &Path, dir: &Path, output: &mut Vec<PathBuf>) {
+    output.push(dir.to_path_buf());
+    let mut names: Vec<String> = fs::read_dir(root.join(dir))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| !n.starts_with('.') && n != "node_modules")
+        .collect();
+    names.sort();
+    for name in names {
+        descendants(root, &dir.join(name), output);
+    }
+}
+
+/// Directories under `root` matching `pattern` (with `*` components, and
+/// `**` for any depth), relative to `base`.
 pub(crate) fn expand(root: &Path, base: &Path, pattern: &str) -> Vec<PathBuf> {
     let mut current = vec![base.to_path_buf()];
     for component in pattern.split('/').filter(|c| !c.is_empty()) {
         let mut next = vec![];
         for dir in &current {
-            if component.contains('*') {
+            if component == "**" {
+                descendants(root, dir, &mut next);
+            } else if component.contains('*') {
                 let mut names: Vec<String> = fs::read_dir(root.join(dir))
                     .into_iter()
                     .flatten()
@@ -311,6 +331,8 @@ pub(crate) fn expand(root: &Path, base: &Path, pattern: &str) -> Vec<PathBuf> {
                 next.push(normalize(&dir.join(component)));
             }
         }
+        let mut seen = std::collections::BTreeSet::new();
+        next.retain(|dir| seen.insert(dir.clone()));
         current = next;
     }
     current

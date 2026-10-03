@@ -278,7 +278,7 @@ fn every_pinned_download_is_https_with_a_sha256_for_each_ci_host() {
         .collect();
     assert_eq!(
         downloadable,
-        ["pixi", "cargo", "conda-lock", "conda", "uv", "grype"]
+        ["pixi", "cargo", "conda-lock", "conda", "uv", "npm", "grype"]
     );
     for tool in &tools {
         for d in &tool.downloads {
@@ -302,8 +302,10 @@ fn every_pinned_download_is_https_with_a_sha256_for_each_ci_host() {
                 Some(provision::Setup::Run { args, .. }) => args.contains(&tool.tested_versions[0]),
                 _ => false,
             };
+            // npm is bundled with a pinned Node.js, whose release the URL names.
+            let bundled = tool.name == "npm" && d.url.starts_with("https://nodejs.org/dist/v");
             assert!(
-                d.url.contains(&tool.tested_versions[0]) || installs,
+                d.url.contains(&tool.tested_versions[0]) || installs || bundled,
                 "{} is not the tested {}",
                 d.url,
                 tool.tested_versions[0]

@@ -97,7 +97,7 @@ adapter can speak the same contract over a subprocess bridge of JSON lines
 | `adapter` | The adapter contract, specs and capabilities |
 | `conformance` | Contract checks every adapter's tests run |
 | `constraints`, `ecosystem` | Declarations, registries, generic suggestions and acceptance; version schemes and scan identities |
-| `pixi`, `actions`, `cargo`, `conda`, `uv` | The Pixi, GitHub Actions, Cargo, conda and uv adapters |
+| `pixi`, `actions`, `cargo`, `conda`, `uv`, `npm` | The Pixi, GitHub Actions, Cargo, conda, uv and npm adapters |
 | `pyproject` | PEP 508 requirement lists of `pyproject.toml`, shared by the Python-aware adapters |
 | `provision` | Pinned tool downloads, the tool cache and per-repository tool records (`init`) |
 | `http` | The shared HTTP client |

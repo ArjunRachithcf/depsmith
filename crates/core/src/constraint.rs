@@ -12,7 +12,8 @@ pub(crate) struct Excluded {
     pub version: String,
     pub allowed: Option<String>,
     pub url: String,
-    pub sha256: String,
+    /// The artifact's labelled digest, e.g. `sha256:…` or npm's `sha512-…`.
+    pub digest: String,
 }
 
 impl std::fmt::Display for Excluded {
@@ -24,12 +25,12 @@ impl std::fmt::Display for Excluded {
             .unwrap_or_default();
         write!(
             f,
-            "{}: {} is excluded (newest allowed {}{policy}): {} sha256:{}",
+            "{}: {} is excluded (newest allowed {}{policy}): {} {}",
             self.scope,
             self.version,
             self.allowed.as_deref().unwrap_or("none"),
             self.url,
-            self.sha256
+            self.digest
         )
     }
 }

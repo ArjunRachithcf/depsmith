@@ -99,6 +99,19 @@ pub enum RegistryConfig {
         /// Index URL, ending in `/`.
         index: String,
     },
+    /// An npm registry (abbreviated metadata), such as
+    /// `https://registry.npmjs.org/`.
+    NpmRegistry {
+        /// Registry URL, ending in `/`.
+        url: String,
+        /// Registries of `@scope`s (`@scope:registry`), each ending in `/`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        scopes: BTreeMap<String, String>,
+        /// npm configuration files read for credentials at lookup time, so
+        /// that tokens are never part of this description.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        npmrc: Vec<PathBuf>,
+    },
     /// PEP 691 JSON Simple API indexes.
     PypiSimple {
         /// Index URLs, in order.
@@ -142,6 +155,26 @@ fn review(adapter: &dyn Adapter, package: &str) -> String {
 /// Any version newer than a declared one; restyling it succeeds exactly when
 /// the requirement's style is unambiguous.
 const PROBE_VERSION: &str = "999999";
+
+/// The stricter of a native release-age cutoff and a `--cooldown-days`
+/// cooldown, with the policy cited in evidence: a cooldown holds back the
+/// same releases the manager does.
+fn with_cooldown(
+    cutoff: Option<i64>,
+    policy: Option<String>,
+    cooldown_days: Option<u32>,
+    now_ms: i64,
+) -> (Option<i64>, Option<String>) {
+    let Some(days) = cooldown_days else {
+        return (cutoff, policy);
+    };
+    let cooldown = now_ms - i64::from(days) * 86_400_000;
+    if cutoff.is_some_and(|c| c <= cooldown) {
+        (cutoff, policy)
+    } else {
+        (Some(cooldown), Some(format!("cooldown {days}d")))
+    }
+}
 
 /// Newer-release lookups for one target.
 pub(crate) struct Lookup<'a> {
@@ -188,6 +221,12 @@ impl<'a> Lookup<'a> {
             .exclude_newer
             .as_ref()
             .map(|t| format!("exclude-newer {t}"));
+        let (cutoff, policy) = with_cooldown(
+            cutoff,
+            policy,
+            self.options.cooldown_days,
+            crate::cutoff::now_ms(),
+        );
         let label = |mut excluded: Vec<Excluded>| {
             for e in &mut excluded {
                 e.policy = policy.clone();
@@ -238,6 +277,14 @@ impl<'a> Lookup<'a> {
                 package,
                 requirement,
                 self.options.timeout_seconds,
+            )
+            .map(|excluded| (label(excluded), vec![])),
+            RegistryConfig::NpmRegistry { url, scopes, npmrc } => crate::npm::registry_excluded(
+                crate::npm::Registries { url, scopes, npmrc },
+                package,
+                requirement,
+                self.options.timeout_seconds,
+                cutoff,
             )
             .map(|excluded| (label(excluded), vec![])),
             RegistryConfig::Fixture { releases, failing } => {
@@ -328,7 +375,7 @@ pub(crate) fn conda_excluded(
                 version: version.into(),
                 allowed: allowed_version.map(Into::into),
                 url: latest["url"].as_str().unwrap_or("unknown artifact").into(),
-                sha256: latest["sha256"].as_str().unwrap_or("unknown").into(),
+                digest: format!("sha256:{}", latest["sha256"].as_str().unwrap_or("unknown")),
             });
         }
     }
@@ -379,6 +426,19 @@ fn fixture_excluded(
             .collect();
         return crate::cargo::semver_excluded("fixture", &rows, requirement);
     }
+    if ecosystem == "npm" {
+        let rows: Vec<(nodejs_semver::Version, &str, &str)> = releases
+            .iter()
+            .filter_map(|r| {
+                Some((
+                    nodejs_semver::Version::parse(&r.version).ok()?,
+                    r.url.as_str(),
+                    r.sha256.as_str(),
+                ))
+            })
+            .collect();
+        return crate::npm::npm_excluded("fixture", &rows, requirement);
+    }
     if ecosystem == "conda" {
         let rows: Vec<serde_json::Value> = releases
             .iter()
@@ -415,7 +475,7 @@ fn fixture_excluded(
         version: record.version.clone(),
         allowed: allowed.map(|v| v.text().to_owned()),
         url: record.url.clone(),
-        sha256: record.sha256.clone(),
+        digest: format!("sha256:{}", record.sha256),
     }])
 }
 
@@ -621,6 +681,26 @@ pub(crate) fn accept(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cooldown_applies_unless_the_native_cutoff_is_stricter() {
+        const DAY: i64 = 86_400_000;
+        let now = 100 * DAY;
+        let native = || Some("exclude-newer 14d".to_owned());
+        assert_eq!(with_cooldown(None, None, None, now), (None, None));
+        assert_eq!(
+            with_cooldown(None, None, Some(7), now),
+            (Some(93 * DAY), Some("cooldown 7d".into()))
+        );
+        assert_eq!(
+            with_cooldown(Some(86 * DAY), native(), Some(7), now),
+            (Some(86 * DAY), native())
+        );
+        assert_eq!(
+            with_cooldown(Some(98 * DAY), native(), Some(7), now),
+            (Some(93 * DAY), Some("cooldown 7d".into()))
+        );
+    }
 
     #[test]
     fn hints_offer_upgrade_only_where_constraints_can_change() {

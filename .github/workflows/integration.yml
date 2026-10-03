@@ -1,4 +1,4 @@
-# Native integration: real Pixi, uv, Grype, cargo and conda-lock plus conda-forge,
+# Native integration: real Pixi, uv, npm, Grype, cargo and conda-lock plus conda-forge,
 # pypi.org, crates.io and the GitHub API. Informational on pull requests;
 # blocking as a gate in the Release workflow. Nightly failures open or update
 # a tracking issue (integration-alert.yml). Tool versions come from
@@ -39,10 +39,10 @@ jobs:
             tests: --workspace
             python: true
           - os: windows-latest
-            tests: -p depsmith-core --test pixi_live --test uv_live
+            tests: -p depsmith-core --test pixi_live --test uv_live --test npm_live
             python: false
           - os: macos-latest
-            tests: -p depsmith-core --test pixi_live --test uv_live
+            tests: -p depsmith-core --test pixi_live --test uv_live --test npm_live
             python: false
     runs-on: ${{ matrix.os }}
     env:
@@ -71,6 +71,7 @@ jobs:
             echo "GRYPE_VERSION=$(version grype)"
             echo "CONDA_LOCK_VERSION=$(version conda-lock)"
             echo "MICROMAMBA_VERSION=$(version conda)"
+            echo "NODE_VERSION=$(version node)"
           } >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -81,6 +82,9 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install Grype (checksum-verified)
         if: runner.os == 'Linux'
         run: |
@@ -103,7 +107,9 @@ jobs:
         run: |
           PIXI="$(command -v pixi)"
           UV="$(command -v uv)"
-          export PIXI UV
+          # Git Bash finds npm's extensionless shell shim; native processes need npm.cmd.
+          if [ "$RUNNER_OS" = Windows ]; then NPM="$(command -v npm.cmd)"; else NPM="$(command -v npm)"; fi
+          export PIXI UV NPM
           run() { cargo test ${{ matrix.tests }} --locked -- --ignored --test-threads 1; }
           if ! run; then
             echo "::warning::Native tests failed; retrying once to rule out a transient network error"

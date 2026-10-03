@@ -160,6 +160,70 @@ impl VersionScheme for CargoSemver {
     }
 }
 
+/// npm's node-semver ranges. A requirement caps newer releases when a far
+/// future version would not satisfy it; restyling keeps the operator and the
+/// declared precision (`^1.2.3` becomes `^2.5.1`, `~1.2` becomes `~2.5`,
+/// `1.x` becomes `2.x`), and compound ranges are left to an explicit
+/// replacement.
+struct NpmSemver;
+
+impl VersionScheme for NpmSemver {
+    fn compare(&self, left: &str, right: &str) -> Ordering {
+        match (
+            nodejs_semver::Version::parse(left),
+            nodejs_semver::Version::parse(right),
+        ) {
+            (Ok(left), Ok(right)) => left.cmp(&right),
+            _ => left.cmp(right),
+        }
+    }
+    fn caps_newer(&self, requirement: &str) -> bool {
+        let far = nodejs_semver::Version::parse("999999.0.0").expect("a valid version");
+        nodejs_semver::Range::parse(requirement).is_ok_and(|range| !range.satisfies(&far))
+    }
+    fn restyle(&self, requirement: &str, newest: &str) -> Option<String> {
+        // Pad shorter versions such as `2` (and the engine's probe).
+        let padded = match newest.split('.').count() {
+            1 => format!("{newest}.0.0"),
+            2 => format!("{newest}.0"),
+            _ => newest.to_owned(),
+        };
+        let newest = nodejs_semver::Version::parse(&padded).ok()?;
+        if newest.is_prerelease() {
+            return None;
+        }
+        let requirement = requirement.trim();
+        let (operator, version) = ["^", "~", "="]
+            .iter()
+            .find_map(|op| Some((*op, requirement.strip_prefix(op)?.trim())))
+            .unwrap_or(("", requirement));
+        let parts: Vec<&str> = version.split('.').collect();
+        let wildcard = matches!(parts.last(), Some(&("x" | "X" | "*")));
+        let precision = parts.len() - usize::from(wildcard);
+        if !(1..=3).contains(&precision)
+            || (wildcard && !operator.is_empty())
+            || !parts[..precision]
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        {
+            return None;
+        }
+        let numbers = [newest.major(), newest.minor(), newest.patch()].map(|n| n.to_string());
+        let kept = numbers[..precision].join(".");
+        Some(if wildcard {
+            format!("{kept}.{}", parts[precision])
+        } else {
+            format!("{operator}{kept}")
+        })
+    }
+    fn check_explicit(&self, name: &str, requirement: &str) -> Result<()> {
+        nodejs_semver::Range::parse(requirement).map_err(|_| {
+            Error::Invalid(format!("{name}={requirement} is not an npm version range"))
+        })?;
+        Ok(())
+    }
+}
+
 /// The version scheme of `ecosystem`, if depsmith knows it.
 pub(crate) fn scheme(ecosystem: &str) -> Option<&'static dyn VersionScheme> {
     match ecosystem {
@@ -167,6 +231,7 @@ pub(crate) fn scheme(ecosystem: &str) -> Option<&'static dyn VersionScheme> {
         "pypi" => Some(&Pypi),
         "github-actions" => Some(&GithubActions),
         "cargo" => Some(&CargoSemver),
+        "npm" => Some(&NpmSemver),
         _ => None,
     }
 }
@@ -204,6 +269,16 @@ pub(crate) fn native_identity(package: &Package) -> Option<(String, String)> {
                     "Cargo.lock crates.io source".into(),
                 )
             }),
+        "npm" => package
+            .artifact
+            .starts_with(&format!("{}{}/-/", crate::npm::NPM_REGISTRY, package.name))
+            .then(|| {
+                let purl = match package.name.strip_prefix('@') {
+                    Some(scoped) => format!("pkg:npm/%40{scoped}"),
+                    None => format!("pkg:npm/{}", package.name),
+                };
+                (purl, "package-lock.json npm registry source".into())
+            }),
         "github-actions" => {
             let exact_tag = regex::Regex::new(r"^v?[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
             (package
@@ -231,6 +306,57 @@ pub(crate) fn build_caveat(ecosystem: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npm_ranges_cap_restyle_and_order_like_npm() {
+        let npm = scheme("npm").unwrap();
+        assert_eq!(npm.compare("1.10.0", "1.9.0"), Ordering::Greater);
+        assert_eq!(npm.compare("2.0.0-rc.1", "2.0.0"), Ordering::Less);
+        for capped in ["1.2.3", "^1.2.3", "~1.2", "1.x", "<2", ">=1 <2", "1 || 2"] {
+            assert!(npm.caps_newer(capped), "{capped}");
+        }
+        for open in ["*", ">=1", "", "latest", "git+https://x/y.git"] {
+            assert!(!npm.caps_newer(open), "{open}");
+        }
+        let restyled = |r: &str| npm.restyle(r, "2.5.1");
+        assert_eq!(restyled("^1.2.3").as_deref(), Some("^2.5.1"));
+        assert_eq!(restyled("~1.2").as_deref(), Some("~2.5"));
+        assert_eq!(restyled("1.2.3").as_deref(), Some("2.5.1"));
+        assert_eq!(restyled("1.x").as_deref(), Some("2.x"));
+        assert_eq!(restyled("1").as_deref(), Some("2"));
+        assert_eq!(restyled(">=1 <2"), None);
+        assert_eq!(npm.restyle("^1.2.3", "3.0.0-beta.1"), None);
+        assert!(npm.check_explicit("ms", "^2.1.0").is_ok());
+        assert!(npm.check_explicit("ms", "not a range!").is_err());
+    }
+
+    #[test]
+    fn npm_registry_packages_have_npm_identities() {
+        let package = |name: &str, artifact: &str| Package {
+            ecosystem: "npm".into(),
+            name: name.into(),
+            version: "1.0.0".into(),
+            artifact: artifact.into(),
+            platform: "any".into(),
+        };
+        assert_eq!(
+            native_identity(&package(
+                "ms",
+                "https://registry.npmjs.org/ms/-/ms-1.0.0.tgz"
+            ))
+            .map(|i| i.0),
+            Some("pkg:npm/ms".into())
+        );
+        assert_eq!(
+            native_identity(&package(
+                "@types/node",
+                "https://registry.npmjs.org/@types/node/-/node-1.0.0.tgz"
+            ))
+            .map(|i| i.0),
+            Some("pkg:npm/%40types/node".into())
+        );
+        assert!(native_identity(&package("ms", "https://mirror.example/ms-1.0.0.tgz")).is_none());
+    }
 
     #[test]
     fn schemes_order_versions_by_their_own_rules() {

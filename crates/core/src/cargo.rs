@@ -276,7 +276,7 @@ pub(crate) fn semver_excluded(
         version: newest.to_string(),
         allowed: allowed.map(ToString::to_string),
         url: (*url).into(),
-        sha256: (*checksum).into(),
+        digest: format!("sha256:{checksum}"),
     }])
 }
 

@@ -655,8 +655,9 @@ const NODE: &[(&str, &str, &str, Archive, &str)] = &[
         "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
     ),
 ];
-/// The Node.js release whose bundled npm depsmith installs.
-pub(crate) const NODE_VERSION: &str = "24.21.0";
+/// The Node.js release whose bundled npm depsmith installs (and CI pins in
+/// `.github/tool-versions.json`).
+pub const NODE_VERSION: &str = "24.21.0";
 
 /// npm as bundled with a pinned Node.js LTS; Node's directory is first on
 /// `PATH` so npm runs on that Node.

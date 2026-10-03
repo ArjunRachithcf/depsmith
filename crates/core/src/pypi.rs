@@ -217,10 +217,10 @@ pub(crate) fn evidence(
                 .into(),
             allowed: allowed.map(|a| a.text().into()),
             url,
-            sha256: file["hashes"]["sha256"]
-                .as_str()
-                .unwrap_or("unknown")
-                .into(),
+            digest: format!(
+                "sha256:{}",
+                file["hashes"]["sha256"].as_str().unwrap_or("unknown")
+            ),
         });
     }
     Ok(evidence)
