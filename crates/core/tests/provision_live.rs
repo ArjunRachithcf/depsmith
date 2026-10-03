@@ -72,14 +72,16 @@ fn pinned_conda_lock_installs_hash_locked_with_uv() {
 #[ignore = "downloads Node.js"]
 fn pinned_node_runs_its_bundled_npm() {
     let cache = tempfile::tempdir().unwrap();
-    let tool = depsmith_core::adapter::ToolSpec {
-        name: "npm".into(),
-        default: "npm".into(),
-        tested_versions: vec!["11.19.0".into()],
-        downloads: provision::pinned("npm"),
-    };
+    // The npm adapter's tested version must be the npm the Node pin bundles.
+    let tool = depsmith_core::Engine::default()
+        .specs()
+        .into_iter()
+        .flat_map(|s| s.tools)
+        .find(|t| t.name == "npm")
+        .unwrap();
+    let tested = tool.tested_versions[0].clone();
     let download = provision::host_download(&tool).expect("a download for this host");
-    let path = provision::install("npm", "11.19.0", download, cache.path(), 600).unwrap();
+    let path = provision::install("npm", &tested, download, cache.path(), 600).unwrap();
     // npm finds its Node through the recorded PATH.
     let env = provision::runtime_env(download, &path);
     let output = depsmith_core::process::run_env(
@@ -90,5 +92,10 @@ fn pinned_node_runs_its_bundled_npm() {
         &env,
     )
     .unwrap();
-    assert_eq!(output.trim(), "11.19.0");
+    assert_eq!(
+        output.trim(),
+        tested,
+        "npm bundled with Node {}",
+        provision::NODE_VERSION
+    );
 }

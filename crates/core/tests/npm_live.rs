@@ -24,8 +24,9 @@ fn live_package_suggests_accepts_applies_and_rechecks() {
     fs::write(root.path().join(".npmrc"), "fund=false\n").unwrap();
     let engine = Engine::default();
     let target = ["npm:package.json".into()];
-    // Without a lock the package is not a target yet: create one first.
-    std::process::Command::new(std::env::var("NPM").unwrap())
+    // Without a lock the package is not a target yet: create one first. On
+    // Windows, NPM is npm.cmd: the extensionless npm is a POSIX shell shim.
+    let created = std::process::Command::new(std::env::var("NPM").unwrap())
         .args([
             "install",
             "--package-lock-only",
@@ -35,6 +36,7 @@ fn live_package_suggests_accepts_applies_and_rechecks() {
         .current_dir(root.path())
         .status()
         .unwrap();
+    assert!(created.success(), "npm install: {created}");
 
     let preview = engine.prepare(root.path(), &target, options(&[])).unwrap();
     assert!(preview.failures.is_empty(), "{:?}", preview.failures);

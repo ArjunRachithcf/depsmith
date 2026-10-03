@@ -34,8 +34,14 @@ pub struct Npm {
     pub registry: Option<RegistryConfig>,
 }
 
+/// `text` without the UTF-8 byte order mark some Windows editors write,
+/// which npm accepts but JSON parsers do not.
+fn without_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
 fn parse(text: &str, path: &Path) -> Result<Value> {
-    serde_json::from_str(text)
+    serde_json::from_str(without_bom(text))
         .map_err(|e| Error::Invalid(format!("invalid manifest {}: {e}", path.display())))
 }
 
@@ -55,10 +61,19 @@ fn workspace_patterns(manifest: &Value) -> Vec<&str> {
         .collect()
 }
 
-/// Member manifests of the workspace whose root manifest is in `dir`.
+/// Member manifests of the workspace whose root manifest is in `dir`; a
+/// `!pattern` removes the members matched so far.
 fn members(root: &Path, dir: &Path, manifest: &Value) -> Vec<PathBuf> {
-    let mut output = vec![];
+    let mut output: Vec<PathBuf> = vec![];
     for pattern in workspace_patterns(manifest) {
+        if let Some(negated) = pattern.strip_prefix('!') {
+            let excluded: Vec<_> = crate::working_tree::expand(root, dir, negated)
+                .into_iter()
+                .map(|member| member.join("package.json"))
+                .collect();
+            output.retain(|path| !excluded.contains(path));
+            continue;
+        }
         for member in crate::working_tree::expand(root, dir, pattern) {
             let path = member.join("package.json");
             if member != dir && root.join(&path).is_file() && !output.contains(&path) {
@@ -130,6 +145,8 @@ fn value_span(text: &str, object: &str, name: &str) -> Option<Range<usize>> {
     let mut depth = 0usize;
     let mut in_object = false;
     let mut pending_key: Option<(Range<usize>, usize)> = None;
+    // Like JSON.parse and serde, the last of duplicate keys wins.
+    let mut found = None;
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
@@ -143,7 +160,7 @@ fn value_span(text: &str, object: &str, name: &str) -> Option<Range<usize>> {
                 // A value following `key:`?
                 if let Some((key, key_depth)) = pending_key.take() {
                     if in_object && key_depth == 2 && &text[key] == name {
-                        return Some(string);
+                        found = Some(string);
                     }
                 } else {
                     // A key when followed by `:`.
@@ -153,6 +170,7 @@ fn value_span(text: &str, object: &str, name: &str) -> Option<Range<usize>> {
                     }
                     if next < bytes.len() && bytes[next] == b':' {
                         if depth == 1 && &text[string.clone()] == object {
+                            found = None;
                             let mut open = next + 1;
                             while open < bytes.len() && bytes[open].is_ascii_whitespace() {
                                 open += 1;
@@ -180,7 +198,7 @@ fn value_span(text: &str, object: &str, name: &str) -> Option<Range<usize>> {
         }
         index += 1;
     }
-    None
+    found
 }
 
 /// Apply the edits of one manifest's text, keeping everything else as is.
@@ -202,14 +220,15 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
 
 /// Resolved packages of a `package-lock.json` (lockfileVersion 2 or 3). The
 /// root, workspace members and other links are the project itself and are
-/// omitted; a package's artifact is its `resolved` tarball or Git URL.
+/// omitted; a package's artifact is its `resolved` tarball or Git URL, else
+/// its integrity.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Invalid`] when the lock is not JSON or has an unsupported
 /// `lockfileVersion`.
 pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
-    let parsed: Value = serde_json::from_str(text)
+    let parsed: Value = serde_json::from_str(without_bom(text))
         .map_err(|e| Error::Invalid(format!("invalid package-lock.json: {e}")))?;
     let version = parsed.get("lockfileVersion").and_then(Value::as_u64);
     if !matches!(version, Some(2 | 3)) {
@@ -232,7 +251,13 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
             continue;
         }
         let field = |f: &str| entry.get(f).and_then(Value::as_str);
-        let (Some(version), Some(resolved)) = (field("version"), field("resolved")) else {
+        let Some(version) = field("version") else {
+            continue;
+        };
+        // With `omit-lockfile-registry-resolved`, registry packages record
+        // only their integrity; their registry is unknown, so they are not
+        // scanned by registry identity.
+        let Some(resolved) = field("resolved").or_else(|| field("integrity")) else {
             continue;
         };
         packages.push(Package {
@@ -246,28 +271,191 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
     Ok(packages)
 }
 
-/// The registry of the project at `dir`: `registry=` in its `.npmrc`, else
-/// the public registry. Credentials in the URL are never kept.
-fn registry_url(root: &Path, dir: &Path) -> String {
-    let configured = fs::read_to_string(root.join(dir).join(".npmrc"))
-        .ok()
-        .and_then(|text| {
-            text.lines().find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                (key.trim() == "registry").then(|| value.trim().to_owned())
-            })
-        })
-        .and_then(|url| {
-            let mut url = reqwest::Url::parse(&url).ok()?;
-            url.set_username("").ok()?;
-            url.set_password(None).ok()?;
-            Some(url.to_string())
-        });
-    let mut url = configured.unwrap_or_else(|| NPM_REGISTRY.into());
-    if !url.ends_with('/') {
-        url.push('/');
+/// `${NAME}` references replaced from the environment, as npm does in
+/// configuration keys and values: an unset `${NAME?}` becomes empty, an unset
+/// `${NAME}` stays as written, and a backslash escapes the reference.
+fn expand_env(text: &str) -> String {
+    let mut output = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("${") {
+        let before = &rest[..at];
+        let body = &rest[at + 2..];
+        let Some(end) = body.find('}') else {
+            break;
+        };
+        let inner = &body[..end];
+        let (name, optional) = inner
+            .strip_suffix('?')
+            .map_or((inner, false), |name| (name, true));
+        if name.is_empty() || name.contains(['$', '{', '?']) {
+            output.push_str(&rest[..at + 2]);
+            rest = body;
+            continue;
+        }
+        let escapes = before.len() - before.trim_end_matches('\\').len();
+        output.push_str(&before[..before.len() - escapes]);
+        output.push_str(&"\\".repeat(escapes / 2));
+        if escapes % 2 == 1 {
+            output.push_str(&rest[at..at + 3 + end]);
+        } else {
+            match std::env::var(name) {
+                Ok(value) => output.push_str(&value),
+                Err(_) if optional => {}
+                Err(_) => output.push_str(&rest[at..at + 3 + end]),
+            }
+        }
+        rest = &body[end + 1..];
     }
-    url
+    output.push_str(rest);
+    output
+}
+
+/// The `key = value` settings of an npm configuration file as npm reads
+/// them: comments and sections skipped, quotes removed and, when `expand`,
+/// environment references replaced. A missing file has none.
+fn npmrc_settings(path: &Path, expand: bool) -> Result<Vec<(String, String)>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) => return Err(error.into()),
+    };
+    let mut settings = vec![];
+    for line in without_bom(&text).lines().map(str::trim) {
+        if line.is_empty() || line.starts_with([';', '#', '[']) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        let value = if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+            serde_json::from_str(value).unwrap_or_else(|_| value[1..value.len() - 1].to_owned())
+        } else if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
+            value[1..value.len() - 1].to_owned()
+        } else {
+            value.to_owned()
+        };
+        let key = key.trim().to_owned();
+        settings.push(if expand {
+            (expand_env(&key), expand_env(&value))
+        } else {
+            (key, value)
+        });
+    }
+    Ok(settings)
+}
+
+/// The user's npm configuration file: `NPM_CONFIG_USERCONFIG`, else
+/// `~/.npmrc`.
+fn user_npmrc() -> Option<PathBuf> {
+    env_setting("userconfig")
+        .map(PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|home| home.join(".npmrc")))
+}
+
+/// An `npm_config_<key>` environment variable (any case), which overrides
+/// configuration files.
+fn env_setting(key: &str) -> Option<String> {
+    let name = format!("npm_config_{key}");
+    std::env::vars()
+        .find(|(k, v)| k.eq_ignore_ascii_case(&name) && !v.is_empty())
+        .map(|(_, v)| v)
+}
+
+/// A registry URL as npm uses it: without credentials and ending in `/`.
+/// One still naming `${VAR}` (unset, or in a repository's `.npmrc`, which is
+/// never expanded) is refused.
+fn registry_base(key: &str, value: &str) -> Result<String> {
+    let invalid = || {
+        Error::Invalid(format!(
+            "npm configuration {key} = {value:?} is not a registry URL; \
+             environment references are expanded only in the user's .npmrc"
+        ))
+    };
+    if value.contains("${") {
+        return Err(invalid());
+    }
+    let mut url = reqwest::Url::parse(value).map_err(|_| invalid())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(invalid());
+    }
+    url.set_username("").map_err(|()| invalid())?;
+    url.set_password(None).map_err(|()| invalid())?;
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+    Ok(url.to_string())
+}
+
+/// The registries npm would choose with the `project` and `user`
+/// configuration files: the environment, then the project's, then the
+/// user's, else the public registry; `@scope:registry` settings route scoped
+/// packages.
+///
+/// The repository controls the project file, so it may choose registries but
+/// never what secrets reach them: its `${VAR}` references are not expanded
+/// (a registry naming one is not a URL and fails), and credentials are read
+/// only from the user's file.
+fn registry_from(project: &Path, user: Option<PathBuf>) -> Result<RegistryConfig> {
+    let mut settings = BTreeMap::new();
+    if let Some(user) = &user {
+        settings.extend(npmrc_settings(user, true)?);
+    }
+    settings.extend(npmrc_settings(project, false)?);
+    let url = match env_setting("registry").or_else(|| settings.get("registry").cloned()) {
+        Some(value) => registry_base("registry", &value)?,
+        None => NPM_REGISTRY.into(),
+    };
+    let mut scopes = BTreeMap::new();
+    for (key, value) in &settings {
+        if let Some(scope) = key.strip_suffix(":registry").filter(|s| s.starts_with('@')) {
+            let value = env_setting(key).unwrap_or_else(|| value.clone());
+            scopes.insert(scope.to_owned(), registry_base(key, &value)?);
+        }
+    }
+    Ok(RegistryConfig::NpmRegistry {
+        url,
+        scopes,
+        npmrc: user.into_iter().collect(),
+    })
+}
+
+/// The `Authorization` header npm would send to `url`: the `_authToken` or
+/// `_auth` of the longest `//host/path/:` prefix of it in the user's
+/// `npmrc` files (never a repository's).
+fn authorization(npmrc: &[PathBuf], url: &str) -> Result<Option<String>> {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return Ok(None);
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    let host = match parsed.port() {
+        Some(port) => format!("//{host}:{port}"),
+        None => format!("//{host}"),
+    };
+    let mut settings = BTreeMap::new();
+    for file in npmrc.iter().rev() {
+        settings.extend(npmrc_settings(file, true)?);
+    }
+    let mut path = parsed.path().to_owned();
+    loop {
+        // npm accepts each prefix with and without its trailing slash.
+        let prefix = format!("{host}{path}");
+        let keys = [prefix.as_str(), prefix.trim_end_matches('/')];
+        let setting = |name: &str| {
+            keys.iter()
+                .find_map(|k| settings.get(&format!("{k}:{name}")))
+        };
+        if let Some(token) = setting("_authToken") {
+            return Ok(Some(format!("Bearer {token}")));
+        }
+        if let Some(basic) = setting("_auth") {
+            return Ok(Some(format!("Basic {basic}")));
+        }
+        let Some(cut) = path.trim_end_matches('/').rfind('/') else {
+            return Ok(None);
+        };
+        path.truncate(cut + 1);
+    }
 }
 
 /// Newest stable release excluded by `requirement` among `(version, url,
@@ -297,30 +485,54 @@ pub(crate) fn npm_excluded(
         version: newest.to_string(),
         allowed: allowed.map(ToString::to_string),
         url: (*url).into(),
-        sha256: (*integrity).into(),
+        // npm's Subresource Integrity string carries its own algorithm.
+        digest: (*integrity).into(),
     }])
 }
 
-/// Releases of `name` on the registry at `url` (ending in `/`) that
-/// `requirement` excludes, from its abbreviated metadata: the newest stable
-/// release with its tarball and integrity, and the newest one allowed.
-/// Deprecated releases are not cited.
+/// Releases of `name` on its registry that `requirement` excludes: the
+/// newest stable release with its tarball and integrity, and the newest one
+/// allowed. Scoped packages use their scope's registry, with the credentials
+/// npm would send. Deprecated releases are not cited, and with a `cutoff`
+/// (milliseconds since the epoch) neither are releases published after it,
+/// read from the full metadata since the abbreviated form has no times.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Operation`] when the registry cannot be read or the
 /// requirement is not an npm range.
+/// The registries of a [`RegistryConfig::NpmRegistry`].
+pub(crate) struct Registries<'a> {
+    pub url: &'a str,
+    pub scopes: &'a BTreeMap<String, String>,
+    pub npmrc: &'a [PathBuf],
+}
+
 pub(crate) fn registry_excluded(
-    url: &str,
+    registry: Registries<'_>,
     name: &str,
     requirement: &str,
     timeout: u64,
+    cutoff: Option<i64>,
 ) -> Result<Vec<Excluded>> {
+    let url = name
+        .split_once('/')
+        .and_then(|(scope, _)| registry.scopes.get(scope))
+        .map_or(registry.url, String::as_str);
     let client = crate::http::client(timeout)?;
     let document = format!("{url}{}", name.replacen('/', "%2f", 1));
-    let response = client
-        .get(&document)
-        .header("Accept", "application/vnd.npm.install-v1+json")
+    let mut request = client.get(&document).header(
+        "Accept",
+        if cutoff.is_some() {
+            "application/json"
+        } else {
+            "application/vnd.npm.install-v1+json"
+        },
+    );
+    if let Some(authorization) = authorization(registry.npmrc, url)? {
+        request = request.header("Authorization", authorization);
+    }
+    let response = request
         .send()
         .map_err(|e| Error::Operation(format!("request failed: {}", e.without_url())))?;
     if !response.status().is_success() {
@@ -332,6 +544,13 @@ pub(crate) fn registry_excluded(
     let metadata: Value = response.json().map_err(|e| {
         Error::Operation(format!("unreadable registry response: {}", e.without_url()))
     })?;
+    let published = |version: &str| {
+        metadata
+            .get("time")
+            .and_then(|t| t.get(version))
+            .and_then(Value::as_str)
+            .and_then(crate::cutoff::timestamp)
+    };
     let mut rows = vec![];
     for (version, release) in metadata
         .get("versions")
@@ -340,6 +559,9 @@ pub(crate) fn registry_excluded(
         .flatten()
     {
         if release.get("deprecated").is_some() {
+            continue;
+        }
+        if cutoff.is_some_and(|cutoff| published(version).is_none_or(|time| time > cutoff)) {
             continue;
         }
         let Ok(parsed) = nodejs_semver::Version::parse(version) else {
@@ -351,11 +573,13 @@ pub(crate) fn registry_excluded(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
         };
-        rows.push((
-            parsed,
-            field("tarball").to_owned(),
-            field("integrity").to_owned(),
-        ));
+        // Releases published before npm 5 have only a SHA-1 `shasum`.
+        let digest = match (field("integrity"), field("shasum")) {
+            ("", "") => "unknown".to_owned(),
+            ("", shasum) => format!("sha1:{shasum}"),
+            (integrity, _) => integrity.to_owned(),
+        };
+        rows.push((parsed, field("tarball").to_owned(), digest));
     }
     let borrowed: Vec<_> = rows
         .iter()
@@ -366,6 +590,72 @@ pub(crate) fn registry_excluded(
         .and_then(|u| u.host_str().map(str::to_owned))
         .unwrap_or_else(|| url.to_owned());
     npm_excluded(&scope, &borrowed, requirement)
+}
+
+/// cmd.exe's command-line limit (8191) for the names and options of an
+/// `npm.cmd` call on Windows, less headroom for the `cmd.exe /c` wrapper and
+/// the `"%NODE_EXE%" "%NPM_CLI_JS%" %*` line npm.cmd expands them into.
+const WINDOWS_COMMAND_LIMIT: usize = 8191 - 512;
+
+/// Names for an `npm update` that keeps Git pins: every package of the lock
+/// not resolved from Git, by its `node_modules` folder name (which npm
+/// matches, so aliases work). When a command naming them all, with `used`
+/// characters of program and options, would exceed `limit`, only the
+/// `declared` registry dependencies are named, with a note saying so.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when even the declared names are too many.
+fn update_names(
+    lock: &str,
+    declared: &[String],
+    used: usize,
+    limit: usize,
+) -> Result<(Vec<String>, Option<String>)> {
+    let parsed: Value = serde_json::from_str(without_bom(lock))
+        .map_err(|e| Error::Invalid(format!("invalid package-lock.json: {e}")))?;
+    let mut names = BTreeSet::new();
+    for (key, entry) in parsed
+        .get("packages")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let Some((_, folder)) = key.rsplit_once("node_modules/") else {
+            continue;
+        };
+        let resolved = entry.get("resolved").and_then(Value::as_str);
+        if entry.get("link").and_then(Value::as_bool) != Some(true)
+            && !resolved.is_some_and(|r| r.starts_with("git+"))
+        {
+            names.insert(folder.to_owned());
+        }
+    }
+    let length =
+        |names: &mut dyn Iterator<Item = &String>| used + names.map(|n| n.len() + 1).sum::<usize>();
+    if length(&mut names.iter()) <= limit {
+        return Ok((names.into_iter().collect(), None));
+    }
+    let declared: BTreeSet<String> = declared.iter().cloned().collect();
+    if length(&mut declared.iter()) <= limit {
+        let count = declared.len();
+        return Ok((
+            declared.into_iter().collect(),
+            Some(format!(
+                "npm update named only the {} declared dependencies: naming all {} packages \
+                 that are not Git pins exceeds the {limit}-character command line, so \
+                 transitive packages moved only where a declared one required it",
+                count,
+                names.len()
+            )),
+        ));
+    }
+    Err(Error::Invalid(format!(
+        "keeping Git pins needs an npm update naming {} packages, longer than the \
+         {limit}-character command line; select packages with --package, or let \
+         Git pins move with --refresh-git",
+        declared.len()
+    )))
 }
 
 /// The `--before` cutoff for a cooldown of `days`, as RFC 3339 UTC.
@@ -432,7 +722,7 @@ impl Adapter for Npm {
         }
     }
     fn detects(&self, _: &Path, content: &str) -> bool {
-        serde_json::from_str::<Value>(content).is_ok_and(|v| v.is_object())
+        serde_json::from_str::<Value>(without_bom(content)).is_ok_and(|v| v.is_object())
     }
     /// A package.json with an npm lock beside it, and not a member of an
     /// enclosing npm workspace: exactly the packages that own the lock.
@@ -503,12 +793,10 @@ impl Adapter for Npm {
     }
     fn availability(&self, root: &Path, target: &Target) -> Result<AvailabilityConfig> {
         let dir = target.manifest.parent().unwrap_or(Path::new(""));
-        let registry = self
-            .registry
-            .clone()
-            .unwrap_or_else(|| RegistryConfig::NpmRegistry {
-                url: registry_url(root, dir),
-            });
+        let registry = match &self.registry {
+            Some(registry) => registry.clone(),
+            None => registry_from(&root.join(dir).join(".npmrc"), user_npmrc())?,
+        };
         Ok(AvailabilityConfig {
             registries: BTreeMap::from([("npm".into(), registry)]),
             exclude_newer: None,
@@ -530,7 +818,12 @@ impl Adapter for Npm {
             .map(|l| dir_relative.join(l))
             .find(|l| stage.join(l).is_file())
             .unwrap_or_else(|| dir_relative.join("package-lock.json"));
-        let check = LockCheck::take(stage, manifests(stage, target)?, lock, lock_inventory)?;
+        let check = LockCheck::take(
+            stage,
+            manifests(stage, target)?,
+            lock.clone(),
+            lock_inventory,
+        )?;
         // Never run package scripts; no audit or funding requests.
         let mut quiet: Vec<String> = [
             "--package-lock-only",
@@ -544,17 +837,28 @@ impl Adapter for Npm {
             quiet.push(format!("--before={}", before(days)));
         }
         let mut args = vec!["update".to_owned()];
+        let mut note = None;
         if !options.packages.is_empty() {
             args.extend(options.packages.iter().cloned());
         } else if !options.refresh_git && check.has_git_pins() {
             // A plain update would move Git pins: update every other package.
-            let names: BTreeSet<&str> = check
-                .before()
-                .iter()
-                .filter(|p| !p.artifact.starts_with("git+"))
-                .map(|p| p.name.as_str())
+            let declared: Vec<String> = entries(stage, target)?
+                .into_iter()
+                .filter(|(_, registry)| *registry)
+                .map(|(d, _)| d.package)
                 .collect();
-            args.extend(names.into_iter().map(str::to_owned));
+            // The program, ` update` and each option with its separator.
+            let used =
+                npm.len() + " update".len() + quiet.iter().map(|a| a.len() + 1).sum::<usize>();
+            let limit = if cfg!(windows) {
+                WINDOWS_COMMAND_LIMIT
+            } else {
+                usize::MAX
+            };
+            let lock_text = fs::read_to_string(stage.join(&lock))?;
+            let (names, narrowed) = update_names(&lock_text, &declared, used, limit)?;
+            args.extend(names);
+            note = narrowed;
         }
         args.extend(quiet.iter().cloned());
         run_env(&npm, &args, &dir, timeout, env)?;
@@ -562,7 +866,9 @@ impl Adapter for Npm {
         let mut consistency = vec!["install".to_owned()];
         consistency.extend(quiet);
         run_env(&npm, &consistency, &dir, timeout, env)?;
-        check.candidate(stage, target, &resolved, vec![])
+        let mut candidate = check.candidate(stage, target, &resolved, vec![])?;
+        candidate.validation.extend(note);
+        Ok(candidate)
     }
 }
 
@@ -570,28 +876,23 @@ impl Adapter for Npm {
 mod tests {
     use super::*;
 
-    #[test]
-    fn registry_evidence_cites_the_newest_excluded_release() {
+    /// A registry serving `body` for every request; returns its URL and the
+    /// request heads it received.
+    fn registry(body: Value) -> (String, std::sync::mpsc::Receiver<String>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}/", listener.local_addr().unwrap());
-        let body = serde_json::json!({
-            "name": "ms",
-            "versions": {
-                "2.0.0": {"dist": {"tarball": "https://r/ms-2.0.0.tgz", "integrity": "sha512-a"}},
-                "2.1.3": {"dist": {"tarball": "https://r/ms-2.1.3.tgz", "integrity": "sha512-b"}},
-                "3.0.0-canary.1": {"dist": {"tarball": "https://r/ms-3c.tgz", "integrity": "sha512-c"}},
-                "2.2.0": {"deprecated": "broken", "dist": {"tarball": "https://r/ms-2.2.0.tgz", "integrity": "sha512-d"}}
-            }
-        })
-        .to_string();
+        let body = body.to_string();
+        let (heads, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let mut reader = BufReader::new(&stream);
-                let mut line = String::new();
+                let (mut line, mut head) = (String::new(), String::new());
                 while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    head.push_str(&line.to_ascii_lowercase());
                     line.clear();
                 }
+                let _ = heads.send(head);
                 let mut stream = &stream;
                 let _ = write!(
                     stream,
@@ -600,13 +901,203 @@ mod tests {
                 );
             }
         });
-        let excluded = registry_excluded(&base, "ms", "2.0.0", 30).unwrap();
+        (base, received)
+    }
+
+    #[test]
+    fn registry_evidence_cites_the_newest_excluded_release() {
+        let (base, heads) = registry(serde_json::json!({
+            "name": "ms",
+            "versions": {
+                "2.0.0": {"dist": {"tarball": "https://r/ms-2.0.0.tgz", "integrity": "sha512-a"}},
+                "2.1.3": {"dist": {"tarball": "https://r/ms-2.1.3.tgz", "integrity": "sha512-b"}},
+                "3.0.0-canary.1": {"dist": {"tarball": "https://r/ms-3c.tgz", "integrity": "sha512-c"}},
+                "2.2.0": {"deprecated": "broken", "dist": {"tarball": "https://r/ms-2.2.0.tgz", "integrity": "sha512-d"}}
+            }
+        }));
+        let none = BTreeMap::new();
+        let excluded = registry_excluded(
+            Registries {
+                url: &base,
+                scopes: &none,
+                npmrc: &[],
+            },
+            "ms",
+            "2.0.0",
+            30,
+            None,
+        )
+        .unwrap();
         assert_eq!(excluded.len(), 1);
         assert_eq!(excluded[0].version, "2.1.3");
         assert_eq!(excluded[0].allowed.as_deref(), Some("2.0.0"));
-        assert_eq!(excluded[0].sha256, "sha512-b");
-        assert!(registry_excluded(&base, "ms", "^2.0.0", 30)
+        // npm's integrity is SHA-512 and is cited with its own label.
+        assert_eq!(excluded[0].digest, "sha512-b");
+        assert!(excluded[0]
+            .to_string()
+            .ends_with("https://r/ms-2.1.3.tgz sha512-b"));
+        let head = heads.recv().unwrap();
+        assert!(
+            head.contains("application/vnd.npm.install-v1+json"),
+            "{head}"
+        );
+        assert!(!head.contains("authorization"), "{head}");
+        assert!(registry_excluded(
+            Registries {
+                url: &base,
+                scopes: &none,
+                npmrc: &[]
+            },
+            "ms",
+            "^2.0.0",
+            30,
+            None
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn a_cooldown_reads_publish_times_and_skips_younger_releases() {
+        let (base, heads) = registry(serde_json::json!({
+            "name": "ms",
+            "time": {"2.0.0": "2020-01-01T00:00:00.000Z", "2.1.0": "2020-06-01T00:00:00.000Z", "2.1.3": "2026-10-01T00:00:00.000Z"},
+            "versions": {
+                "2.0.0": {"dist": {"tarball": "https://r/ms-2.0.0.tgz", "shasum": "aa"}},
+                "2.1.0": {"dist": {"tarball": "https://r/ms-2.1.0.tgz", "shasum": "bb"}},
+                "2.1.3": {"dist": {"tarball": "https://r/ms-2.1.3.tgz", "integrity": "sha512-c"}},
+                "2.2.0": {"dist": {"tarball": "https://r/ms-2.2.0.tgz", "integrity": "sha512-d"}}
+            }
+        }));
+        let cutoff = crate::cutoff::timestamp("2026-01-01T00:00:00Z");
+        let none = BTreeMap::new();
+        let excluded = registry_excluded(
+            Registries {
+                url: &base,
+                scopes: &none,
+                npmrc: &[],
+            },
+            "ms",
+            "2.0.0",
+            30,
+            cutoff,
+        )
+        .unwrap();
+        // 2.1.3 is too young and 2.2.0 has no publish time.
+        assert_eq!(excluded[0].version, "2.1.0");
+        // Releases from before npm 5 have only a SHA-1 shasum.
+        assert_eq!(excluded[0].digest, "sha1:bb");
+        let head = heads.recv().unwrap();
+        assert!(head.contains("accept: application/json"), "{head}");
+    }
+
+    #[test]
+    fn scoped_packages_use_their_registry_and_its_credentials() {
+        let (base, heads) = registry(serde_json::json!({"versions": {}}));
+        let scoped = format!("{base}private/");
+        let dir = tempfile::tempdir().unwrap();
+        let npmrc = dir.path().join(".npmrc");
+        let host = scoped.trim_start_matches("http:");
+        fs::write(
+            &npmrc,
+            format!("{host}:_authToken=\"tok${{DEPSMITH_SURELY_UNSET?}}en\"\n"),
+        )
+        .unwrap();
+        let scopes = BTreeMap::from([("@corp".to_owned(), scoped)]);
+        registry_excluded(
+            Registries {
+                url: NPM_REGISTRY,
+                scopes: &scopes,
+                npmrc: &[npmrc],
+            },
+            "@corp/lib",
+            "1",
+            30,
+            None,
+        )
+        .unwrap();
+        let head = heads.recv().unwrap();
+        assert!(head.starts_with("get /private/@corp%2flib "), "{head}");
+        assert!(head.contains("authorization: bearer token"), "{head}");
+    }
+
+    #[test]
+    fn npm_configuration_is_layered_quoted_and_expanded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (project, user) = (dir.path().join("project"), dir.path().join("user"));
+        let path = std::env::var("PATH").unwrap_or_default();
+        fs::write(
+            &project,
+            "\u{feff}; comment\n# comment\n@corp:registry = \"https://corp.example/npm\"\n//mirror.example/:_authToken=${PATH}\n",
+        )
+        .unwrap();
+        fs::write(
+            &user,
+            "registry='https://u:p@mirror.example/'\n@corp:registry=https://ignored.example/\n//mirror.example:_auth=abc\n",
+        )
+        .unwrap();
+        let config = registry_from(&project, Some(user.clone())).unwrap();
+        let RegistryConfig::NpmRegistry { url, scopes, npmrc } = config else {
+            panic!("{config:?}");
+        };
+        if std::env::var_os("npm_config_registry").is_none()
+            && std::env::var_os("NPM_CONFIG_REGISTRY").is_none()
+        {
+            assert_eq!(url, "https://mirror.example/");
+        }
+        assert_eq!(scopes["@corp"], "https://corp.example/npm/");
+        // Credentials come from the user's file only: the project's token
+        // line, which would send $PATH, is never read.
+        assert_eq!(npmrc, [user]);
+        assert_eq!(
+            authorization(&npmrc, "https://mirror.example/a/b/").unwrap(),
+            Some("Basic abc".into())
+        );
+        assert_eq!(
+            authorization(&npmrc, "https://other.example/").unwrap(),
+            None
+        );
+        // The project's references are never expanded, so a registry naming
+        // one is not a URL: it fails rather than leaking the variable or
+        // silently consulting the public registry.
+        fs::write(&project, "registry=https://evil.example/${PATH}\n").unwrap();
+        assert!(registry_from(&project, None).is_err());
+        assert_eq!(expand_env("a${PATH}b"), format!("a{path}b"));
+        assert_eq!(expand_env("${DEPSMITH_SURELY_UNSET?}x"), "x");
+        assert_eq!(
+            expand_env("${DEPSMITH_SURELY_UNSET}"),
+            "${DEPSMITH_SURELY_UNSET}"
+        );
+        assert_eq!(expand_env(r"\${PATH}"), "${PATH}");
+        assert_eq!(expand_env(r"\\${PATH}"), format!(r"\{path}"));
+        assert_eq!(expand_env("${a{b}"), "${a{b}");
+    }
+
+    #[test]
+    fn updates_keeping_git_pins_name_folders_and_fit_the_command_line() {
+        let lock = serde_json::json!({"lockfileVersion": 3, "packages": {
+            "": {"name": "p"},
+            "node_modules/foo": {"name": "ms", "version": "2.0.0", "resolved": "https://r/ms-2.0.0.tgz"},
+            "node_modules/a/node_modules/b": {"version": "1.0.0"},
+            "node_modules/forked": {"version": "1.0.0", "resolved": "git+ssh://git@x/forked.git#abc"},
+            "node_modules/member": {"resolved": "packages/member", "link": true}
+        }})
+        .to_string();
+        let declared = ["foo".to_owned()];
+        assert_eq!(
+            update_names(&lock, &declared, 0, usize::MAX).unwrap(),
+            (vec!["b".to_owned(), "foo".to_owned()], None)
+        );
+        let (names, note) = update_names(&lock, &declared, 0, 5).unwrap();
+        assert_eq!(names, ["foo"]);
+        assert!(note.unwrap().contains("only the 1 declared"));
+        let error = update_names(&lock, &declared, 0, 3)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--refresh-git"), "{error}");
+        assert!(update_names("\u{feff}{}", &declared, 0, 3)
             .unwrap()
+            .0
             .is_empty());
     }
 
@@ -627,6 +1118,26 @@ mod tests {
         );
         assert!(value_span(text, "dependencies", "absent").is_none());
         assert!(value_span(text, "peerDependencies", "ms").is_none());
+    }
+
+    #[test]
+    fn the_last_duplicate_key_is_the_declaration() {
+        let text = "{\"dependencies\": {\"ms\": \"1\", \"ms\": \"2\"}, \"devDependencies\": {\"ms\": \"3\"}}";
+        assert_eq!(&text[value_span(text, "dependencies", "ms").unwrap()], "2");
+        let text = "{\"dependencies\": {\"ms\": \"1\"}, \"dependencies\": {\"debug\": \"2\"}}";
+        assert!(value_span(text, "dependencies", "ms").is_none());
+    }
+
+    #[test]
+    fn byte_order_marks_are_accepted_and_omitted_resolutions_kept() {
+        assert!(Npm::default().detects(Path::new("package.json"), "\u{feff}{}"));
+        let lock = "\u{feff}{\"lockfileVersion\": 3, \"packages\": {\"node_modules/ms\": {\"version\": \"2.0.0\", \"integrity\": \"sha512-a\"}, \"node_modules/bare\": {\"version\": \"1.0.0\"}}}";
+        let packages = lock_inventory(lock).unwrap();
+        assert_eq!(packages.len(), 1);
+        assert_eq!(
+            (packages[0].name.as_str(), packages[0].artifact.as_str()),
+            ("ms", "sha512-a")
+        );
     }
 
     #[test]

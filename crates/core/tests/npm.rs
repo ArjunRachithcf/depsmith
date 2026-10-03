@@ -130,6 +130,46 @@ fn registry_ranges_of_the_workspace_are_declarations() {
 }
 
 #[test]
+fn workspace_globs_recurse_and_negate() {
+    let root = tempfile::tempdir().unwrap();
+    let member = |name: &str| {
+        format!("{{\"name\": \"{name}\", \"dependencies\": {{\"{name}-dep\": \"1\"}}}}")
+    };
+    write(
+        root.path(),
+        &[
+            (
+                "package.json",
+                "\u{feff}{\"workspaces\": [\"packages/**\", \"!packages/skip\"]}",
+            ),
+            (
+                "package-lock.json",
+                "{\"lockfileVersion\": 3, \"packages\": {}}",
+            ),
+            ("packages/a/package.json", &member("a")),
+            ("packages/group/b/package.json", &member("b")),
+            ("packages/skip/package.json", &member("skip")),
+            ("packages/a/node_modules/x/package.json", &member("x")),
+        ],
+    );
+    let ids: Vec<String> = Engine::default()
+        .discover(root.path())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .filter(|id| id.starts_with("npm:"))
+        .collect();
+    assert_eq!(ids, ["npm:package.json"]);
+    let packages: Vec<String> = Npm::default()
+        .declarations(root.path(), &target("package.json"))
+        .unwrap()
+        .into_iter()
+        .map(|d| d.package)
+        .collect();
+    assert_eq!(packages, ["a-dep", "b-dep"]);
+}
+
+#[test]
 fn rewrites_keep_formatting_and_refuse_stale_edits() {
     let root = tempfile::tempdir().unwrap();
     workspace(root.path());
@@ -232,7 +272,7 @@ fn lock_inventory_keeps_resolved_packages_only() {
 }
 
 #[test]
-fn the_projects_npmrc_registry_is_consulted() {
+fn the_projects_npmrc_registries_are_consulted() {
     let root = tempfile::tempdir().unwrap();
     write(
         root.path(),
@@ -244,29 +284,25 @@ fn the_projects_npmrc_registry_is_consulted() {
             ),
             (
                 ".npmrc",
-                "registry=https://user:secret@mirror.example/npm\n",
+                "registry=https://user:secret@mirror.example/npm\n@corp:registry=https://corp.example/\n",
             ),
         ],
     );
     let config = Npm::default()
         .availability(root.path(), &target("package.json"))
         .unwrap();
-    assert_eq!(
-        config.registries.get("npm"),
-        Some(&RegistryConfig::NpmRegistry {
-            url: "https://mirror.example/npm/".into()
-        })
-    );
-    fs::remove_file(root.path().join(".npmrc")).unwrap();
-    let config = Npm::default()
-        .availability(root.path(), &target("package.json"))
-        .unwrap();
-    assert_eq!(
-        config.registries.get("npm"),
-        Some(&RegistryConfig::NpmRegistry {
-            url: "https://registry.npmjs.org/".into()
-        })
-    );
+    let Some(RegistryConfig::NpmRegistry { url, scopes, npmrc }) = config.registries.get("npm")
+    else {
+        panic!("{config:?}");
+    };
+    if std::env::var_os("npm_config_registry").is_none()
+        && std::env::var_os("NPM_CONFIG_REGISTRY").is_none()
+    {
+        assert_eq!(url, "https://mirror.example/npm/");
+    }
+    assert_eq!(scopes["@corp"], "https://corp.example/");
+    // Credentials are never read from the repository's .npmrc.
+    assert!(!npmrc.contains(&root.path().join(".npmrc")), "{npmrc:?}");
 }
 
 #[test]

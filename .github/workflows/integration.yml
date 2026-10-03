@@ -107,7 +107,8 @@ jobs:
         run: |
           PIXI="$(command -v pixi)"
           UV="$(command -v uv)"
-          NPM="$(command -v npm)"
+          # Git Bash finds npm's extensionless shell shim; native processes need npm.cmd.
+          if [ "$RUNNER_OS" = Windows ]; then NPM="$(command -v npm.cmd)"; else NPM="$(command -v npm)"; fi
           export PIXI UV NPM
           run() { cargo test ${{ matrix.tests }} --locked -- --ignored --test-threads 1; }
           if ! run; then
