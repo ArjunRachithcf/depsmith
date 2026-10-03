@@ -36,7 +36,8 @@ jobs:
           import os, re, subprocess, tomllib
           # One version, the Cargo one: X.Y.Z or X.Y.Z-{alpha,beta,rc}.N, and
           # the tag is exactly v{it} (cargo-binstall downloads from there).
-          # Python (maturin) and conda (the recipe) derive theirs from it.
+          # Python (maturin) derives its own from it; CI builds the conda
+          # recipe from that sdist, and the feedstock follows PyPI.
           tag = os.environ['RELEASE_TAG']
           if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?', tag):
               raise SystemExit(f'Expected a tag such as v0.1.0 or v0.1.0-rc.2, got {tag}')
@@ -53,8 +54,9 @@ jobs:
           project = tomllib.loads(show('pyproject.toml'))['project']
           if 'version' in project or 'version' not in project.get('dynamic', []):
               raise SystemExit('pyproject.toml must take its version from Cargo (dynamic = ["version"])')
-          if 'load_file_data("../../Cargo.toml"' not in show('recipes/depsmith/meta.yaml'):
-              raise SystemExit('The conda recipe must derive its version from Cargo.toml')
+          variants = subprocess.run(['git', 'show', f'{sha}:recipes/depsmith/variants.yaml'], capture_output=True, text=True).stdout
+          if '-' not in version and 'channel_targets' in variants:
+              raise SystemExit('A final release must not send conda packages to the rc label: remove recipes/depsmith/variants.yaml')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'sha={sha}\n')
           PY

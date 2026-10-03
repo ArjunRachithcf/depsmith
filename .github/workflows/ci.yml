@@ -190,20 +190,54 @@ jobs:
       - run: depsmith --version
       - run: python scripts/check-distributions.py dist
   conda:
+    # The conda-forge recipe, built with this commit's sdist in place of the
+    # published one.
+    needs: sdist
     runs-on: ubuntu-latest
+    env:
+      RATTLER_BUILD_VERSION: 0.76.1
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
-      - uses: conda-incubator/setup-miniconda@v4
+      - uses: actions/download-artifact@v4
         with:
-          miniforge-version: latest
-          channels: conda-forge
-          conda-build-version: '*'
-          python-version: '3.12'
-      - name: Build and install-test conda package
-        shell: bash -el {0}
-        run: conda build --override-channels -c conda-forge --no-anaconda-upload --output-folder conda-dist recipes/depsmith
+          name: sdist
+          path: dist
+      - name: Point the recipe at the local sdist
+        run: |
+          python3 - <<'PY'
+          import glob, hashlib, pathlib, re, shutil
+          sdists = glob.glob('dist/depsmith-*.tar.gz')
+          if len(sdists) != 1:
+              raise SystemExit(f'Expected one depsmith sdist in dist/, found {sdists}')
+          (sdist,) = sdists
+          version = pathlib.Path(sdist).name.removeprefix('depsmith-').removesuffix('.tar.gz')
+          sha256 = hashlib.sha256(pathlib.Path(sdist).read_bytes()).hexdigest()
+          shutil.copytree('recipes/depsmith', 'conda-recipe')
+          recipe = pathlib.Path('conda-recipe/recipe.yaml')
+          text = recipe.read_text()
+          text, versions = re.subn(r'(?m)^  version: ".*"$', f'  version: "{version}"', text)
+          text, sources = re.subn(
+              r'(?m)^  url: .*\n  sha256: .*$',
+              f'  url: file://{pathlib.Path(sdist).resolve()}\n  sha256: {sha256}',
+              text,
+          )
+          if (versions, sources) != (1, 1):
+              raise SystemExit('recipe.yaml no longer has one context version and one url source')
+          recipe.write_text(text)
+          PY
+      - name: Resolve the pinned Pixi
+        run: echo "PIXI_VERSION=v$(jq -r .pixi .github/tool-versions.json)" >> "$GITHUB_ENV"
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          run-install: false
+      - name: Build and test the conda package
+        run: >-
+          pixi exec --spec "rattler-build==$RATTLER_BUILD_VERSION" rattler-build build
+          --recipe conda-recipe/recipe.yaml -m .github/conda-variants.yaml
+          -c conda-forge --output-dir conda-dist
       - uses: actions/upload-artifact@v4
         with:
           name: conda-linux-64

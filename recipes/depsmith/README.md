@@ -1,20 +1,30 @@
-# Local conda recipe
+# conda-forge recipe
 
-Build from this checkout using `conda build -c conda-forge recipes/depsmith`.
-The package contains the PyO3 extension and `depsmith` entry point. Pixi and
-Grype are separate runtime tools. Linux build and installation were verified with conda-build on 2026-09-29,
-including the Python API tests. CI repeats the Linux build/test; macOS and
-Windows conda builds remain unverified. Native Pixi/Grype integrations are
-separate opt-in tests.
+`recipe.yaml` is the conda-forge recipe (rattler-build, schema v1) for the
+latest release on PyPI: its source is that sdist and its SHA-256. It is what a
+staged-recipes submission or the feedstock carries; once the feedstock exists,
+the conda-forge bot follows new PyPI releases there. The package contains the
+PyO3 extension and the `depsmith` entry point; Pixi, uv, npm and the other
+managers are separate tools (`depsmith init` can install them).
 
-Before conda-forge submission, replace the local source path with an immutable
-release archive and SHA-256, agree on feedstock maintainers, and vendor Cargo dependencies for offline reproducibility. Confirm
-all target platforms with feedstock CI. No package publication is configured.
+- **One build per platform**: the extension uses the stable ABI (abi3), so
+  each platform gets a single package for Python 3.10 and newer.
+- **Licenses**: `cargo-bundle-licenses` writes the licenses of every bundled
+  crate to `THIRDPARTY.yml`, which ships beside `LICENSE`.
+- **Release candidates**: `variants.yaml` sends release candidates to the
+  `conda-forge/label/depsmith_rc` channel
+  (`conda install -c conda-forge/label/depsmith_rc depsmith`). Remove it for a
+  final release.
 
-conda-forge also needs the licenses of the bundled Rust crates (for example
-with `cargo-bundle-licenses`). Beyond MIT and Apache-2.0, they include
-zlib-rs (Zlib), pulled in by the tool-provisioning archive support
-(`flate2`, `tar`, `zip`), and the crates added for the conda adapter
-(`ruzstd`, `rmp-serde`, `rmp`, `twox-hash`, `num-traits`).
+CI builds and tests this recipe on linux-64 with the commit's own sdist in
+place of the published one; `.github/conda-variants.yaml` stands in for the
+conda-forge pinning keys the recipe uses (CI pins rattler-build in
+`.github/workflows/ci.yml`). To build the published release the
+same way:
 
-Recipe fields follow the [conda-build metadata documentation](https://docs.conda.io/projects/conda-build/en/latest/resources/define-metadata.html).
+```sh
+pixi exec --spec rattler-build==0.76.1 rattler-build build --recipe recipes/depsmith/recipe.yaml \
+  -m .github/conda-variants.yaml -c conda-forge --output-dir conda-dist
+```
+
+macOS and Windows builds are first checked by the feedstock's CI.

@@ -1,0 +1,11 @@
+# Stand-ins for the conda-forge pinning keys recipes/depsmith/recipe.yaml uses,
+# so CI builds it as conda-forge would on linux-64.
+python: ["3.10"]
+python_min: ["3.10"]
+is_abi3: [true]
+is_python_min: [true]
+c_compiler: [gcc]
+c_compiler_version: ["14"]
+rust_compiler: [rust]
+c_stdlib: [sysroot]
+c_stdlib_version: ["2.17"]
