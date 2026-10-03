@@ -11,8 +11,8 @@ changes, and the reviewed files are then written without resolving again.
 
 - **Supported:** Pixi (`pixi.toml`, Pixi-managed `pyproject.toml`), GitHub
   Actions workflow references, Cargo (`Cargo.lock` owners), conda
-  (`environment.yml` locked with conda-lock) and uv (`pyproject.toml` with
-  `uv.lock`).
+  (`environment.yml` locked with conda-lock), uv (`pyproject.toml` with
+  `uv.lock`) and npm (`package.json` with `package-lock.json`).
 - **Safe by default:** updates keep your constraints. Proposals go stale if the
   repository changes, and interrupted writes can be recovered.
 - **Evidence-backed suggestions** for pins that block newer releases, which you
@@ -91,6 +91,7 @@ if not proposal.failures:
 | Cargo lock owners, MSRV-aware updates | [Cargo adapter](https://github.com/ArjunRachithcf/depsmith/wiki/Cargo-adapter) |
 | conda-lock environments, sharded repodata | [Conda adapter](https://github.com/ArjunRachithcf/depsmith/wiki/Conda-adapter) |
 | uv workspaces, Git pins, index evidence | [uv adapter](https://github.com/ArjunRachithcf/depsmith/wiki/uv-adapter) |
+| npm workspaces, cooldowns, registry evidence | [npm adapter](https://github.com/ArjunRachithcf/depsmith/wiki/npm-adapter) |
 | Grype scanning, identities, policy, suppressions | [Vulnerability scanning](https://github.com/ArjunRachithcf/depsmith/wiki/Vulnerability-scanning) |
 | Common errors | [Troubleshooting](https://github.com/ArjunRachithcf/depsmith/wiki/Troubleshooting) |
 | Every command and option | [CLI reference](https://github.com/ArjunRachithcf/depsmith/wiki/CLI-reference) |

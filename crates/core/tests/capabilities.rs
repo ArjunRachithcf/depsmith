@@ -162,7 +162,7 @@ fn doctor_reports_capabilities_and_unavailable_tools() {
     let options = UpdateOptions {
         pixi: "depsmith-nonexistent-executable".into(),
         grype: "depsmith-nonexistent-executable".into(),
-        tools: ["cargo", "conda-lock", "conda", "uv"]
+        tools: ["cargo", "conda-lock", "conda", "uv", "npm"]
             .map(|t| (t.into(), "depsmith-nonexistent-executable".into()))
             .into(),
         ..Default::default()

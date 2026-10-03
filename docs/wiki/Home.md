@@ -8,8 +8,9 @@ anything is written, and the reviewed files are applied without resolving again.
 
 Supported today: **Pixi** (`pixi.toml` and Pixi-managed `pyproject.toml`),
 **GitHub Actions** workflow references, **Cargo** (`Cargo.lock` owners),
-**conda** (`environment.yml` locked with conda-lock) and **uv**
-(`pyproject.toml` locked with `uv.lock`). `depsmith init` checks the native
+**conda** (`environment.yml` locked with conda-lock), **uv**
+(`pyproject.toml` locked with `uv.lock`) and **npm** (`package.json` locked
+with `package-lock.json`). `depsmith init` checks the native
 tools your targets use and can install the missing ones.
 
 ## Guide
@@ -22,6 +23,7 @@ tools your targets use and can install the missing ones.
 - [Cargo adapter](Cargo-adapter): lock owners, MSRV-aware updates, suggestions and acceptance.
 - [Conda adapter](Conda-adapter): conda-lock, sharded repodata evidence and `pip:` requirements.
 - [uv adapter](uv-adapter): uv workspaces, Git pins, index evidence and acceptance.
+- [npm adapter](npm-adapter): npm workspaces, Git pins, `--before` cooldowns, registry evidence and acceptance.
 - [Vulnerability scanning](Vulnerability-scanning): baseline comparison, identities, policy and suppressions.
 - [CI integration](CI-integration): noninteractive jobs, reports and exit statuses.
 - [Troubleshooting](Troubleshooting): common errors and what to do.

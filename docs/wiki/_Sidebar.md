@@ -9,6 +9,7 @@
 - [Cargo adapter](Cargo-adapter)
 - [Conda adapter](Conda-adapter)
 - [uv adapter](uv-adapter)
+- [npm adapter](npm-adapter)
 - [Vulnerability scanning](Vulnerability-scanning)
 - [CI integration](CI-integration)
 - [Troubleshooting](Troubleshooting)

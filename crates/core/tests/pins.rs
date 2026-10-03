@@ -21,11 +21,13 @@ fn integration_pins_are_the_tested_versions() {
         .collect();
     assert_eq!(
         pins.keys().collect::<Vec<_>>(),
-        ["conda", "conda-lock", "grype", "pixi", "uv"],
+        ["conda", "conda-lock", "grype", "node", "pixi", "uv"],
         "{}",
         path.display()
     );
-    for (tool, pin) in &pins {
+    // Node.js is not a tool of its own: npm comes with this release.
+    assert_eq!(pins["node"], depsmith_core::provision::NODE_VERSION);
+    for (tool, pin) in pins.iter().filter(|(tool, _)| *tool != "node") {
         assert_eq!(Some(pin), tested.get(tool), "{tool} in {}", path.display());
     }
 }

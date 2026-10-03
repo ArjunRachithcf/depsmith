@@ -4,7 +4,7 @@
 
 depsmith needs Python 3.10+ (for the package) or Rust 1.89+ (to build from
 source). Each target is resolved by its native package manager (Pixi, uv,
-cargo, conda-lock and micromamba), and Grype scans for vulnerabilities.
+cargo, conda-lock and micromamba, npm), and Grype scans for vulnerabilities.
 
 ```sh
 pip install --pre depsmith         # Python 3.10+: CLI and Python API

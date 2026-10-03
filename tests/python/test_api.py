@@ -61,6 +61,7 @@ class ApiTests(unittest.TestCase):
                     "conda-lock": "missing-conda-lock-binary",
                     "conda": "missing-conda-binary",
                     "uv": "missing-uv-binary",
+                    "npm": "missing-npm-binary",
                 },
             )
         )

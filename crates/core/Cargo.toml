@@ -31,6 +31,7 @@ rmp-serde = "1.3.1"
 flate2 = "1.1.10"
 tar = "0.4.46"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+nodejs-semver = { version = "7.0.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

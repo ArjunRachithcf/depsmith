@@ -99,6 +99,12 @@ pub enum RegistryConfig {
         /// Index URL, ending in `/`.
         index: String,
     },
+    /// An npm registry (abbreviated metadata), such as
+    /// `https://registry.npmjs.org/`.
+    NpmRegistry {
+        /// Registry URL, ending in `/`.
+        url: String,
+    },
     /// PEP 691 JSON Simple API indexes.
     PypiSimple {
         /// Index URLs, in order.
@@ -235,6 +241,13 @@ impl<'a> Lookup<'a> {
             }
             RegistryConfig::CratesSparse { index } => crate::cargo::sparse_excluded(
                 index,
+                package,
+                requirement,
+                self.options.timeout_seconds,
+            )
+            .map(|excluded| (label(excluded), vec![])),
+            RegistryConfig::NpmRegistry { url } => crate::npm::registry_excluded(
+                url,
                 package,
                 requirement,
                 self.options.timeout_seconds,
@@ -378,6 +391,19 @@ fn fixture_excluded(
             })
             .collect();
         return crate::cargo::semver_excluded("fixture", &rows, requirement);
+    }
+    if ecosystem == "npm" {
+        let rows: Vec<(nodejs_semver::Version, &str, &str)> = releases
+            .iter()
+            .filter_map(|r| {
+                Some((
+                    nodejs_semver::Version::parse(&r.version).ok()?,
+                    r.url.as_str(),
+                    r.sha256.as_str(),
+                ))
+            })
+            .collect();
+        return crate::npm::npm_excluded("fixture", &rows, requirement);
     }
     if ecosystem == "conda" {
         let rows: Vec<serde_json::Value> = releases

@@ -37,6 +37,8 @@ mod http;
 /// Reading resolved packages from lockfiles.
 pub mod inventory;
 mod model;
+/// The npm adapter: `package.json` packages locked with `package-lock.json`.
+pub mod npm;
 mod pep440;
 /// The Pixi adapter: `pixi.toml` and Pixi-managed `pyproject.toml` targets.
 pub mod pixi;
@@ -70,6 +72,7 @@ impl Default for Engine {
             Box::new(cargo::Cargo::default()),
             Box::new(conda::Conda),
             Box::new(uv::Uv::default()),
+            Box::new(npm::Npm::default()),
         ])
     }
 }
