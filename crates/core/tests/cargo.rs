@@ -294,6 +294,52 @@ mod stand_in {
             .unwrap()
     }
 
+    /// The RUSTUP_TOOLCHAIN a stand-in cargo saw while updating a crate,
+    /// with or without a rust-toolchain.toml in the project.
+    fn toolchain_seen(toolchain_file: bool) -> String {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        write(root.path(), &[("Cargo.toml", &package("a", ""))]);
+        if toolchain_file {
+            write(
+                root.path(),
+                &[("rust-toolchain.toml", "[toolchain]\nchannel = \"1.80\"\n")],
+            );
+        }
+        let seen = tools.path().join("seen");
+        let script = tools.path().join("cargo");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'cargo 1.98.1 (fake 2026-01-01)';;\n  update) echo \"${{RUSTUP_TOOLCHAIN:-unset}}\" > '{}'; cp '{}' Cargo.lock;;\nesac\n",
+                seen.display(),
+                cargo(tools.path(), "1.98.1").replace("/cargo", "/lock")
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut options = UpdateOptions {
+            tools: BTreeMap::from([("cargo".into(), script.to_string_lossy().into_owned())]),
+            ..Default::default()
+        };
+        options.tool_envs.insert(
+            "cargo".into(),
+            vec![("RUSTUP_TOOLCHAIN".into(), "1.98.1".into())],
+        );
+        let proposal = Engine::new(vec![Box::new(Cargo::default())])
+            .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        fs::read_to_string(seen).unwrap().trim().to_owned()
+    }
+
+    #[test]
+    fn a_projects_toolchain_file_wins_over_the_installed_toolchain() {
+        assert_eq!(toolchain_seen(false), "1.98.1");
+        // Not depsmith's pin (the test harness may set its own).
+        assert_ne!(toolchain_seen(true), "1.98.1");
+    }
+
     #[test]
     fn capped_requirements_and_msrv_hold_backs_are_suggestions() {
         let proposal = prepare("1.0.100", &[], "1.98.1");

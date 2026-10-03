@@ -544,7 +544,25 @@ impl Adapter for Cargo {
             "CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS".to_owned(),
             "fallback".to_owned(),
         )];
-        msrv.extend(options.tool_env("cargo").iter().cloned());
+        // A project pinning its toolchain (rust-toolchain[.toml]) resolves
+        // with that toolchain, which rustup installs, not depsmith's pin.
+        let pinned_toolchain = target
+            .manifest
+            .parent()
+            .into_iter()
+            .flat_map(Path::ancestors)
+            .any(|dir| {
+                ["rust-toolchain", "rust-toolchain.toml"]
+                    .iter()
+                    .any(|name| stage.join(dir).join(name).is_file())
+            });
+        msrv.extend(
+            options
+                .tool_env("cargo")
+                .iter()
+                .filter(|(key, _)| !(pinned_toolchain && key == "RUSTUP_TOOLCHAIN"))
+                .cloned(),
+        );
         let (_, report) = run_env_output(&cargo, &args, stage, timeout, &msrv)?;
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env_output(

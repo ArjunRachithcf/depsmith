@@ -6,7 +6,7 @@ use crate::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
     },
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
-    process::run,
+    process::run_env,
     Error, Result, Target, UpdateOptions,
 };
 use std::{collections::BTreeMap, fs, path::Path};
@@ -191,7 +191,13 @@ impl Adapter for Pixi {
             manifest.to_string_lossy().into(),
         ];
         args.extend(options.packages.clone());
-        run(&options.tool("pixi"), &args, stage, options.timeout_seconds)?;
+        run_env(
+            &options.tool("pixi"),
+            &args,
+            stage,
+            options.timeout_seconds,
+            options.tool_env("pixi"),
+        )?;
         let after_text = fs::read_to_string(stage.join(&lock))?;
         let after = crate::inventory::pixi_inventory(&after_text)?;
         if !options.refresh_git
@@ -207,7 +213,7 @@ impl Adapter for Pixi {
                 "backend unexpectedly changed the manifest".into(),
             ));
         }
-        run(
+        run_env(
             &options.tool("pixi"),
             &[
                 "lock".into(),
@@ -217,6 +223,7 @@ impl Adapter for Pixi {
             ],
             stage,
             options.timeout_seconds,
+            options.tool_env("pixi"),
         )?;
         if fs::read_to_string(stage.join(&lock))? != after_text {
             return Err(Error::Operation(
@@ -225,7 +232,7 @@ impl Adapter for Pixi {
         }
         let mut validation = vec![format!("{}: resolved and lock-consistent", target.id)];
         if options.install {
-            run(
+            run_env(
                 &options.tool("pixi"),
                 &[
                     "install".into(),
@@ -235,6 +242,7 @@ impl Adapter for Pixi {
                 ],
                 stage,
                 options.timeout_seconds,
+                options.tool_env("pixi"),
             )?;
             validation.push(format!(
                 "{}: default environment installed on host",

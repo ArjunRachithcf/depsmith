@@ -11,7 +11,7 @@ use crate::{
     adapter::Adapter,
     constraint::{parse_accept, Excluded},
     ecosystem,
-    process::run,
+    process::run_env,
     Error, Result, Suggestion, Target, UpdateOptions,
 };
 use serde::{Deserialize, Serialize};
@@ -261,11 +261,12 @@ impl<'a> Lookup<'a> {
             self.stage.join(manifest).to_string_lossy().into(),
             spec.into(),
         ];
-        let output = run(
+        let output = run_env(
             &self.options.tool("pixi"),
             &args,
             self.stage,
             self.options.timeout_seconds,
+            self.options.tool_env("pixi"),
         )?;
         serde_json::from_str(&output)
             .map_err(|e| Error::Operation(format!("unreadable pixi search output: {e}")))

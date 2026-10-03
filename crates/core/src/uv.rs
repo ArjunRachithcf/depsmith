@@ -8,7 +8,7 @@ use crate::{
         LockCheck, ManagedFiles, Support, ToolSpec,
     },
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
-    process::run,
+    process::run_env,
     Error, Package, Result, Target, UpdateOptions,
 };
 use std::{
@@ -394,9 +394,15 @@ impl Adapter for Uv {
         for name in upgrades {
             args.extend(["--upgrade-package".into(), name.to_owned()]);
         }
-        run(&uv, &args, &dir, timeout)?;
+        run_env(&uv, &args, &dir, timeout, options.tool_env("uv"))?;
         let resolved = check.resolved(stage, options.refresh_git)?;
-        run(&uv, &lock(&["--locked"]), &dir, timeout)?;
+        run_env(
+            &uv,
+            &lock(&["--locked"]),
+            &dir,
+            timeout,
+            options.tool_env("uv"),
+        )?;
         check.candidate(stage, target, &resolved, vec![])
     }
 }

@@ -433,10 +433,10 @@ fn reinstalling_an_identical_cached_copy_keeps_it_in_place() {
     let tool = spec("1.2.3", &d);
     let first = tempfile::tempdir().unwrap();
     let path = provision::reinstall(first.path(), &tool, cache.path(), 30).unwrap();
-    let marker = path.parent().unwrap().join("in-use");
-    fs::write(&marker, b"another repository is using this copy").unwrap();
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap());
     // A second repository verifies against a fresh download, then records
-    // the same copy instead of replacing a directory others may be using.
+    // the same copy instead of replacing a file others may be running.
     let second = tempfile::tempdir().unwrap();
     assert_eq!(
         provision::trust(second.path(), &tool, cache.path()),
@@ -444,7 +444,12 @@ fn reinstalling_an_identical_cached_copy_keeps_it_in_place() {
     );
     let again = provision::reinstall(second.path(), &tool, cache.path(), 30).unwrap();
     assert_eq!(again, path);
-    assert!(marker.exists());
+    #[cfg(unix)]
+    assert_eq!(
+        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap()),
+        inode,
+        "the identical copy was replaced"
+    );
     assert_eq!(log.lock().unwrap().len(), 2);
     assert_eq!(
         provision::trust(second.path(), &tool, cache.path()),
@@ -546,6 +551,36 @@ mod installers {
             assert!(!cache.path().join("tool").join("1.2.3").exists());
         }
     }
+
+    #[test]
+    fn a_changed_install_tree_is_detected_and_repaired() {
+        let (base, _) = serve(vec![("/tool-init", INSTALLER.to_vec())]);
+        let tool = depsmith_core::adapter::ToolSpec {
+            name: "tool".into(),
+            default: "tool".into(),
+            tested_versions: vec!["1.2.3".into()],
+            downloads: vec![installer(&base, INSTALLER)],
+        };
+        let (repo, cache) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        provision::reinstall(repo.path(), &tool, cache.path(), 30).unwrap();
+        assert_eq!(provision::verify_tree(repo.path(), &tool), None);
+        // The entry point is untouched; a file beside it changes.
+        let home = cache.path().join("tool/1.2.3/home");
+        fs::write(&home, "tampered").unwrap();
+        let reason = provision::verify_tree(repo.path(), &tool).unwrap();
+        assert!(reason.contains("changed"), "{reason}");
+        provision::reinstall(repo.path(), &tool, cache.path(), 30).unwrap();
+        assert_ne!(fs::read_to_string(&home).unwrap(), "tampered");
+        assert_eq!(provision::verify_tree(repo.path(), &tool), None);
+    }
+
+    #[test]
+    fn cargo_keeps_the_users_cargo_home() {
+        for d in &provision::pinned("cargo") {
+            assert!(d.env.contains_key("RUSTUP_HOME"), "{d:?}");
+            assert!(!d.env.contains_key("CARGO_HOME"), "{d:?}");
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -560,7 +595,7 @@ mod python_tools {
         let uv = dir.join("uv");
         fs::write(
             &uv,
-            "#!/bin/sh\nset -e\ncase \"$1\" in\n  venv) for a; do last=$a; done; mkdir -p \"$last/bin\"; echo \"$*\" > \"$last/venv-args\";;\n  pip) shift 2; venv=\"\"; req=\"\"; while [ $# -gt 0 ]; do case \"$1\" in --python) venv=$2; shift 2;; -r) req=$2; shift 2;; *) echo \"$1\" >> \"$venv/pip-flags\"; shift;; esac; done; cp \"$req\" \"$venv/requirements\"; printf '#!/bin/sh\\necho conda-lock 4.0.2\\n' > \"$venv/bin/conda-lock\"; chmod 755 \"$venv/bin/conda-lock\";;\n  *) exit 2;;\nesac\n",
+            "#!/bin/sh\nset -e\ncase \"$1\" in\n  venv) for a; do last=$a; done; mkdir -p \"$last/bin\"; echo \"$*\" > \"$last/venv-args\";;\n  pip) shift 2; venv=\"\"; req=\"\"; flags=\"\"; while [ $# -gt 0 ]; do case \"$1\" in --python) venv=$2; shift 2;; -r) req=$2; shift 2;; *) flags=\"$flags $1\"; shift;; esac; done; echo \"$flags\" > \"$venv/pip-flags\"; cp \"$req\" \"$venv/requirements\"; printf '#!/bin/sh\\necho conda-lock 4.0.2\\n' > \"$venv/bin/conda-lock\"; chmod 755 \"$venv/bin/conda-lock\";;\n  *) exit 2;;\nesac\n",
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
@@ -589,9 +624,10 @@ mod python_tools {
             provision::install_with("conda-lock", "4.0.2", &d, cache.path(), 30, &tools).unwrap();
         let venv = cache.path().join("conda-lock/4.0.2/venv");
         assert_eq!(path, venv.join("bin/conda-lock"));
-        assert!(fs::read_to_string(venv.join("venv-args"))
-            .unwrap()
-            .contains("--relocatable"));
+        let venv_args = fs::read_to_string(venv.join("venv-args")).unwrap();
+        for flag in ["--relocatable", "--no-config", "--managed-python"] {
+            assert!(venv_args.contains(flag), "{flag}: {venv_args}");
+        }
         let flags = fs::read_to_string(venv.join("pip-flags")).unwrap();
         assert!(
             flags.contains("--require-hashes") && flags.contains("--no-deps"),
@@ -671,5 +707,29 @@ mod symlinks {
         let error = installed(cache.path(), &d).unwrap_err().to_string();
         assert!(error.contains("escapes"), "{error}");
         assert!(!cache.path().join("tool").join("1.2.3").exists());
+    }
+
+    #[test]
+    fn links_cannot_escape_through_earlier_links() {
+        let encoder = flate2::write::GzEncoder::new(vec![], flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        for (link, target) in [("a/b/d", ".."), ("a/b/d/e", "../../..")] {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            builder.append_link(&mut header, link, target).unwrap();
+        }
+        let mut file = tar::Header::new_gnu();
+        file.set_size(PROGRAM.len() as u64);
+        file.set_mode(0o755);
+        file.set_cksum();
+        builder.append_data(&mut file, "tool", PROGRAM).unwrap();
+        let tarball = builder.into_inner().unwrap().finish().unwrap();
+        let (base, _) = serve(vec![("/t.tar.gz", tarball.clone())]);
+        let d = download(&base, "/t.tar.gz", &tarball, Archive::TarGz, "tool");
+        let cache = tempfile::tempdir().unwrap();
+        let error = installed(cache.path(), &d).unwrap_err().to_string();
+        assert!(error.contains("through a link"), "{error}");
     }
 }

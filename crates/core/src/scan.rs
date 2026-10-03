@@ -322,13 +322,14 @@ pub fn scan_pair(
 ) -> Result<ScanReport> {
     let directory = tempfile::tempdir()?;
     let cache = directory.path().join("db");
-    let env = vec![
+    let mut env: Vec<(String, String)> = options.tool_env("grype").to_vec();
+    env.extend([
         (
             "GRYPE_DB_CACHE_DIR".into(),
             cache.to_string_lossy().into_owned(),
         ),
         ("GRYPE_DB_AUTO_UPDATE".into(), "false".into()),
-    ];
+    ]);
     run_env(
         &options.tool("grype"),
         &["db".into(), "update".into()],

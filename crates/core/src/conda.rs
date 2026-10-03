@@ -7,7 +7,7 @@ use crate::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
     },
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
-    process::run,
+    process::run_env,
     pyproject::Pep508,
     Error, Package, Result, Target, UpdateOptions,
 };
@@ -711,11 +711,12 @@ impl Adapter for Conda {
             }
         }
         let dir = environment.parent().unwrap_or(stage);
-        run(
+        run_env(
             &options.tool("conda-lock"),
             &args,
             dir,
             options.timeout_seconds,
+            options.tool_env("conda-lock"),
         )?;
         if fs::read(&environment)? != source {
             return Err(Error::Policy(

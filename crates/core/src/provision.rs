@@ -99,8 +99,7 @@ fn expand(text: &str, prefix: &Path) -> String {
 /// executable at `executable`: its `env` and, first on `PATH`, its `path`
 /// directories, all under the install directory.
 pub fn runtime_env(download: &ToolDownload, executable: &Path) -> Vec<(String, String)> {
-    let depth = Path::new(&download.executable).components().count();
-    let Some(prefix) = executable.ancestors().nth(depth) else {
+    let Some(prefix) = install_dir(download, executable) else {
         return vec![];
     };
     let mut env: Vec<(String, String)> = download
@@ -217,7 +216,24 @@ fn fetch(url: &str, timeout: u64) -> Result<Vec<u8>> {
         .to_vec())
 }
 
+/// Refuse `relative` when a directory on its way inside `out` is a link an
+/// earlier archive entry created: writing through it could leave `out`.
+fn not_through_links(out: &Path, relative: &Path) -> Result<()> {
+    let mut current = out.to_path_buf();
+    for part in relative.parent().into_iter().flat_map(Path::components) {
+        current.push(part);
+        if fs::symlink_metadata(&current).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(Error::Invalid(format!(
+                "archive entry {} goes through a link",
+                relative.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn write_entry(out: &Path, relative: &Path, reader: &mut dyn Read) -> Result<()> {
+    not_through_links(out, relative)?;
     let path = out.join(confined(relative, "archive entry")?);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -231,6 +247,7 @@ fn write_entry(out: &Path, relative: &Path, reader: &mut dyn Read) -> Result<()>
 /// `bin/npm` as a link into `lib/`); refuse any other link.
 fn write_link(out: &Path, relative: &Path, target: &Path) -> Result<()> {
     let link = confined(relative, "archive entry")?;
+    not_through_links(out, relative)?;
     let mut depth: Vec<&std::ffi::OsStr> = vec![];
     for component in link
         .parent()
@@ -368,6 +385,7 @@ fn fetch_verified(
             .collect();
         crate::process::run_env(&installer.to_string_lossy(), &args, &out, timeout, &env)
             .map_err(|e| Error::Operation(format!("installer {} failed: {e}", download.url)))?;
+        fs::remove_file(&installer)?;
     }
     let program = out.join(&executable);
     if !program.is_file() {
@@ -413,7 +431,17 @@ fn uv_venv(
     let failed = |e: Error| Error::Operation(format!("installing {lock} with uv failed: {e}"));
     crate::process::run(
         uv,
-        &["venv", "--relocatable", "--python", python, &venv].map(str::to_owned),
+        // The user's uv configuration must not pick the interpreter or index.
+        &[
+            "venv",
+            "--relocatable",
+            "--no-config",
+            "--managed-python",
+            "--python",
+            python,
+            &venv,
+        ]
+        .map(str::to_owned),
         &out,
         timeout,
     )
@@ -423,6 +451,7 @@ fn uv_venv(
         &[
             "pip",
             "install",
+            "--no-config",
             "--python",
             &venv,
             "--require-hashes",
@@ -713,9 +742,14 @@ fn rustup_downloads() -> Vec<ToolDownload> {
             let exe = if os == "windows" { ".exe" } else { "" };
             let mut setup_env: BTreeMap<String, String> = homes("").into_iter().collect();
             setup_env.insert("RUSTUP_INIT_SKIP_PATH_CHECK".into(), "yes".into());
-            let mut env: BTreeMap<String, String> = homes("").into_iter().collect();
-            // A project's rust-toolchain file must not make rustup download
-            // another toolchain while depsmith resolves.
+            // At run time only the toolchain comes from the install: cargo
+            // keeps the user's CARGO_HOME (config, credentials, registry).
+            // The cargo adapter drops RUSTUP_TOOLCHAIN for projects with a
+            // rust-toolchain file.
+            let mut env = BTreeMap::from([(
+                "RUSTUP_HOME".to_owned(),
+                "{prefix}/rustup".to_owned(),
+            )]);
             env.insert("RUSTUP_TOOLCHAIN".into(), RUST_TOOLCHAIN.into());
             ToolDownload {
                 os: os.into(),
@@ -788,6 +822,77 @@ struct ToolRecord {
     version: String,
     executable: PathBuf,
     sha256: String,
+    /// Manifest hash of the whole install directory (see [`tree_hash`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tree: Option<String>,
+}
+
+/// Names a running tool may create or update inside its install (Python
+/// bytecode caches, rustup's download and temporary directories), left out
+/// of manifests.
+const VOLATILE: &[&str] = &["__pycache__", "downloads", "tmp", "update-hash"];
+
+/// A manifest hash of the files and links under `dir`, sorted by path,
+/// leaving out [`VOLATILE`] entries and `.pyc` files.
+fn tree_hash(dir: &Path) -> Result<String> {
+    fn walk(dir: &Path, relative: &Path, lines: &mut Vec<String>) -> Result<()> {
+        let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries {
+            let name = entry.file_name();
+            let lossy = name.to_string_lossy();
+            if VOLATILE.contains(&lossy.as_ref()) || lossy.ends_with(".pyc") {
+                continue;
+            }
+            let path = relative.join(&name);
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                let target = fs::read_link(entry.path())?;
+                lines.push(format!("L {} {}", path.display(), target.display()));
+            } else if kind.is_dir() {
+                walk(&entry.path(), &path, lines)?;
+            } else {
+                lines.push(format!(
+                    "F {} {}",
+                    path.display(),
+                    file_sha256(&entry.path())?
+                ));
+            }
+        }
+        Ok(())
+    }
+    let mut lines = vec![];
+    walk(dir, Path::new(""), &mut lines)?;
+    Ok(format!("{:x}", Sha256::digest(lines.join("\n"))))
+}
+
+/// The install directory of `download` whose executable is `executable`.
+fn install_dir<'a>(download: &ToolDownload, executable: &'a Path) -> Option<&'a Path> {
+    executable
+        .ancestors()
+        .nth(Path::new(&download.executable).components().count())
+}
+
+/// Whether the install of `tool` recorded for `root` still has the tree it
+/// was installed with; the reason when it does not. Slower than [`trust`]
+/// (it hashes the whole install), so `depsmith init` runs it, not every run.
+pub fn verify_tree(root: &Path, tool: &ToolSpec) -> Option<String> {
+    let record = read_records(root).remove(&tool.name)?;
+    let expected = record.tree?;
+    let dir = install_dir(host_download(tool)?, &record.executable)?;
+    match tree_hash(dir) {
+        Ok(actual) if actual == expected => None,
+        Ok(_) => Some(format!(
+            "the installed {} in {} changed since depsmith installed it",
+            tool.name,
+            dir.display()
+        )),
+        Err(_) => Some(format!(
+            "the installed {} in {} is gone",
+            tool.name,
+            dir.display()
+        )),
+    }
 }
 
 /// The repository's records, in `.depsmith/tools.json` (local state; the
@@ -871,6 +976,10 @@ fn record(root: &Path, tool: &ToolSpec, executable: &Path) -> Result<()> {
             version: tool.pinned_version().unwrap_or_default().to_owned(),
             executable: executable.to_path_buf(),
             sha256: file_sha256(executable)?,
+            tree: host_download(tool)
+                .and_then(|d| install_dir(d, executable))
+                .map(tree_hash)
+                .transpose()?,
         },
     );
     let bytes = serde_json::to_vec_pretty(&records)
@@ -924,8 +1033,10 @@ pub fn reinstall_with(
     let executable = confined(Path::new(&download.executable), "executable")?;
     let target = version_dir(&tool.name, version, cache)?;
     let (_staging, out) = fetch_verified(download, &target, timeout, tools)?;
-    let identical = fs::read(target.join(&executable))
-        .is_ok_and(|bytes| fs::read(out.join(&executable)).is_ok_and(|fresh| fresh == bytes));
+    // Keep a cached copy only if its whole tree equals the fresh install
+    // (other repositories may be running it); a broken one is replaced.
+    let identical = target.exists()
+        && matches!((tree_hash(&target), tree_hash(&out)), (Ok(old), Ok(new)) if old == new);
     if !identical {
         place(&out, &target)?;
     }

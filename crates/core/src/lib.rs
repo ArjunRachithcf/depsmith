@@ -706,8 +706,9 @@ impl Engine {
             let reason = match locate(tool, options, root).1 {
                 ToolSource::Missing => Some("not installed".to_owned()),
                 ToolSource::Untrusted(reason) => Some(reason),
-                // A recorded install that no longer runs is offered again.
-                ToolSource::Downloaded => {
+                // A recorded install whose tree changed, or that no longer
+                // runs, is offered again.
+                ToolSource::Downloaded => provision::verify_tree(root, tool).or_else(|| {
                     let report = tool_report(tool, options, root);
                     (report["available"] != true).then(|| {
                         format!(
@@ -716,7 +717,7 @@ impl Engine {
                             report["error"].as_str().unwrap_or("unknown error")
                         )
                     })
-                }
+                }),
                 ToolSource::Configured | ToolSource::Path => None,
             };
             let Some(reason) = reason else {
@@ -728,12 +729,16 @@ impl Engine {
             let cache = provision::cache_dir().ok_or_else(|| {
                 Error::Invalid("no tool cache directory; set DEPSMITH_TOOLS_DIR".into())
             })?;
-            let mut companions = self.companions(options, root);
             // A Python tool is installed with uv: offer uv first if missing.
             let needs_uv = matches!(
                 provision::host_download(tool).and_then(|d| d.setup.as_ref()),
                 Some(provision::Setup::UvVenv { .. })
             );
+            let mut companions = if needs_uv {
+                self.companions(options, root)
+            } else {
+                std::collections::BTreeMap::new()
+            };
             if needs_uv && !companions.contains_key("uv") {
                 if let Some(uv) = self.known_tool("uv") {
                     let reason = format!("needed to install {}", tool.name);
