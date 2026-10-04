@@ -6,7 +6,8 @@ The project is an alpha. A green build is not a published release.
 
 CI builds standalone executables and installs/tests wheels on Linux x86-64,
 Windows x86-64, macOS Intel and Apple Silicon. It checks Rust 1.89, installs
-from the sdist, and builds/tests the local conda recipe on Linux. Native Pixi,
+from the sdist, and builds/tests the conda-forge recipe on Linux against that
+commit's sdist. Native Pixi,
 Grype, pypi.org and GitHub API tests run in the separate Integration workflow on
 pull requests (informational), on `main`, nightly (failures open a
 `nightly-integration` issue) and as a gate in the Release workflow.
@@ -15,9 +16,12 @@ Windows process-tree termination still needs dedicated native acceptance coverag
 The initial complete platform run passed at
 [`02ef062`](https://github.com/ArjunRachithcf/depsmith/actions/runs/36527117086).
 The sdist-install and conda CI jobs were added subsequently and need their own run.
-Conda-forge submission also requires immutable release sources, their SHA-256,
-vendored Rust dependencies and agreed feedstock maintainers. The local recipe
-uses the checkout and downloads Cargo dependencies; it is not a feedstock.
+
+`recipes/depsmith/recipe.yaml` is the conda-forge recipe for the latest PyPI
+release (its sdist and SHA-256). After the feedstock exists, the conda-forge
+bot follows new PyPI releases there; release candidates go to the
+`conda-forge/label/depsmith_rc` channel while `recipes/depsmith/variants.yaml`
+targets it, and a final release fails validation until that file is removed.
 
 ## Manual release workflow
 
@@ -26,12 +30,12 @@ uses the checkout and downloads Cargo dependencies; it is not a feedstock.
    beside it). It is SemVer, `X.Y.Z` or a dotted pre-release
    `X.Y.Z-alpha.N` / `-beta.N` / `-rc.N` (the dot makes `rc.10` sort after
    `rc.9`). Python and conda derive theirs: maturin turns `0.1.0-rc.2` into
-   `0.1.0rc2`, and the conda recipe reads `Cargo.toml` the same way. Create the
+   `0.1.0rc2`, and conda-forge builds that PyPI sdist. Create the
    tag `v{version}` (`v0.1.0`, `v0.1.0-rc.2`) through the normal review
    process; `cargo binstall` downloads from `releases/download/v{version}`.
 2. Run **Release** (`.github/workflows/release.yml`) with that existing tag and
    leave `publish` false. It resolves the tag to a commit, checks the version scheme
-   (tag = v{Cargo version}; Python and conda derived from it), and runs all CI build/test jobs and the native integration tests
+   (tag = v{Cargo version}; Python derived from it), and runs all CI build/test jobs and the native integration tests
    (real Pixi, Grype, conda-forge, pypi.org and GitHub API) on that exact commit.
 3. Review the artifacts. Configure GitHub environments `pypi`, `crates` and
    `release` with required reviewers before enabling publication. crates.io
@@ -56,7 +60,8 @@ uses the checkout and downloads Cargo dependencies; it is not a feedstock.
 
 PyPI publishing and draft creation are independent jobs: one may succeed while
 another fails. Inspect their results before retrying; an existing PyPI version
-cannot be replaced. Do not move a tag during a release. No conda upload is automated.
+cannot be replaced. Do not move a tag during a release. No conda upload is
+automated: conda-forge publishes from its feedstock.
 The GitHub environments and PyPI publisher are external setup, not created by
 these workflow files. See [PyPI's publishing guidance](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
 
