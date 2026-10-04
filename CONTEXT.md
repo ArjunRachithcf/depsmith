@@ -40,6 +40,10 @@ _Avoid_: Jenkins version (ambiguous with plugin versions), LTS
 A behaviour an adapter declares as supported, unsupported or not applicable, such as package selection or install validation.
 _Avoid_: Feature flag
 
+**Precise update**:
+Moving one package to a chosen exact release without changing any constraint, a capability only some package managers offer.
+_Avoid_: Pinned update, exact upgrade
+
 **Native tool**:
 An executable an adapter or the scanner runs, such as Pixi, uv, cargo or Grype, with the versions depsmith is tested with.
 _Avoid_: Binary, dependency
@@ -69,6 +73,14 @@ _Avoid_: Refresh, bump
 **Upgrade**:
 Re-resolving selected direct dependencies while allowing their declared constraints to change.
 _Avoid_: Major update
+
+**Security update**:
+An update that asks the package manager to move only packages with actionable findings, each toward its fix version; anything else that moves with them is reported.
+_Avoid_: Audit fix, patch update
+
+**Actionable finding**:
+A finding that has a fixed release, is not suppressed, and meets the severity a security update was asked to cover.
+_Avoid_: Fixable vulnerability
 
 **Stage**:
 A disposable copy of the repository in which package managers resolve, so the original checkout is never modified while preparing.
@@ -111,7 +123,7 @@ The place in a target's files where a direct dependency and its constraint are w
 _Avoid_: Entry, line
 
 **Suggestion**:
-An evidence-backed report that a constraint excludes a newer release or is otherwise worth revisiting, naming the affected declaration.
+An evidence-backed report that a constraint excludes a newer release, blocks a fix version, or is otherwise worth revisiting, naming the affected declaration.
 _Avoid_: Recommendation, warning
 
 **Evidence**:
@@ -119,7 +131,7 @@ The verifiable source behind a suggestion or identity mapping, such as an artifa
 _Avoid_: Proof, justification
 
 **Acceptance**:
-Rewriting a suggested constraint to admit the evidenced newer release, in the same style or as an explicit replacement, before resolving again.
+Rewriting a suggested constraint to admit the evidenced release, in the same style or as an explicit replacement, before resolving again.
 _Avoid_: Apply (reserved for writing a proposal)
 
 **Hold-back**:
@@ -161,6 +173,10 @@ _Avoid_: Rollback, undo
 The resolved packages of a target, with ecosystem, version, platform and artifact, as input for scanning.
 _Avoid_: SBOM (the exported form), package list
 
+**Dependency path**:
+The chain of packages through which a target depends on a package, from a direct dependency down to it.
+_Avoid_: Dependency chain, dependency tree (the whole graph)
+
 **Identity mapping**:
 A reviewed statement, with evidence, that a package in one ecosystem is the same software as an upstream identity used by vulnerability databases.
 _Avoid_: Alias, name match
@@ -176,6 +192,14 @@ _Avoid_: Audit
 **Finding**:
 One advisory matched to one package in an inventory, with its applicability.
 _Avoid_: Vulnerability (the advisory itself), alert
+
+**Fix version**:
+The release a security update aims a vulnerable package at, chosen from the releases its advisory names as fixed.
+_Avoid_: Patched version, safe version, fixed release (one of the advisory's candidates)
+
+**Unfixable**:
+A finding whose advisory names no release that resolves it, reported and left to policy and suppressions.
+_Avoid_: Unpatched, won't fix
 
 **Unassessed**:
 A package the scanner could not evaluate, reported as unknown and never as clean.

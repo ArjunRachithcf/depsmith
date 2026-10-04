@@ -195,3 +195,8 @@ Designed, not built (status: proposed):
   - An external adapter is an executable outside depsmith, speaking a versioned JSON-lines protocol whose methods mirror `Adapter`.
   - A repository enables one by name or path, under the same trust model as `[options.tools]`.
   - Authors check theirs with `depsmith adapter check`.
+- [ADR 0004](adr/0004-security-only-updates.md): security updates, after 0.1.0-rc.2.
+  - `update --security-only` (`depsmith fix`) moves only packages with actionable findings, by default to the lowest release that fixes them.
+  - Adapters whose tool can target an exact version (Cargo, uv) do so. The others move the package to the newest release its constraints allow, say so, and report a blocked fix when that falls short.
+  - Packages that move alongside are listed, and the scan verifies the result.
+  - Blocked fixes become suggestions that cite the dependency path. Constraints change only through `--accept`.
