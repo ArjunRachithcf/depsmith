@@ -28,9 +28,10 @@ installed). Three layers:
 1. **Offline end-to-end** (`crates/cli/tests/e2e.rs`): the real executable with
    a cross-platform Pixi stand-in on every CI host.
 2. **Native integration** (ignored by default): real Pixi, uv, cargo,
-   conda-lock, Grype, pypi.org, crates.io and the GitHub API, plus a download
-   of the pinned uv.
-   `PIXI=… UV=… CARGO=… CONDA_LOCK=… CONDA_SOLVER=… GRYPE=… GITHUB_TOKEN=… cargo test --workspace -- --ignored`,
+   conda-lock, npm, Grype, pypi.org, crates.io, the npm registry and the
+   GitHub API, plus installs of the pinned uv, Rust toolchain, conda-lock and
+   Node.js.
+   `PIXI=… UV=… CARGO=… CONDA_LOCK=… CONDA_SOLVER=… NPM=… GRYPE=… GITHUB_TOKEN=… cargo test --workspace -- --ignored`,
    and `PIXI=…` for the native Python tests.
 3. **CLI/Python parity** (`tests/python/test_parity.py`).
 
@@ -67,7 +68,8 @@ fails when they are stale or a wiki link is broken.
   A candidate that breaks Integration, a pinned download that is gone or whose
   sha256 changed, or a bump that cannot be made opens a `latest-tools` issue
   instead (one per tool). cargo, which CI runs as stable Rust, is never bumped
-  automatically. `crates/core/tests/pins.rs` checks the pins agree with the
+  automatically, and npm (with its pinned Node.js) is not tracked yet.
+  `crates/core/tests/pins.rs` checks the pins agree with the
   tested versions.
 - Changes reach `main` through pull requests with signed commits; the required
   checks must pass.

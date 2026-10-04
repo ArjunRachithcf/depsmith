@@ -6,8 +6,9 @@ The project is an alpha. A green build is not a published release.
 
 CI builds standalone executables and installs/tests wheels on Linux x86-64,
 Windows x86-64, macOS Intel and Apple Silicon. It checks Rust 1.89, installs
-from the sdist, and builds/tests the local conda recipe on Linux. Native Pixi,
-Grype, pypi.org and GitHub API tests run in the separate Integration workflow on
+from the sdist, and builds/tests the conda-forge recipe on Linux with the
+commit's own sdist. Native Pixi, uv, npm, cargo, conda-lock, Grype,
+conda-forge, pypi.org, crates.io and GitHub API tests run in the separate Integration workflow on
 pull requests (informational), on `main`, nightly (failures open a
 `nightly-integration` issue) and as a gate in the Release workflow.
 Windows process-tree termination still needs dedicated native acceptance coverage.
@@ -15,9 +16,12 @@ Windows process-tree termination still needs dedicated native acceptance coverag
 The initial complete platform run passed at
 [`02ef062`](https://github.com/ArjunRachithcf/depsmith/actions/runs/36527117086).
 The sdist-install and conda CI jobs were added subsequently and need their own run.
-Conda-forge submission also requires immutable release sources, their SHA-256,
-vendored Rust dependencies and agreed feedstock maintainers. The local recipe
-uses the checkout and downloads Cargo dependencies; it is not a feedstock.
+`recipes/depsmith/recipe.yaml` is the conda-forge recipe (rattler-build) that a
+staged-recipes submission or the feedstock carries: it builds the latest
+release's PyPI sdist, checked against its SHA-256, and ships the bundled
+crates' licenses in `THIRDPARTY.yml`. While `recipes/depsmith/variants.yaml`
+exists, packages go to the `conda-forge/label/depsmith_rc` channel; remove it
+for a final release.
 
 ## Manual release workflow
 
@@ -25,14 +29,16 @@ uses the checkout and downloads Cargo dependencies; it is not a feedstock.
    `[workspace.package]` of `Cargo.toml` (and the two internal crate versions
    beside it). It is SemVer, `X.Y.Z` or a dotted pre-release
    `X.Y.Z-alpha.N` / `-beta.N` / `-rc.N` (the dot makes `rc.10` sort after
-   `rc.9`). Python and conda derive theirs: maturin turns `0.1.0-rc.2` into
-   `0.1.0rc2`, and the conda recipe reads `Cargo.toml` the same way. Create the
+   `rc.9`). Python derives its own: maturin turns `0.1.0-rc.2` into
+   `0.1.0rc2`, and the conda-forge recipe follows that PyPI release. Create the
    tag `v{version}` (`v0.1.0`, `v0.1.0-rc.2`) through the normal review
    process; `cargo binstall` downloads from `releases/download/v{version}`.
 2. Run **Release** (`.github/workflows/release.yml`) with that existing tag and
    leave `publish` false. It resolves the tag to a commit, checks the version scheme
-   (tag = v{Cargo version}; Python and conda derived from it), and runs all CI build/test jobs and the native integration tests
-   (real Pixi, Grype, conda-forge, pypi.org and GitHub API) on that exact commit.
+   (tag = v{Cargo version}; Python derived from it; a final release fails while
+   `recipes/depsmith/variants.yaml` still targets the rc label), and runs all CI build/test jobs and the native integration tests
+   (real Pixi, uv, npm, cargo, conda-lock, Grype, conda-forge, pypi.org, crates.io
+   and GitHub API) on that exact commit.
 3. Review the artifacts. Configure GitHub environments `pypi`, `crates` and
    `release` with required reviewers before enabling publication. crates.io
    [trusted publishers](https://crates.io/docs/trusted-publishing) can only be
@@ -67,7 +73,7 @@ these workflow files. See [PyPI's publishing guidance](https://docs.pypi.org/tru
   as available updates and preserves other errors. Reports are outside the
   fingerprinted checkout. Full Git history supports SCM-derived local versions.
 - [Provider-neutral shell job](https://github.com/ArjunRachithcf/depsmith/blob/main/docs/examples/update.sh): install the package and
-  Pixi first, then run `sh update.sh /path/to/project /outside/reports check`.
+  the native tools your targets use first, then run `sh update.sh /path/to/project /outside/reports check`.
   Exit 1 means pending changes. Use `apply` for an explicit noninteractive update
   in one process; your pipeline owns committing and opening a PR afterwards.
 
