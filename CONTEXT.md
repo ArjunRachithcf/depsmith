@@ -26,7 +26,15 @@ _Avoid_: Project, manifest (when the whole unit is meant)
 
 **Adapter**:
 depsmith's integration for one package manager, deciding which files form targets and how they are updated.
-_Avoid_: Plugin, driver
+_Avoid_: Plugin (a Jenkins package), driver
+
+**External adapter**:
+An adapter served by an executable outside depsmith, which a repository enables and depsmith runs alongside its built-in adapters, held to the same contract.
+_Avoid_: Plugin, extension
+
+**Jenkins core**:
+The Jenkins controller version a target's plugins are installed into, which bounds the plugin releases an update may choose.
+_Avoid_: Jenkins version (ambiguous with plugin versions), LTS
 
 **Capability**:
 A behaviour an adapter declares as supported, unsupported or not applicable, such as package selection or install validation.
@@ -113,6 +121,10 @@ _Avoid_: Proof, justification
 **Acceptance**:
 Rewriting a suggested constraint to admit the evidenced newer release, in the same style or as an explicit replacement, before resolving again.
 _Avoid_: Apply (reserved for writing a proposal)
+
+**Hold-back**:
+A newer release a target cannot use because it needs a newer platform than the target declares, such as a newer Rust than the target's minimum supported Rust version or a newer Jenkins core than the target's; reported as a suggestion, never resolved past.
+_Avoid_: Incompatible update, blocked release
 
 **Cooldown**:
 A minimum age a release must reach before it may be selected; Pixi expresses its own form as a release-age cutoff.

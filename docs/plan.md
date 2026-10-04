@@ -181,3 +181,17 @@ Folded into 0.1.0 (ADR 0001). A new package manager is one adapter module plus o
 - **Adapters:** Pixi and GitHub Actions were ported without behaviour changes; Actions gained commit-pin suggestions and `--accept` to `@<sha> # vX.Y.Z`; Cargo targets each `Cargo.lock` owner with MSRV-aware resolution; conda targets `environment.yml` locked with conda-lock; uv targets each `uv.lock` owner (workspace roots), reading `[project]`, `[dependency-groups]` and `tool.uv.dev-dependencies` through a shared `pyproject` module, keeping Git pins and following uv's index priority; npm targets each `package-lock.json` owner (workspace roots), keeping Git pins, editing `package.json` in place, and enforcing `--cooldown-days` with npm's `--before`.
 - **Conformance:** `depsmith_core::conformance::check` runs the contract offline (spec round-trip, discovery, managed files, selection, capability enforcement, declarations round-tripping through `rewrite`). Each adapter also has a native live round trip in the Integration workflow.
 - **Protocol-ready:** every seam type holds owned data only, so an out-of-tree subprocess bridge (`{method, params}` JSON lines) can be added later without redesign.
+
+## 9. Next round
+
+Designed, not built (status: proposed):
+
+- [ADR 0002](adr/0002-jenkins-plugin-adapter.md): a Jenkins plugin adapter.
+  - Its targets are `plugins.txt` and `plugins.yaml`.
+  - Updates stay within the target's Jenkins core. depsmith chooses each pin from update-center data, and `jenkins-plugin-cli` validates that dependencies resolve.
+  - Releases that need a newer core are hold-backs, reported as suggestions.
+  - Evidence comes from the update center, and scan identities from each plugin's `gav`.
+- [ADR 0003](adr/0003-external-adapters.md): external adapters.
+  - An external adapter is an executable outside depsmith, speaking a versioned JSON-lines protocol whose methods mirror `Adapter`.
+  - A repository enables one by name or path, under the same trust model as `[options.tools]`.
+  - Authors check theirs with `depsmith adapter check`.
