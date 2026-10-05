@@ -102,6 +102,15 @@ impl Adapter for Pixi {
         let text = fs::read_to_string(root.join(&target.manifest))?;
         manifest_declarations(&text, is_pyproject(target), &target.manifest)
     }
+    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<crate::graph::LockGraph>> {
+        let lock = root
+            .join(target.manifest.parent().unwrap())
+            .join("pixi.lock");
+        fs::read_to_string(lock)
+            .ok()
+            .map(|text| crate::inventory::pixi_graph(&text))
+            .transpose()
+    }
     /// The projects in `path` entries of PyPI dependency tables (including
     /// features and platform targets) that have a `pyproject.toml`, other
     /// than the target's own manifest.

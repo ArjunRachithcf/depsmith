@@ -159,10 +159,17 @@ class DependencyChange:
     Attributes:
         before: The package before the update; ``None`` when added.
         after: The package after the update; ``None`` when removed.
+        introducers: The declared dependencies whose dependency paths reach
+            the package; empty for a declared package, or when the target's
+            adapter reads no lock graph.
+        paths: The shortest dependency path from each introducer to the
+            package.
     """
 
     before: Package | None
     after: Package | None
+    introducers: tuple[str, ...] = ()
+    paths: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -379,6 +386,8 @@ class Proposal:
             DependencyChange(
                 Package(**row["before"]) if row["before"] else None,
                 Package(**row["after"]) if row["after"] else None,
+                tuple(row.get("introducers", ())),
+                tuple(tuple(path) for path in row.get("paths", ())),
             )
             for row in data["dependencies"]
         )

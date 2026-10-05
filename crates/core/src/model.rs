@@ -150,6 +150,14 @@ pub struct DependencyChange {
     pub before: Option<Package>,
     /// The package after the update; `None` when it is removed.
     pub after: Option<Package>,
+    /// The declared dependencies whose dependency paths reach the package
+    /// (in the candidate, or the baseline when removed); empty for a
+    /// declared package or when the adapter reads no lock graph.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub introducers: Vec<String>,
+    /// The shortest dependency path from each introducer to the package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<Vec<String>>,
 }
 
 /// A target whose candidate could not be prepared.

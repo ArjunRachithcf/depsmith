@@ -33,8 +33,9 @@ mod constraint;
 pub mod constraints;
 mod cutoff;
 mod ecosystem;
-mod http;
 /// Reading resolved packages from lockfiles.
+pub mod graph;
+mod http;
 pub mod inventory;
 mod model;
 /// The npm adapter: `package.json` packages locked with `package-lock.json`.
@@ -486,6 +487,7 @@ impl Engine {
                             "targets propose overlapping file changes; select one owner".into(),
                         ));
                     }
+                    let explained = proposal.dependencies.len();
                     for before in &candidate.before {
                         if !candidate.after.contains(before) {
                             let after = candidate
@@ -500,6 +502,8 @@ impl Engine {
                             proposal.dependencies.push(DependencyChange {
                                 before: Some(before.clone()),
                                 after,
+                                introducers: vec![],
+                                paths: vec![],
                             });
                         }
                     }
@@ -512,9 +516,18 @@ impl Engine {
                             proposal.dependencies.push(DependencyChange {
                                 before: None,
                                 after: Some(after.clone()),
+                                introducers: vec![],
+                                paths: vec![],
                             });
                         }
                     }
+                    explain(
+                        &mut proposal.dependencies[explained..],
+                        adapter,
+                        &root,
+                        stage.path(),
+                        &target,
+                    )?;
                     proposal.changes.extend(changes);
                     proposal.suggestions.extend(candidate.suggestions);
                     proposal.unresolved.extend(candidate.unresolved);
@@ -542,6 +555,48 @@ pub use transaction::{apply, recover};
 pub mod actions;
 /// Repository configuration in `depsmith.toml`.
 pub mod config;
+
+/// Name the introducers of each of `changes` that the target does not
+/// declare, from the candidate's lock graph in `stage`, or the baseline's in
+/// `root` for a removed package.
+fn explain(
+    changes: &mut [DependencyChange],
+    adapter: &dyn Adapter,
+    root: &Path,
+    stage: &Path,
+    target: &Target,
+) -> Result<()> {
+    let (Some(before), Some(after)) = (
+        adapter
+            .lock_graph(root, target)?
+            .or_else(|| Some(graph::LockGraph::default())),
+        adapter.lock_graph(stage, target)?,
+    ) else {
+        return Ok(());
+    };
+    let mut roots: Vec<String> = vec![];
+    for declaration in adapter.declarations(stage, target)? {
+        if !roots.contains(&declaration.package) {
+            roots.push(declaration.package);
+        }
+    }
+    for change in changes {
+        let (package, graph) = match (&change.after, &change.before) {
+            (Some(package), _) => (package, &after),
+            (None, Some(package)) => (package, &before),
+            (None, None) => continue,
+        };
+        if roots
+            .iter()
+            .any(|r| graph::key(r) == graph::key(&package.name))
+        {
+            continue;
+        }
+        change.paths = graph.paths_to(&package.platform, &roots, &package.name);
+        change.introducers = change.paths.iter().map(|p| p[0].clone()).collect();
+    }
+    Ok(())
+}
 
 /// Report adapter capabilities and whether each native tool is available and
 /// a tested version, for troubleshooting an installation. Uses the default

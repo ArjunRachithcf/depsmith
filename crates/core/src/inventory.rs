@@ -1,17 +1,23 @@
 //! Reading resolved packages from lockfiles.
-use crate::{Error, Package, Result};
+use crate::{
+    graph::{LockGraph, Node, Requirement},
+    Error, Package, Result,
+};
 use serde_yaml::Value;
 
-/// The resolved packages of every environment and platform in a `pixi.lock`.
-/// Packages whose lock record has no version keep an empty version and are
-/// later reported as unassessed.
-///
-/// # Errors
-///
-/// Returns [`crate::Error::Invalid`] when the lock cannot be parsed.
-pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
-    let value: Value = serde_yaml::from_str(text)
-        .map_err(|e| Error::Operation(format!("invalid Pixi lockfile: {e}")))?;
+/// One package record of a `pixi.lock`, with the platforms it is locked for.
+struct Record<'a> {
+    ecosystem: &'static str,
+    artifact: &'a str,
+    name: &'a str,
+    version: &'a str,
+    item: &'a Value,
+    platforms: std::collections::BTreeSet<String>,
+}
+
+/// The package records of a parsed `pixi.lock`, each with the platforms of
+/// the environments that use it (or its own subdir when none list it).
+fn records(value: &Value) -> Result<Vec<Record<'_>>> {
     let version = value.get("version").and_then(Value::as_u64).unwrap_or(0);
     if !(5..=7).contains(&version) {
         return Err(Error::Operation(format!(
@@ -100,19 +106,114 @@ pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
                     "unknown"
                 }
             });
-        let targets = platforms
+        let platforms = platforms
             .get(&(ecosystem.into(), artifact.into()))
             .cloned()
             .unwrap_or_else(|| [platform.to_owned()].into_iter().collect());
-        for platform in targets {
+        result.push(Record {
+            ecosystem,
+            artifact,
+            name,
+            version,
+            item,
+            platforms,
+        });
+    }
+    Ok(result)
+}
+
+fn parse(text: &str) -> Result<Value> {
+    serde_yaml::from_str(text).map_err(|e| Error::Operation(format!("invalid Pixi lockfile: {e}")))
+}
+
+/// The resolved packages of every environment and platform in a `pixi.lock`.
+/// Packages whose lock record has no version keep an empty version and are
+/// later reported as unassessed.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Invalid`] when the lock cannot be parsed.
+pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
+    let value = parse(text)?;
+    let mut result = vec![];
+    for record in records(&value)? {
+        for platform in record.platforms {
             result.push(Package {
-                ecosystem: ecosystem.into(),
-                name: name.into(),
-                version: version.into(),
-                artifact: artifact.into(),
+                ecosystem: record.ecosystem.into(),
+                name: record.name.into(),
+                version: record.version.into(),
+                artifact: record.artifact.into(),
                 platform,
             });
         }
     }
     Ok(result)
+}
+
+/// The lock graph of a `pixi.lock`: each package on each platform with what
+/// it requires. Conda requirements come from `depends`, without virtual
+/// packages such as `__cuda`; PyPI ones from `requires_dist`, without those
+/// that apply only to an extra.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Invalid`] when the lock cannot be parsed.
+pub fn pixi_graph(text: &str) -> Result<LockGraph> {
+    let value = parse(text)?;
+    let mut nodes = vec![];
+    for record in records(&value)? {
+        let requires: Vec<Requirement> = match record.ecosystem {
+            "conda" => strings(record.item, "depends")
+                .filter_map(|line| {
+                    let (name, spec) = line.split_once(' ').unwrap_or((line, ""));
+                    (!name.starts_with("__")).then(|| requirement(name, spec))
+                })
+                .collect(),
+            _ => strings(record.item, "requires_dist")
+                .filter_map(|line| {
+                    let (requirement_text, marker) = line.split_once(';').unwrap_or((line, ""));
+                    if marker.contains("extra") {
+                        return None;
+                    }
+                    let text = requirement_text.trim();
+                    let end = text
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || "._-".contains(c)))
+                        .unwrap_or(text.len());
+                    let rest = text[end..].trim_start();
+                    let rest = match rest.strip_prefix('[') {
+                        Some(extras) => extras.split_once(']').map_or("", |(_, r)| r),
+                        None => rest,
+                    };
+                    let spec = rest.trim().trim_start_matches('(').trim_end_matches(')');
+                    Some(requirement(&text[..end], spec))
+                })
+                .collect(),
+        };
+        for platform in record.platforms {
+            nodes.push(Node {
+                ecosystem: record.ecosystem.into(),
+                name: record.name.into(),
+                platform,
+                requires: requires.clone(),
+            });
+        }
+    }
+    Ok(LockGraph { nodes })
+}
+
+/// The string items of the list `key` of a lock record.
+fn strings<'a>(item: &'a Value, key: &str) -> impl Iterator<Item = &'a str> {
+    item.get(key)
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+}
+
+fn requirement(name: &str, spec: &str) -> Requirement {
+    let spec = spec.trim();
+    Requirement {
+        name: name.trim().into(),
+        spec: (!spec.is_empty()).then(|| spec.into()),
+    }
 }

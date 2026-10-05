@@ -234,6 +234,15 @@ pub trait Adapter: Send + Sync {
     fn declarations(&self, _root: &Path, _target: &Target) -> Result<Vec<Declaration>> {
         Ok(vec![])
     }
+    /// The lock graph of the target's lock in `root` (the repository or a
+    /// stage), or `None` when the adapter reads none or there is no lock.
+    fn lock_graph(
+        &self,
+        _root: &Path,
+        _target: &Target,
+    ) -> Result<Option<crate::graph::LockGraph>> {
+        Ok(None)
+    }
     /// The `pyproject.toml` files, relative to `root`, of other local
     /// projects the target installs from a path, whose own dependencies are
     /// resolved with the target. The default installs none.

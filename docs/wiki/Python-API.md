@@ -132,7 +132,7 @@ What applying a proposal wrote.
 - `applied`: Files written, relative to the repository root.
 - `partial`: Whether only the successful targets were applied.
 
-### `DependencyChange(before: Package | None, after: Package | None)`
+### `DependencyChange(before: Package | None, after: Package | None, introducers: tuple[str, ...], paths: tuple[tuple[str, ...], ...])`
 
 A package that differs between the baseline and the candidate.
 
@@ -140,6 +140,8 @@ A package that differs between the baseline and the candidate.
 
 - `before`: The package before the update; `None` when added.
 - `after`: The package after the update; `None` when removed.
+- `introducers`: The declared dependencies whose dependency paths reach the package; empty for a declared package, or when the target's adapter reads no lock graph.
+- `paths`: The shortest dependency path from each introducer to the package.
 
 ### `Failure(target: str, message: str, code: int)`
 

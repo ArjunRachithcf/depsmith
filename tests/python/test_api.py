@@ -35,6 +35,48 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(result.failures, ())
             self.assertEqual(result.changes, ())
 
+    @unittest.skipIf(sys.platform == "win32", "uses a shell stand-in for pixi")
+    def test_dependency_changes_name_their_introducers(self):
+        def lock(packages):
+            url = "https://conda.anaconda.org/conda-forge/linux-64/{}-h0_0.conda"
+            text = "version: 6\nenvironments:\n  default:\n    packages:\n      linux-64:\n"
+            text += "".join(f"      - conda: {url.format(p)}\n" for p, _ in packages)
+            text += "packages:\n"
+            for package, depends in packages:
+                text += f"- conda: {url.format(package)}\n  depends: {json.dumps(depends)}\n"
+            return text
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "pixi.toml").write_text(
+                '[workspace]\nname="w"\nchannels=["conda-forge"]\nplatforms=["linux-64"]\n'
+                '[dependencies]\nscipy="*"\n'
+            )
+            (root / "pixi.lock").write_text(
+                lock([("scipy-1.0", ["libblas"]), ("libblas-1.0", [])])
+            )
+            (root / "next.lock").write_text(
+                lock([("scipy-1.0", ["libblas"]), ("libblas-2.0", [])])
+            )
+            script = root / "pixi"
+            script.write_text(
+                f'#!/bin/sh\n[ "$1" = update ] && cp "{root / "next.lock"}" pixi.lock\nexit 0\n'
+            )
+            script.chmod(0o755)
+            proposal = updater.prepare(
+                root,
+                targets=["pixi:pixi.toml"],
+                options=updater.UpdateOptions(tools={"pixi": str(script)}),
+            )
+            self.assertEqual(proposal.failures, ())
+            (change,) = [
+                c
+                for c in proposal.dependencies
+                if c.after and c.after.name == "libblas"
+            ]
+            self.assertEqual(change.introducers, ("scipy",))
+            self.assertEqual(change.paths, (("scipy", "libblas"),))
+
     def test_discovery_returns_typed_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             pathlib.Path(directory, "pixi.toml").write_text(

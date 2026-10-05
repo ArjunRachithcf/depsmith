@@ -684,6 +684,45 @@ fn render(value: &Value, markdown: bool) -> String {
         for note in p["validation"].as_array().into_iter().flatten() {
             lines.push(format!("- Validation: {}", note.as_str().unwrap_or("?")));
         }
+        // Packages that moved only because declared ones need them, once per
+        // move with the platforms it happened on.
+        let mut explained: Vec<(String, Vec<&str>)> = vec![];
+        for change in p["dependencies"].as_array().into_iter().flatten() {
+            let introducers: Vec<&str> = change["introducers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            if introducers.is_empty() {
+                continue;
+            }
+            let package = if change["after"].is_null() {
+                &change["before"]
+            } else {
+                &change["after"]
+            };
+            let version = |side: &Value| side["version"].as_str().unwrap_or("none").to_owned();
+            let (before, after) = (version(&change["before"]), version(&change["after"]));
+            let moved = if before == after {
+                format!("{before}, new build")
+            } else {
+                format!("{before} -> {after}")
+            };
+            let line = format!(
+                "- {} {moved} ({{platforms}}): pulled in by {}",
+                package["name"].as_str().unwrap_or("?"),
+                introducers.join(", ")
+            );
+            let platform = package["platform"].as_str().unwrap_or("?");
+            match explained.iter_mut().find(|(l, _)| *l == line) {
+                Some((_, platforms)) => platforms.push(platform),
+                None => explained.push((line, vec![platform])),
+            }
+        }
+        for (line, platforms) in explained {
+            lines.push(line.replace("{platforms}", &platforms.join(", ")));
+        }
         for entry in p["unresolved"].as_array().into_iter().flatten() {
             lines.push(format!(
                 "- Unchanged {}: {}",
@@ -977,5 +1016,42 @@ mod tests {
         assert_eq!(report["tools"], json!([]));
         assert_eq!(report["config"]["unselected"], json!(["uv:pyproject.toml"]));
         assert!(!root.path().join("depsmith.toml").exists());
+    }
+
+    #[test]
+    fn the_text_report_says_which_declared_dependencies_pulled_a_change_in() {
+        let package = |version: &str, platform: &str| {
+            json!({"ecosystem": "conda", "name": "libblas", "version": version,
+                "artifact": "a", "platform": platform})
+        };
+        let report = json!({"schema_version": 1, "proposal": {
+        "changes": [], "suggestions": [], "unresolved": [], "failures": [],
+        "scans": [], "validation": [],
+        "dependencies": [
+            {"before": package("1.0", "linux-64"), "after": package("2.0", "linux-64"),
+                "introducers": ["numpy", "scipy"], "paths": [["numpy", "libblas"]]},
+            {"before": package("1.0", "win-64"), "after": package("2.0", "win-64"),
+                "introducers": ["numpy", "scipy"], "paths": [["numpy", "libblas"]]},
+            {"before": package("1.0", "osx-64"), "after": package("1.1", "osx-64")},
+        ]}});
+        let text = render(&report, false);
+        assert_eq!(
+            text.matches("- libblas 1.0 -> 2.0 (linux-64, win-64): pulled in by numpy, scipy")
+                .count(),
+            1,
+            "{text}"
+        );
+        assert!(!text.contains("1.1"), "{text}");
+        let rebuilt = json!({"schema_version": 1, "proposal": {
+            "changes": [], "suggestions": [], "unresolved": [], "failures": [],
+            "scans": [], "validation": [],
+            "dependencies": [{"before": package("2.0", "linux-64"),
+                "after": package("2.0", "linux-64"), "introducers": ["numpy"],
+                "paths": [["numpy", "libblas"]]}]}});
+        let text = render(&rebuilt, false);
+        assert!(
+            text.contains("- libblas 2.0, new build (linux-64): pulled in by numpy"),
+            "{text}"
+        );
     }
 }
