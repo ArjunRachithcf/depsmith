@@ -145,6 +145,18 @@ _Avoid_: Quarantine, delay
 **Git pin**:
 A dependency resolved from a specific Git commit, preserved unless a Git refresh is explicitly requested.
 
+**Blocker**:
+What keeps a package below a newer release: a declaration's constraint, another package's requirement on it, or a platform requirement.
+_Avoid_: Conflict, cap
+
+**Package family**:
+Packages that must move together, such as the CUDA packages: the anchor, every package whose requirements constrain the anchor, and any members a repository adds.
+_Avoid_: Group (a dependency group in pyproject.toml and uv), bundle, set
+
+**Anchor**:
+The package whose version a package family's members constrain, such as `cuda-version` for CUDA.
+_Avoid_: Root, leader
+
 **Commit pin**:
 A workflow reference to an action by its full commit SHA, usually with a comment naming the release it corresponds to.
 _Avoid_: SHA tag, hash reference
@@ -172,6 +184,14 @@ _Avoid_: Rollback, undo
 **Inventory**:
 The resolved packages of a target, with ecosystem, version, platform and artifact, as input for scanning.
 _Avoid_: SBOM (the exported form), package list
+
+**Lock graph**:
+The packages a target's lock resolves, per platform, with the dependencies each one requires and, where the lock records them, the requirements on those dependencies.
+_Avoid_: Dependency tree, resolution graph
+
+**Introducer**:
+A direct dependency whose dependency path reaches a package; a changed package's introducers say why it moved.
+_Avoid_: Parent (one edge up), cause
 
 **Dependency path**:
 The chain of packages through which a target depends on a package, from a direct dependency down to it.
