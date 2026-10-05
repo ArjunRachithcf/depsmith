@@ -37,7 +37,7 @@ mod ecosystem;
 /// from declared dependencies to it.
 pub mod graph;
 mod http;
-/// Reading resolved packages from lockfiles.
+/// Reading resolved packages and lock graphs from lockfiles.
 pub mod inventory;
 mod model;
 /// The npm adapter: `package.json` packages locked with `package-lock.json`.

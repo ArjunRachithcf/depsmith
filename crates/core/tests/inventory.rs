@@ -1,4 +1,4 @@
-//! Reading inventories from Pixi lockfiles.
+//! Reading inventories and lock graphs from Pixi lockfiles.
 use depsmith_core::inventory::pixi_inventory;
 #[test]
 fn local_editables_with_dynamic_versions_are_retained_as_unknown() {

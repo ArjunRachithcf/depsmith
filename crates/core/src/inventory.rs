@@ -1,4 +1,4 @@
-//! Reading resolved packages from lockfiles.
+//! Reading resolved packages and lock graphs from lockfiles.
 use crate::{
     graph::{LockGraph, Node, Requirement},
     Error, Package, Result,
