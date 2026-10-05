@@ -110,9 +110,10 @@ exit 1
         error.contains("hint: `depsmith` was filtered by `exclude-newer`"),
         "{error}"
     );
-    for secret in ["abc123", "eyJhbGciOi"] {
-        assert!(!error.contains(secret), "leaked {secret}: {error}");
-    }
+    assert!(
+        !error.contains("abc123") && !error.contains("eyJhbGciOi"),
+        "a styled credential was not redacted"
+    );
     assert!(error.contains("\ndone"), "{error:?}");
 }
 
