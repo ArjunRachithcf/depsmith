@@ -27,12 +27,15 @@ fn lock(packages: &[(&str, &[&str])]) -> String {
     text.replace("  depends:\n  []\n", "  depends: []\n")
 }
 
-/// Prepare the Pixi target with a stand-in `pixi` that writes `candidate`.
-fn changes(baseline: &str, candidate: &str) -> Vec<DependencyChange> {
+/// Prepare the Pixi target with a stand-in `pixi` that writes `candidate`,
+/// from `baseline` when there is one.
+fn changes(baseline: Option<&str>, candidate: &str) -> Vec<DependencyChange> {
     let root = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
     fs::write(root.path().join("pixi.toml"), MANIFEST).unwrap();
-    fs::write(root.path().join("pixi.lock"), baseline).unwrap();
+    if let Some(baseline) = baseline {
+        fs::write(root.path().join("pixi.lock"), baseline).unwrap();
+    }
     let next = tools.path().join("next.lock");
     fs::write(&next, candidate).unwrap();
     let script = tools.path().join("pixi");
@@ -77,7 +80,7 @@ fn changed_added_and_removed_packages_name_their_introducers() {
         ("libblas-2.0", &["libgfortran"]),
         ("libgfortran-14.0", &[]),
     ]);
-    let changes = changes(&baseline, &candidate);
+    let changes = changes(Some(&baseline), &candidate);
 
     let libblas = change(&changes, "libblas");
     // Introducers follow the order of the declarations.
@@ -96,4 +99,15 @@ fn changed_added_and_removed_packages_name_their_introducers() {
     // A declared package needs no explanation.
     let numpy = change(&changes, "numpy");
     assert!(numpy.introducers.is_empty() && numpy.paths.is_empty());
+}
+
+#[test]
+fn without_a_baseline_lock_every_added_package_is_explained() {
+    let candidate = lock(&[
+        ("scipy-1.0", &["libblas"]),
+        ("numpy-1.0", &[]),
+        ("libblas-1.0", &[]),
+    ]);
+    let changes = changes(None, &candidate);
+    assert_eq!(change(&changes, "libblas").introducers, ["scipy"]);
 }

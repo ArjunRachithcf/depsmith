@@ -686,7 +686,9 @@ fn render(value: &Value, markdown: bool) -> String {
         }
         // Packages that moved only because declared ones need them, once per
         // move with the platforms it happened on.
-        let mut explained: Vec<(String, Vec<&str>)> = vec![];
+        // (name, how it moved, introducers), with its platforms.
+        type Move<'a> = (&'a str, String, String);
+        let mut explained: Vec<(Move, Vec<&str>)> = vec![];
         for change in p["dependencies"].as_array().into_iter().flatten() {
             let introducers: Vec<&str> = change["introducers"]
                 .as_array()
@@ -709,19 +711,22 @@ fn render(value: &Value, markdown: bool) -> String {
             } else {
                 format!("{before} -> {after}")
             };
-            let line = format!(
-                "- {} {moved} ({{platforms}}): pulled in by {}",
+            let key = (
                 package["name"].as_str().unwrap_or("?"),
-                introducers.join(", ")
+                moved,
+                introducers.join(", "),
             );
             let platform = package["platform"].as_str().unwrap_or("?");
-            match explained.iter_mut().find(|(l, _)| *l == line) {
+            match explained.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, platforms)) => platforms.push(platform),
-                None => explained.push((line, vec![platform])),
+                None => explained.push((key, vec![platform])),
             }
         }
-        for (line, platforms) in explained {
-            lines.push(line.replace("{platforms}", &platforms.join(", ")));
+        for ((name, moved, introducers), platforms) in explained {
+            lines.push(format!(
+                "- {name} {moved} ({}): pulled in by {introducers}",
+                platforms.join(", ")
+            ));
         }
         for entry in p["unresolved"].as_array().into_iter().flatten() {
             lines.push(format!(

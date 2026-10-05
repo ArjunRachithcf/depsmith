@@ -51,6 +51,7 @@ packages:
   - zstandard>=0.15 ; extra == 'onefile'
   - PyYAML[libyaml] (>=6.0)
   - pywin32 ; sys_platform == 'win32'
+  - helper @ https://example.org/helper-1.0.tar.gz
 "#;
 
 fn requires(
@@ -96,6 +97,8 @@ fn pixi_graph_records_pypi_requirements_without_uninstalled_extras() {
             pair("ordered-set", Some(">=4.1.0")),
             pair("PyYAML", Some(">=6.0")),
             pair("pywin32", None),
+            // A direct URL is not a version requirement.
+            pair("helper", None),
         ]
     );
 }

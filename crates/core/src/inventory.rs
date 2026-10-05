@@ -132,7 +132,8 @@ fn parse(text: &str) -> Result<Value> {
 ///
 /// # Errors
 ///
-/// Returns [`crate::Error::Invalid`] when the lock cannot be parsed.
+/// Returns [`crate::Error::Operation`] when the lock cannot be parsed or uses
+/// an unsupported schema.
 pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
     let value = parse(text)?;
     let mut result = vec![];
@@ -157,7 +158,8 @@ pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
 ///
 /// # Errors
 ///
-/// Returns [`crate::Error::Invalid`] when the lock cannot be parsed.
+/// Returns [`crate::Error::Operation`] when the lock cannot be parsed or uses
+/// an unsupported schema.
 pub fn pixi_graph(text: &str) -> Result<LockGraph> {
     let value = parse(text)?;
     let mut nodes = vec![];
@@ -170,23 +172,7 @@ pub fn pixi_graph(text: &str) -> Result<LockGraph> {
                 })
                 .collect(),
             _ => strings(record.item, "requires_dist")
-                .filter_map(|line| {
-                    let (requirement_text, marker) = line.split_once(';').unwrap_or((line, ""));
-                    if marker.contains("extra") {
-                        return None;
-                    }
-                    let text = requirement_text.trim();
-                    let end = text
-                        .find(|c: char| !(c.is_ascii_alphanumeric() || "._-".contains(c)))
-                        .unwrap_or(text.len());
-                    let rest = text[end..].trim_start();
-                    let rest = match rest.strip_prefix('[') {
-                        Some(extras) => extras.split_once(']').map_or("", |(_, r)| r),
-                        None => rest,
-                    };
-                    let spec = rest.trim().trim_start_matches('(').trim_end_matches(')');
-                    Some(requirement(&text[..end], spec))
-                })
+                .filter_map(pypi_requirement)
                 .collect(),
         };
         for platform in record.platforms {
@@ -199,6 +185,28 @@ pub fn pixi_graph(text: &str) -> Result<LockGraph> {
         }
     }
     Ok(LockGraph { nodes })
+}
+
+/// A `requires_dist` entry (PEP 508) as a requirement, or `None` when it
+/// applies only to an extra. Extras in brackets are dropped, a parenthesized
+/// version requirement is unwrapped, and a direct URL is not a version.
+fn pypi_requirement(line: &str) -> Option<Requirement> {
+    let (requirement_text, marker) = line.split_once(';').unwrap_or((line, ""));
+    if marker.contains("extra") {
+        return None;
+    }
+    let text = requirement_text.trim();
+    let end = text
+        .find(|c: char| !(c.is_ascii_alphanumeric() || "._-".contains(c)))
+        .unwrap_or(text.len());
+    let rest = text[end..].trim_start();
+    let rest = match rest.strip_prefix('[') {
+        Some(extras) => extras.split_once(']').map_or("", |(_, r)| r),
+        None => rest,
+    };
+    let spec = rest.trim().trim_start_matches('(').trim_end_matches(')');
+    let spec = if spec.starts_with('@') { "" } else { spec };
+    Some(requirement(&text[..end], spec))
 }
 
 /// The string items of the list `key` of a lock record.

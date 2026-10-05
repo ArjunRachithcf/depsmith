@@ -33,9 +33,11 @@ mod constraint;
 pub mod constraints;
 mod cutoff;
 mod ecosystem;
-/// Reading resolved packages from lockfiles.
+/// Lock graphs: what each locked package requires, and the dependency paths
+/// from declared dependencies to it.
 pub mod graph;
 mod http;
+/// Reading resolved packages from lockfiles.
 pub mod inventory;
 mod model;
 /// The npm adapter: `package.json` packages locked with `package-lock.json`.
@@ -521,13 +523,13 @@ impl Engine {
                             });
                         }
                     }
-                    explain(
+                    proposal.validation.extend(explain(
                         &mut proposal.dependencies[explained..],
                         adapter,
                         &root,
                         stage.path(),
                         &target,
-                    )?;
+                    ));
                     proposal.changes.extend(changes);
                     proposal.suggestions.extend(candidate.suggestions);
                     proposal.unresolved.extend(candidate.unresolved);
@@ -556,46 +558,44 @@ pub mod actions;
 /// Repository configuration in `depsmith.toml`.
 pub mod config;
 
-/// Name the introducers of each of `changes` that the target does not
-/// declare, from the candidate's lock graph in `stage`, or the baseline's in
-/// `root` for a removed package.
+/// Name the introducers of each of `changes`, from the candidate's lock
+/// graph in `stage` and the baseline's in `root`. Explaining is advisory:
+/// a graph or declarations that cannot be read leave the changes as they
+/// are and return why, for the proposal's validation notes.
 fn explain(
     changes: &mut [DependencyChange],
     adapter: &dyn Adapter,
     root: &Path,
     stage: &Path,
     target: &Target,
-) -> Result<()> {
-    let (Some(before), Some(after)) = (
-        adapter
-            .lock_graph(root, target)?
-            .or_else(|| Some(graph::LockGraph::default())),
-        adapter.lock_graph(stage, target)?,
-    ) else {
-        return Ok(());
-    };
-    let mut roots: Vec<String> = vec![];
-    for declaration in adapter.declarations(stage, target)? {
-        if !roots.contains(&declaration.package) {
-            roots.push(declaration.package);
-        }
-    }
-    for change in changes {
-        let (package, graph) = match (&change.after, &change.before) {
-            (Some(package), _) => (package, &after),
-            (None, Some(package)) => (package, &before),
-            (None, None) => continue,
+) -> Option<String> {
+    let mut read = || -> Result<()> {
+        let Some(after) = adapter.lock_graph(stage, target)? else {
+            return Ok(());
         };
-        if roots
-            .iter()
-            .any(|r| graph::key(r) == graph::key(&package.name))
-        {
-            continue;
+        let before = adapter.lock_graph(root, target)?.unwrap_or_default();
+        // Declarations of both sides, so a removed declaration still
+        // explains what it pulled in.
+        let mut declared = adapter.declarations(stage, target)?;
+        if root.join(&target.manifest).exists() {
+            declared.extend(adapter.declarations(root, target)?);
         }
-        change.paths = graph.paths_to(&package.platform, &roots, &package.name);
-        change.introducers = change.paths.iter().map(|p| p[0].clone()).collect();
-    }
-    Ok(())
+        let mut roots: Vec<(String, String)> = vec![];
+        for declaration in declared {
+            let pair = (declaration.ecosystem, declaration.package);
+            if !roots.contains(&pair) {
+                roots.push(pair);
+            }
+        }
+        graph::explain(changes, &before, &after, &roots);
+        Ok(())
+    };
+    read().err().map(|error| {
+        format!(
+            "{}: dependency changes are not explained: {error}",
+            target.id
+        )
+    })
 }
 
 /// Report adapter capabilities and whether each native tool is available and
