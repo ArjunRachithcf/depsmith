@@ -605,12 +605,9 @@ pub(crate) fn accept(
             let old = &declaration.requirement;
             match &acceptance.requirement {
                 Some(requirement) => scheme.check_explicit(name, requirement)?,
-                None if scheme.pinned(old) == Some(true) => {
-                    return Err(Error::Invalid(format!(
-                        "{name} {old} is already a commit pin; nothing to accept"
-                    )))
-                }
-                None if scheme.pinned(old) == Some(false) => {}
+                // A commit pin may still move to a newer major release; the
+                // adapter decides once releases are looked up.
+                None if scheme.pinned(old).is_some() => {}
                 None if scheme.restyle(old, PROBE_VERSION).is_some() => {}
                 None => {
                     return Err(Error::Invalid(format!(
@@ -629,8 +626,24 @@ pub(crate) fn accept(
             let old = &declaration.requirement;
             let scheme = ecosystem::scheme(&declaration.ecosystem).unwrap();
             let mut comment = None;
+            let own = adapter.accept_reference(
+                stage,
+                declaration,
+                acceptance.requirement.as_deref(),
+                lookup.options,
+            )?;
             let (new, cited) = match &acceptance.requirement {
+                _ if own.is_some() => {
+                    let pin = own.unwrap();
+                    comment = pin.comment;
+                    (pin.requirement, pin.note)
+                }
                 Some(requirement) => (requirement.clone(), "explicit replacement".to_owned()),
+                None if scheme.pinned(old) == Some(true) => {
+                    return Err(Error::Invalid(format!(
+                        "{name} {old} is already a commit pin; nothing to accept"
+                    )))
+                }
                 None if scheme.pinned(old) == Some(false) => {
                     let pin = adapter.pin(stage, declaration, lookup.options)?;
                     comment = pin.comment;

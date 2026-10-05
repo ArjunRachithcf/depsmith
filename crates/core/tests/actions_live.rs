@@ -82,7 +82,7 @@ fn live_actions_stay_in_their_major_line_and_offer_major_upgrades() {
             proposal
                 .suggestions
                 .iter()
-                .any(|s| s.package == repository && s.requirement == "current major"),
+                .any(|s| s.package == repository && s.reason.contains("is a newer major release")),
             "no major-upgrade suggestion for {repository}: {:?}",
             proposal.suggestions
         );
@@ -91,7 +91,7 @@ fn live_actions_stay_in_their_major_line_and_offer_major_upgrades() {
 
 #[test]
 #[ignore = "queries the live GitHub API"]
-fn live_tag_reference_is_suggested_and_accepted_as_a_commit_pin() {
+fn live_tag_reference_moves_to_the_newest_major_then_is_accepted_as_a_commit_pin() {
     let root = tempfile::tempdir().unwrap();
     let workflows = root.path().join(".github/workflows");
     std::fs::create_dir_all(&workflows).unwrap();
@@ -116,24 +116,27 @@ fn live_tag_reference_is_suggested_and_accepted_as_a_commit_pin() {
         pin.evidence
     );
 
-    let accepted = engine
-        .prepare(
-            root.path(),
-            &target,
-            UpdateOptions {
-                accept: vec!["actions/checkout".into()],
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    let accept = || UpdateOptions {
+        accept: vec!["actions/checkout".into()],
+        ..Default::default()
+    };
+    // v3 has newer majors: the first accept moves to the newest one, keeping
+    // the exact-tag style; accepting again pins that release's commit.
+    let moved = engine.prepare(root.path(), &target, accept()).unwrap();
+    assert!(moved.failures.is_empty(), "{:?}", moved.failures);
+    let major = reference(&moved.changes[0].after, "actions/checkout").to_owned();
+    let version: Vec<u64> = major[1..].split('.').map(|p| p.parse().unwrap()).collect();
+    assert!(version.len() == 3 && version[0] > 3, "{major}");
+    std::fs::write(workflows.join("ci.yml"), &moved.changes[0].after).unwrap();
+
+    let accepted = engine.prepare(root.path(), &target, accept()).unwrap();
     assert!(accepted.failures.is_empty(), "{:?}", accepted.failures);
     let after = &accepted.changes[0].after;
-    // Pinned to v3.5.0's commit, then updated within v3 keeping the pin.
     let sha = reference(after, "actions/checkout");
-    assert!(sha.len() == 40 && pin.evidence[0].contains(sha), "{after}");
-    assert!(after.contains(&format!("{sha} # {tag}\n")), "{after}");
+    assert!(sha.len() == 40, "{after}");
+    assert!(after.contains(&format!("{sha} # {major}\n")), "{after}");
     assert!(
-        !accepted.suggestions.iter().any(|s| s.requirement == tag),
+        !accepted.suggestions.iter().any(|s| s.requirement == major),
         "{:?}",
         accepted.suggestions
     );

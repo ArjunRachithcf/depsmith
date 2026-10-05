@@ -10,31 +10,43 @@ fn sha(c: char) -> String {
     c.to_string().repeat(40)
 }
 
-/// `v4` is a major alias on the same commit as `v4.2.1`.
-struct Fixed;
+/// `v4` is a major alias on the same commit as `v4.2.1`; v5 is published
+/// only when `major` is set.
+struct Fixed {
+    major: bool,
+}
 impl ReleaseSource for Fixed {
     fn releases(&self, _: &str, _: u64) -> depsmith_core::Result<Vec<Release>> {
-        Ok([
-            ("v4", 'a'),
-            ("v4.2.1", 'a'),
-            ("v4.1.0", 'c'),
-            ("v5.0.0", 'b'),
-        ]
-        .map(|(tag, c)| Release {
-            tag: tag.into(),
-            sha: sha(c),
-        })
-        .into())
+        let mut releases = vec![("v4", 'a'), ("v4.2.1", 'a'), ("v4.1.0", 'c')];
+        if self.major {
+            releases.push(("v5.0.0", 'b'));
+        }
+        Ok(releases
+            .into_iter()
+            .map(|(tag, c)| Release {
+                tag: tag.into(),
+                sha: sha(c),
+            })
+            .collect())
     }
 }
 
 fn prepare(workflow: &str, accept: &[&str]) -> Proposal {
+    prepare_with(Fixed { major: true }, workflow, accept)
+}
+
+/// Without a newer major, a bare `--accept` pins.
+fn prepare_current(workflow: &str, accept: &[&str]) -> Proposal {
+    prepare_with(Fixed { major: false }, workflow, accept)
+}
+
+fn prepare_with(source: Fixed, workflow: &str, accept: &[&str]) -> Proposal {
     let root = tempfile::tempdir().unwrap();
     let workflows = root.path().join(".github/workflows");
     std::fs::create_dir_all(&workflows).unwrap();
     std::fs::write(workflows.join("ci.yml"), workflow).unwrap();
     let engine = Engine::new(vec![Box::new(Actions {
-        source: Box::new(Fixed),
+        source: Box::new(source),
     })]);
     let options = UpdateOptions {
         accept: accept.iter().map(|a| a.to_string()).collect(),
@@ -55,7 +67,7 @@ fn workflow(steps: &[&str]) -> String {
 
 #[test]
 fn tag_references_get_a_commit_pin_suggestion() {
-    let proposal = prepare(
+    let proposal = prepare_current(
         &workflow(&[
             "actions/checkout@v4",
             "actions/checkout@v4.1.0 # keep",
@@ -83,7 +95,7 @@ fn tag_references_get_a_commit_pin_suggestion() {
 
 #[test]
 fn accepting_pins_every_tag_reference_to_its_release_commit() {
-    let proposal = prepare(
+    let proposal = prepare_current(
         &workflow(&[
             "actions/checkout@v4",
             "actions/checkout@v4.1.0 # keep",
@@ -133,13 +145,15 @@ fn explicit_and_impossible_acceptances() {
         .after
         .contains("actions/checkout@v5.0.0\n"));
     let pinned = format!("actions/checkout@{} # v4.2.1", sha('a'));
+    let proposal = prepare_current(&workflow(&[&pinned]), &["actions/checkout"]);
+    assert!(
+        proposal.failures[0]
+            .message
+            .contains("already a commit pin"),
+        "{:?}",
+        proposal.failures
+    );
     for (step, accept, code, needle) in [
-        (
-            pinned.as_str(),
-            "actions/checkout",
-            2,
-            "already a commit pin",
-        ),
         (
             "actions/checkout@main",
             "actions/checkout",

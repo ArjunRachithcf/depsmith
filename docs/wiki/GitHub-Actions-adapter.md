@@ -6,19 +6,27 @@ references to actions and reusable workflows. Local actions, Docker references,
 expressions, script contents, runner labels and action inputs are left alone.
 
 - **Release lines:** a reference moves to the newest release in its current
-  major line. Newer major lines are reported as separate suggestions; select
-  the repository with `--upgrade --package owner/name` to move to one.
+  major line. A newer major line is reported as a suggestion naming its newest
+  release. `--accept owner/name` moves every reference to that repository to
+  it, each in its own style: `v4` becomes `v5`, `v4.2` becomes `v5.1`,
+  `v4.2.1` becomes `v5.1.0`, and a commit pin becomes the new release's commit
+  with its `# vX.Y.Z` comment. When the matching alias tag does not exist,
+  name a release with `--accept owner/name=TAG` instead. `--upgrade --package
+  owner/name` also still moves to the newest major.
 - **Style:** exact tags stay exact tags, major tags such as `v4` stay major
   tags, and full commit SHAs stay SHAs. A trailing `# vX.Y.Z` comment equal to
   the old tag is updated with the reference; an updated SHA gets a
   `# vX.Y.Z` comment naming its new release, replacing any existing comment.
 - **Commit pins:** each tag reference gets a suggestion to pin it to its
   release commit, citing the commit and the most specific release tag on it.
-  `--accept owner/name` rewrites every tag reference to that repository as
-  `owner/name@<sha> # vX.Y.Z`, and later updates keep the pin style.
-  `--accept owner/name=REF` writes a tag or SHA of your choice instead.
-  Branches cannot be pinned this way, and a reference that already is a
-  commit pin has nothing to accept.
+  When no newer major is published, `--accept owner/name` rewrites every tag
+  reference to that repository as `owner/name@<sha> # vX.Y.Z`, and later
+  updates keep the pin style (with a newer major, it moves to the major
+  first; accept again to pin). `--accept owner/name=TAG` must name a
+  published release: tag references get that tag, and commit pins get its
+  commit. `--accept owner/name=SHA` writes that commit as given. Branches
+  cannot be pinned this way, and a commit pin with no newer major has
+  nothing to accept.
 - **Unresolved references:** branches such as `@main`, SHAs that match no
   release, and missing alias tags stay unchanged and are listed under
   `unresolved` with the reason.

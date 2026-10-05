@@ -384,6 +384,66 @@ fn commit_pin(repository: &str, reference: &str, releases: &[Release]) -> Option
     })
 }
 
+/// The move of `reference` of `repository` to a newer major release for
+/// `--accept`, keeping its style: a tag keeps its precision (`v4` to `v5`,
+/// `v4.2` to `v5.1`) and a commit pin stays a commit pin. `None` when no
+/// newer major is published or the reference's version is unknown.
+fn major_move(repository: &str, reference: &str, releases: &[Release]) -> Result<Option<Pin>> {
+    let pinned = is_commit(reference);
+    let baseline = if pinned {
+        releases
+            .iter()
+            .filter(|r| r.sha == reference)
+            .filter_map(|r| version(&r.tag))
+            .max()
+    } else {
+        version(reference)
+    };
+    let Some(baseline) = baseline else {
+        return Ok(None);
+    };
+    let Some((newest, release)) = releases
+        .iter()
+        .filter_map(|r| version(&r.tag).map(|v| (v, r)))
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .filter(|(v, _)| v.major > baseline.major)
+    else {
+        return Ok(None);
+    };
+    if pinned {
+        return Ok(
+            commit_pin(repository, &release.tag, releases).map(|pin| Pin {
+                note: format!(
+                    "major release {}",
+                    pin.comment.as_deref().unwrap_or(&release.tag)
+                ),
+                ..pin
+            }),
+        );
+    }
+    let prefix = if reference.starts_with('v') { "v" } else { "" };
+    let tag = match reference.trim_start_matches('v').split('.').count() {
+        1 => format!("{prefix}{}", newest.major),
+        2 => format!("{prefix}{}.{}", newest.major, newest.minor),
+        _ => release.tag.clone(),
+    };
+    if !releases.iter().any(|r| r.tag == tag) {
+        return Err(Error::Invalid(format!(
+            "{repository}@{reference}: newest major release {} has no tag {tag}; pass --accept {repository}=TAG",
+            release.tag
+        )));
+    }
+    Ok(Some(Pin {
+        requirement: tag,
+        comment: None,
+        note: format!("major release {}", release.tag),
+        evidence: format!(
+            "{repository} {}: https://github.com/{repository}/releases/tag/{}",
+            release.tag, release.tag
+        ),
+    }))
+}
+
 /// Where release information comes from; replaceable in tests.
 pub trait ReleaseSource: Send + Sync {
     /// Stable releases of `repository` (`owner/name`), with the commit each tag
@@ -574,6 +634,35 @@ impl Adapter for Actions {
             ))
         })
     }
+    /// A bare `--accept` moves to the newest major release when one is
+    /// published (see [`major_move`]); otherwise the shared rules pin it. An
+    /// explicit tag must be a published release, and a commit pin moves to
+    /// that release's commit.
+    fn accept_reference(
+        &self,
+        _root: &Path,
+        declaration: &Declaration,
+        requested: Option<&str>,
+        options: &UpdateOptions,
+    ) -> Result<Option<Pin>> {
+        let repository = &declaration.package;
+        if requested.is_some_and(is_commit) {
+            return Ok(None);
+        }
+        let releases = self.source.releases(repository, options.timeout_seconds)?;
+        let Some(tag) = requested else {
+            return major_move(repository, &declaration.requirement, &releases);
+        };
+        if !releases.iter().any(|r| r.tag == tag) {
+            return Err(Error::Invalid(format!(
+                "{repository}={tag}: {tag} is not a published release of {repository}"
+            )));
+        }
+        if !is_commit(&declaration.requirement) {
+            return Ok(None);
+        }
+        Ok(commit_pin(repository, tag, &releases))
+    }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<crate::Package>> {
         workflow_inventory(&fs::read_to_string(root.join(&target.manifest))?)
     }
@@ -604,8 +693,27 @@ impl Adapter for Actions {
                     reason,
                 }
             }));
-            if rewrite(&content, &repository, &releases, true)? != newer {
-                suggestions.push(Suggestion { target: target.id.clone(), package: repository.clone(), requirement: "current major".into(), reason: "A newer major release is available; select this repository with --upgrade to review it.".into(), evidence: vec![format!("GitHub releases: https://github.com/{repository}/releases")] });
+            // The newest release, when it is in a newer major line than a
+            // reference after the update.
+            let newest_major = (rewrite(&content, &repository, &releases, true)? != newer)
+                .then(|| {
+                    releases
+                        .iter()
+                        .filter_map(|r| version(&r.tag).map(|v| (v, r)))
+                        .max_by(|a, b| a.0.cmp(&b.0))
+                        .map(|(_, r)| r.tag.clone())
+                })
+                .flatten();
+            if let Some(tag) = &newest_major {
+                suggestions.push(Suggestion {
+                    target: target.id.clone(),
+                    package: repository.clone(),
+                    requirement: tag.clone(),
+                    reason: format!("{repository} {tag} is a newer major release; move to it with --accept {repository} (each reference keeps its style), or name a release with --accept {repository}=TAG."),
+                    evidence: vec![format!(
+                        "GitHub release: https://github.com/{repository}/releases/tag/{tag}"
+                    )],
+                });
             }
             content = newer;
             // Tag references of the candidate that can become commit pins.
@@ -624,7 +732,10 @@ impl Adapter for Actions {
                         target: target.id.clone(),
                         package: repository.clone(),
                         requirement: tag.into(),
-                        reason: format!("Tag references can be moved to other commits. Pin this action to its release commit with --accept {repository}."),
+                        reason: match &newest_major {
+                            None => format!("Tag references can be moved to other commits. Pin this action to its release commit with --accept {repository}."),
+                            Some(tag) => format!("Tag references can be moved to other commits. Pin this action to its release commit with --accept {repository} after moving to {tag}."),
+                        },
                         evidence: vec![pin.evidence],
                     });
                 }

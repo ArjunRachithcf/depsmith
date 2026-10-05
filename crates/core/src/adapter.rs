@@ -268,6 +268,19 @@ pub trait Adapter: Send + Sync {
             declaration.package
         )))
     }
+    /// The adapter's own resolution of `--accept` for `declaration`, with the
+    /// `requested` requirement (`None` for a bare `--accept NAME`), such as a
+    /// GitHub Actions reference moving to a newer major release. `None`
+    /// leaves the acceptance to the shared rules; the default always does.
+    fn accept_reference(
+        &self,
+        _root: &Path,
+        _declaration: &Declaration,
+        _requested: Option<&str>,
+        _options: &UpdateOptions,
+    ) -> Result<Option<Pin>> {
+        Ok(None)
+    }
     /// Resolve `target` inside `stage`, a disposable copy of the repository, and
     /// return the candidate. Must not write outside `stage`.
     fn prepare(&self, stage: &Path, target: &Target, options: &UpdateOptions) -> Result<Candidate>;
