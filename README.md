@@ -51,8 +51,10 @@ irm https://github.com/ArjunRachithcf/depsmith/releases/download/v0.1.0-rc.2/ins
 Other options: `--pre` (newest release including pre-releases), `--prefix DIR`
 (`$env:DEPSMITH_PREFIX`), and `--help`.
 
-Then `depsmith init` checks the native tools your targets use and offers to
-install the missing ones. See
+Then `depsmith init` asks which targets to work on, saves them to
+`depsmith.toml`, and checks the native tools they use, offering to install the
+missing ones. Install depsmith as a tool, not as a dependency of the project it
+updates. See
 [Getting started](https://github.com/ArjunRachithcf/depsmith/wiki/Getting-started).
 
 ## Quick start

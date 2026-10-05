@@ -6,7 +6,7 @@ use depsmith_core::{self as core, Error, Result};
 use serde_json::{json, Value};
 use std::{
     io::{self, IsTerminal, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 #[derive(Parser)]
@@ -80,13 +80,17 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Check the native tools the discovered targets use, offering to
-    /// install each missing one (pinned, sha256-verified) into the tool
-    /// cache; exit 3 when a used tool is still missing.
+    /// Set up a repository: choose targets and save them to depsmith.toml,
+    /// offer to install each missing native tool they use (pinned,
+    /// sha256-verified) into the tool cache, and report what their adapters
+    /// support; exit 3 when a used tool is still missing.
     Init {
         /// Install every missing used tool without asking.
         #[arg(long)]
         fetch_tools: bool,
+        /// Do not write the selection to depsmith.toml.
+        #[arg(long)]
+        no_save: bool,
     },
     /// List the targets found under the root.
     Discover,
@@ -173,23 +177,52 @@ fn confirm(message: &str) -> Result<bool> {
         "y" | "yes"
     ))
 }
-/// Ask about each discovered target, then offer to save a non-empty selection
-/// as `targets` in `depsmith.toml`.
-fn select_interactively(
-    root: &Path,
-    targets: &[core::Target],
+/// A target selection: the saved targets plus those chosen now.
+#[derive(Debug, Default)]
+struct Choice {
+    /// Every selected target: the saved ones, then those added.
+    selected: Vec<String>,
+    /// Discovered targets chosen now.
+    added: Vec<String>,
+    /// Discovered targets neither saved nor chosen.
+    unselected: Vec<String>,
+}
+
+/// Extend the `saved` selection with discovered targets. Interactively, the
+/// new targets are offered by manager, then by file when a manager's are
+/// declined; otherwise none are chosen and all are listed as unselected.
+fn choose_targets(
+    found: &[core::Target],
+    saved: &[String],
+    interactive: bool,
     prompt: &mut dyn FnMut(&str) -> Result<bool>,
-) -> Result<Vec<String>> {
-    let mut selected = vec![];
-    for target in targets {
-        if prompt(&format!("Select {}?", target.id))? {
-            selected.push(target.id.clone());
+) -> Result<Choice> {
+    let mut choice = Choice {
+        selected: saved.to_vec(),
+        ..Choice::default()
+    };
+    let new: Vec<&core::Target> = found.iter().filter(|t| !saved.contains(&t.id)).collect();
+    let mut managers: Vec<&str> = new.iter().map(|t| t.manager.as_str()).collect();
+    managers.dedup();
+    for manager in managers {
+        let group: Vec<&str> = new
+            .iter()
+            .filter(|t| t.manager == manager)
+            .map(|t| t.id.as_str())
+            .collect();
+        let all = interactive
+            && group.len() > 1
+            && prompt(&format!("Select all {} {manager} targets?", group.len()))?;
+        for id in group {
+            if all || (interactive && prompt(&format!("Select {id}?"))?) {
+                choice.added.push(id.to_owned());
+            } else {
+                choice.unselected.push(id.to_owned());
+            }
         }
     }
-    if !selected.is_empty() && prompt("Save this selection to depsmith.toml?")? {
-        core::config::save_targets(root, &selected)?;
-    }
-    Ok(selected)
+    choice.selected.extend(choice.added.iter().cloned());
+    Ok(choice)
 }
 /// Whether to install the missing `tool` during `init`: always with
 /// `--fetch-tools`, after asking when interactive, never otherwise.
@@ -222,7 +255,11 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
     if matches!(cli.command, Command::Doctor) {
         return Ok((core::doctor(&cli.root, &config.options), 0));
     }
-    if let Command::Init { fetch_tools } = cli.command {
+    if let Command::Init {
+        fetch_tools,
+        no_save,
+    } = cli.command
+    {
         for (used, flag) in [
             (!cli.package.is_empty(), "--package"),
             (!cli.accept.is_empty(), "--accept"),
@@ -239,12 +276,49 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
         }
         // Prompts go to stderr, so they work alongside --json.
         let interactive = io::stdin().is_terminal() && !cli.non_interactive;
-        let report = core::init(
+        let found = core::discover(&cli.root)?;
+        let choice = if cli.all || !cli.target.is_empty() {
+            let requested: Vec<String> = if cli.all {
+                found.iter().map(|t| t.id.clone()).collect()
+            } else {
+                cli.target.clone()
+            };
+            if let Some(unknown) = requested
+                .iter()
+                .find(|id| !found.iter().any(|t| &t.id == *id))
+            {
+                return Err(Error::Invalid(format!("unknown target: {unknown}")));
+            }
+            let mut selected = config.targets.clone();
+            let added: Vec<String> = requested
+                .into_iter()
+                .filter(|id| !selected.contains(id))
+                .collect();
+            selected.extend(added.iter().cloned());
+            Choice {
+                selected,
+                added,
+                unselected: vec![],
+            }
+        } else {
+            choose_targets(&found, &config.targets, interactive, &mut confirm)?
+        };
+        let added = if no_save {
+            vec![]
+        } else {
+            core::config::add_targets(&cli.root, &choice.added)?
+        };
+        let mut report = core::init(
             &cli.root,
-            &cli.target,
+            &choice.selected,
             &config.options,
             &mut |tool, reason| consent(tool, reason, fetch_tools, interactive, &mut confirm),
         )?;
+        report["config"] = json!({
+            "path": cli.root.join("depsmith.toml"),
+            "added": added,
+            "unselected": choice.unselected,
+        });
         let missing = report["missing"].as_array().is_some_and(|m| !m.is_empty());
         return Ok((report, if missing { 3 } else { 0 }));
     }
@@ -270,7 +344,11 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
     };
     let interactive = io::stdin().is_terminal() && !cli.non_interactive && !cli.json;
     if selected.is_empty() && interactive {
-        selected = select_interactively(&cli.root, &targets, &mut confirm)?;
+        eprintln!("No targets are saved; `depsmith init` chooses and saves them.");
+        selected = choose_targets(&targets, &[], true, &mut confirm)?.selected;
+        if !selected.is_empty() && confirm("Save this selection to depsmith.toml?")? {
+            core::config::add_targets(&cli.root, &selected)?;
+        }
     }
     if selected.is_empty() {
         return Err(Error::Invalid(
@@ -345,6 +423,10 @@ fn render_doctor(value: &Value) -> String {
             tested.join(", ")
         ));
     }
+    render_adapters(value, &mut lines);
+    lines.join("\n")
+}
+fn render_adapters(value: &Value, lines: &mut Vec<String>) {
     for adapter in value["adapters"].as_array().into_iter().flatten() {
         lines.push(format!(
             "\nAdapter {}",
@@ -360,7 +442,6 @@ fn render_doctor(value: &Value) -> String {
             }
         }
     }
-    lines.join("\n")
 }
 fn render_scans(reports: &[Value], lines: &mut Vec<String>) {
     for report in reports {
@@ -463,6 +544,32 @@ fn render_init(value: &Value) -> String {
             missing.join(", ")
         ));
     }
+    let config = &value["config"];
+    let listed = |key: &str| -> Vec<&str> {
+        config[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect()
+    };
+    let added = listed("added");
+    if !added.is_empty() {
+        lines.push(format!(
+            "Saved to {}: {}",
+            config["path"].as_str().unwrap_or("depsmith.toml"),
+            added.join(", ")
+        ));
+    }
+    for target in listed("unselected") {
+        lines.push(format!(
+            "Not selected: {target} (add it by running `depsmith init` in a terminal or with --target)"
+        ));
+    }
+    for warning in names("warnings") {
+        lines.push(format!("Warning: {warning}"));
+    }
+    render_adapters(value, &mut lines);
     lines.join("\n")
 }
 fn render(value: &Value, markdown: bool) -> String {
@@ -594,13 +701,12 @@ pub fn run_from(args: Vec<String>) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     fn targets(ids: &[&str]) -> Vec<core::Target> {
         ids.iter()
             .map(|id| core::Target {
                 id: id.to_string(),
-                manager: "pixi".into(),
+                manager: id.split_once(':').unwrap().0.into(),
                 manifest: id.split_once(':').unwrap().1.into(),
             })
             .collect()
@@ -671,51 +777,71 @@ mod tests {
     }
 
     #[test]
-    fn interactive_selection_is_saved_only_when_confirmed() {
-        let root = tempfile::tempdir().unwrap();
-        let found = targets(&["pixi:a/pixi.toml", "pixi:b/pixi.toml"]);
+    fn new_targets_are_offered_by_manager_then_by_file() {
+        let found = targets(&[
+            "github-actions:.github/workflows/a.yml",
+            "github-actions:.github/workflows/b.yml",
+            "pixi:pixi.toml",
+            "uv:pyproject.toml",
+        ]);
         let mut asked = vec![];
-        let selected = select_interactively(
-            root.path(),
+        let choice = choose_targets(
             &found,
-            &mut scripted(&[false, true, true], &mut asked),
+            &[],
+            true,
+            &mut scripted(&[false, true, false, true, false], &mut asked),
         )
         .unwrap();
-        assert_eq!(selected, ["pixi:b/pixi.toml"]);
         assert_eq!(
             asked,
             [
-                "Select pixi:a/pixi.toml?",
-                "Select pixi:b/pixi.toml?",
-                "Save this selection to depsmith.toml?",
+                "Select all 2 github-actions targets?",
+                "Select github-actions:.github/workflows/a.yml?",
+                "Select github-actions:.github/workflows/b.yml?",
+                "Select pixi:pixi.toml?",
+                "Select uv:pyproject.toml?",
             ]
         );
-        let saved = core::config::settings(root.path(), &json!({})).unwrap();
-        assert_eq!(saved.targets, ["pixi:b/pixi.toml"]);
-
-        let other = tempfile::tempdir().unwrap();
-        let mut asked = vec![];
-        select_interactively(
-            other.path(),
-            &found,
-            &mut scripted(&[true, false, false], &mut asked),
-        )
-        .unwrap();
-        assert!(!other.path().join("depsmith.toml").exists());
+        assert_eq!(
+            choice.added,
+            ["github-actions:.github/workflows/a.yml", "pixi:pixi.toml"]
+        );
+        assert_eq!(choice.selected, choice.added);
+        assert_eq!(
+            choice.unselected,
+            [
+                "github-actions:.github/workflows/b.yml",
+                "uv:pyproject.toml"
+            ]
+        );
     }
 
     #[test]
-    fn declining_every_target_asks_nothing_about_saving() {
-        let root = tempfile::tempdir().unwrap();
+    fn a_rerun_offers_only_targets_not_yet_saved() {
+        let found = targets(&["pixi:pixi.toml", "uv:pyproject.toml"]);
         let mut asked = vec![];
-        let selected = select_interactively(
-            root.path(),
-            &targets(&["pixi:pixi.toml"]),
-            &mut scripted(&[false], &mut asked),
+        let choice = choose_targets(
+            &found,
+            &["pixi:pixi.toml".into()],
+            true,
+            &mut scripted(&[true], &mut asked),
         )
         .unwrap();
-        assert!(selected.is_empty());
-        assert_eq!(asked.len(), 1);
-        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+        assert_eq!(asked, ["Select uv:pyproject.toml?"]);
+        assert_eq!(choice.selected, ["pixi:pixi.toml", "uv:pyproject.toml"]);
+        assert_eq!(choice.added, ["uv:pyproject.toml"]);
+        assert!(choice.unselected.is_empty());
+    }
+
+    #[test]
+    fn without_a_terminal_new_targets_are_listed_not_selected() {
+        let found = targets(&["pixi:pixi.toml", "uv:pyproject.toml"]);
+        let choice = choose_targets(&found, &["pixi:pixi.toml".into()], false, &mut |q| {
+            panic!("unexpected prompt {q}")
+        })
+        .unwrap();
+        assert_eq!(choice.selected, ["pixi:pixi.toml"]);
+        assert!(choice.added.is_empty());
+        assert_eq!(choice.unselected, ["uv:pyproject.toml"]);
     }
 }

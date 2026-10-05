@@ -275,3 +275,63 @@ fn interrupt_cancels_the_backend_process_tree() {
     assert!(!survived, "backend grandchild survived the interrupt");
     assert_eq!(status.code(), Some(130));
 }
+
+#[test]
+fn init_saves_the_selection_and_reports_what_was_not_selected() {
+    let root = tempdir().unwrap();
+    let workflows = root.path().join(".github/workflows");
+    fs::create_dir_all(&workflows).unwrap();
+    let workflow =
+        "on: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@v4\n";
+    for name in ["a.yml", "b.yml"] {
+        fs::write(workflows.join(name), workflow).unwrap();
+    }
+    let config = root.path().join("depsmith.toml");
+    let init = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_depsmith"))
+            .arg("--root")
+            .arg(root.path())
+            .arg("init")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        output
+    };
+    let report = |args: &[&str]| -> serde_json::Value {
+        let mut args = args.to_vec();
+        args.push("--json");
+        serde_json::from_slice(&init(&args).stdout).unwrap()
+    };
+    let (a, b, c) = (
+        "github-actions:.github/workflows/a.yml",
+        "github-actions:.github/workflows/b.yml",
+        "github-actions:.github/workflows/c.yml",
+    );
+
+    // Without a terminal nothing is chosen, so nothing is saved.
+    let listed = report(&["--non-interactive"]);
+    assert_eq!(listed["config"]["added"], serde_json::json!([]));
+    assert_eq!(listed["config"]["unselected"], serde_json::json!([a, b]));
+    assert!(!config.exists());
+
+    let unsaved = report(&["--all", "--no-save"]);
+    assert_eq!(unsaved["targets"], serde_json::json!([a, b]));
+    assert!(!config.exists());
+
+    let saved = report(&["--all"]);
+    assert_eq!(saved["config"]["added"], serde_json::json!([a, b]));
+    assert_eq!(saved["adapters"][0]["manager"], "github-actions");
+    let text = fs::read_to_string(&config).unwrap();
+
+    // A new workflow is listed on the next run, never added unasked.
+    fs::write(workflows.join("c.yml"), workflow).unwrap();
+    let rerun = report(&[]);
+    assert_eq!(rerun["targets"], serde_json::json!([a, b]));
+    assert_eq!(rerun["config"]["unselected"], serde_json::json!([c]));
+    assert_eq!(fs::read_to_string(&config).unwrap(), text);
+
+    let human = String::from_utf8(init(&[]).stdout).unwrap();
+    assert!(human.contains(&format!("Not selected: {c}")), "{human}");
+    assert!(human.contains("Adapter github-actions"), "{human}");
+}

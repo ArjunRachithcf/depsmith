@@ -37,19 +37,30 @@ From a checkout: `python -m pip install .`, or
 
 ```sh
 depsmith --version
-depsmith init --root /path/to/project   # check the tools its targets use
+depsmith init --root /path/to/project   # choose targets, save them, check their tools
 depsmith doctor                  # capabilities and every native tool's status
 ```
 
-`depsmith init` discovers the targets, checks only the native tools they use
+`depsmith init` sets a project up. It discovers the targets and asks which to
+work on, a package manager at a time (then file by file when you decline a
+group), and saves the choice as `targets` in `depsmith.toml`, which `check`,
+`update` and `scan` then use. Run it again later and it keeps the saved
+targets and offers only the ones found since; without a terminal it chooses
+nothing and lists them as not selected. `--all` or `--target` choose without
+asking, and `--no-save` leaves `depsmith.toml` alone. It warns when a target
+declares depsmith itself as a dependency: depsmith belongs in a tool
+environment (`uv tool install depsmith`, or `uvx depsmith`), not in the
+project it updates, where it is resolved with the project's own constraints.
+It then reports what the chosen targets' adapters support.
+
+It also checks only the native tools the targets use
 (and Grype when `scan` is configured), and offers to install each missing one:
 the release depsmith is tested with, downloaded over HTTPS and checked against
 its pinned sha256, into a per-user tool cache (`DEPSMITH_TOOLS_DIR` overrides
 it). Each question says why the tool is offered (not installed, changed,
 outdated, or failing to run). Answer per tool, or pass `--fetch-tools` to
 install without asking (in CI); in Python, `depsmith.init(root,
-fetch_tools=True)` never prompts. `--target` limits the check to selected
-targets. A failed install is reported and the others continue; `init` exits
+fetch_tools=True)` never prompts. A failed install is reported and the others continue; `init` exits
 3 while a used tool is still missing. Each
 install is recorded with its sha256 in the project's `.depsmith/` directory
 (which ignores itself in Git); a cached tool that changed, or that depsmith

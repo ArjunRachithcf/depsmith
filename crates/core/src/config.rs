@@ -80,3 +80,40 @@ pub fn save_targets(root: &Path, targets: &[String]) -> Result<()> {
     fs::write(path, document.to_string())?;
     Ok(())
 }
+
+/// Append the `targets` not yet selected in `depsmith.toml` to its selection,
+/// creating the file if needed and keeping everything else, including
+/// comments. Returns the targets added; nothing is written when there are
+/// none.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when `depsmith.toml` or its `targets` is invalid.
+pub fn add_targets(root: &Path, targets: &[String]) -> Result<Vec<String>> {
+    let path = root.join("depsmith.toml");
+    let text = if path.exists() {
+        fs::read_to_string(&path)?
+    } else {
+        String::new()
+    };
+    let mut document: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| Error::Invalid(format!("invalid depsmith.toml: {e}")))?;
+    if !document.contains_key("targets") {
+        document.insert("targets", toml_edit::value(toml_edit::Array::new()));
+    }
+    let selection = document["targets"]
+        .as_array_mut()
+        .ok_or_else(|| Error::Invalid("depsmith.toml: targets must be an array".into()))?;
+    let mut added = vec![];
+    for target in targets {
+        if !selection.iter().any(|t| t.as_str() == Some(target)) && !added.contains(target) {
+            selection.push(target.as_str());
+            added.push(target.clone());
+        }
+    }
+    if !added.is_empty() {
+        fs::write(path, document.to_string())?;
+    }
+    Ok(added)
+}

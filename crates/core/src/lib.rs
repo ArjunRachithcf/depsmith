@@ -789,9 +789,34 @@ impl Engine {
             })
             .collect();
         let ids: Vec<&str> = targets.iter().map(|t| t.id.as_str()).collect();
+        let mut adapters: Vec<&adapter::AdapterSpec> = vec![];
+        for target in &targets {
+            let spec = self.spec(target);
+            if !adapters.iter().any(|a| a.manager == spec.manager) {
+                adapters.push(spec);
+            }
+        }
+        // depsmith declared by the project itself is resolved with the
+        // project, where its constraints (such as a cutoff) can fail the
+        // whole solve; it belongs in a tool environment instead.
+        let warnings: Vec<String> = targets
+            .iter()
+            .filter(|t| {
+                self.adapter(t)
+                    .declarations(root, t)
+                    .is_ok_and(|d| d.iter().any(|d| d.package.eq_ignore_ascii_case("depsmith")))
+            })
+            .map(|t| {
+                format!(
+                    "{} declares depsmith as a project dependency; remove it and install depsmith as a tool (`uv tool install depsmith`, or run it with `uvx depsmith`)",
+                    t.id
+                )
+            })
+            .collect();
         Ok(
             serde_json::json!({"schema_version": 1, "targets": ids, "tools": reports,
-            "installed": installed, "failed": failed, "missing": missing}),
+            "installed": installed, "failed": failed, "missing": missing,
+            "adapters": adapters, "warnings": warnings}),
         )
     }
 
