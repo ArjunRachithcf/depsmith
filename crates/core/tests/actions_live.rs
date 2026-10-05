@@ -101,19 +101,21 @@ fn live_tag_reference_moves_to_the_newest_major_then_is_accepted_as_a_commit_pin
     let target = ["github-actions:.github/workflows/ci.yml".into()];
     let engine = Engine::default();
 
+    // v3 has newer majors: the suggestion names the move, and pin hints wait.
     let suggested = engine
         .prepare(root.path(), &target, UpdateOptions::default())
         .unwrap();
-    let tag = reference(&suggested.changes[0].after, "actions/checkout").to_owned();
-    let pin = suggested
+    let major = suggested
         .suggestions
         .iter()
-        .find(|s| s.package == "actions/checkout" && s.requirement == tag)
-        .unwrap_or_else(|| panic!("no commit pin suggestion: {:?}", suggested.suggestions));
+        .find(|s| s.package == "actions/checkout" && s.reason.contains("is a newer major release"))
+        .unwrap_or_else(|| panic!("no major suggestion: {:?}", suggested.suggestions));
     assert!(
-        pin.evidence[0].contains(&format!("release {tag}")),
-        "{:?}",
-        pin.evidence
+        major
+            .reason
+            .contains("--accept actions/checkout moves @v3."),
+        "{}",
+        major.reason
     );
 
     let accept = || UpdateOptions {
@@ -129,11 +131,19 @@ fn live_tag_reference_moves_to_the_newest_major_then_is_accepted_as_a_commit_pin
     assert!(version.len() == 3 && version[0] > 3, "{major}");
     std::fs::write(workflows.join("ci.yml"), &moved.changes[0].after).unwrap();
 
+    let pinnable = engine
+        .prepare(root.path(), &target, UpdateOptions::default())
+        .unwrap();
+    let pin = pinnable
+        .suggestions
+        .iter()
+        .find(|s| s.package == "actions/checkout" && s.requirement == major)
+        .unwrap_or_else(|| panic!("no commit pin suggestion: {:?}", pinnable.suggestions));
     let accepted = engine.prepare(root.path(), &target, accept()).unwrap();
     assert!(accepted.failures.is_empty(), "{:?}", accepted.failures);
     let after = &accepted.changes[0].after;
     let sha = reference(after, "actions/checkout");
-    assert!(sha.len() == 40, "{after}");
+    assert!(sha.len() == 40 && pin.evidence[0].contains(sha), "{after}");
     assert!(after.contains(&format!("{sha} # {major}\n")), "{after}");
     assert!(
         !accepted.suggestions.iter().any(|s| s.requirement == major),

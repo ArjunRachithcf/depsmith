@@ -40,7 +40,7 @@ Options:
       --package <PACKAGE>
           Update only this direct dependency (repeatable)
       --accept <NAME[=REQUIREMENT]>
-          Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT
+          Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT
       --upgrade
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
@@ -92,7 +92,7 @@ Options:
       --package <PACKAGE>
           Update only this direct dependency (repeatable)
       --accept <NAME[=REQUIREMENT]>
-          Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT
+          Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT
       --upgrade
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
@@ -142,7 +142,7 @@ Options:
       --package <PACKAGE>
           Update only this direct dependency (repeatable)
       --accept <NAME[=REQUIREMENT]>
-          Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT
+          Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT
       --upgrade
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
@@ -192,7 +192,7 @@ Options:
       --package <PACKAGE>
           Update only this direct dependency (repeatable)
       --accept <NAME[=REQUIREMENT]>
-          Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT
+          Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT
       --upgrade
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
@@ -248,7 +248,7 @@ Options:
       --package <PACKAGE>
           Update only this direct dependency (repeatable)
       --accept <NAME[=REQUIREMENT]>
-          Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT
+          Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT
       --upgrade
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
@@ -298,7 +298,7 @@ Options:
       --package <PACKAGE>
           Update only this direct dependency (repeatable)
       --accept <NAME[=REQUIREMENT]>
-          Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT
+          Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT
       --upgrade
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
@@ -348,7 +348,7 @@ Options:
       --package <PACKAGE>
           Update only this direct dependency (repeatable)
       --accept <NAME[=REQUIREMENT]>
-          Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT
+          Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT
       --upgrade
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git

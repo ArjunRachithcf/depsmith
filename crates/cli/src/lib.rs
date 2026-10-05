@@ -39,7 +39,7 @@ struct Cli {
     /// Update only this direct dependency (repeatable).
     #[arg(long, global = true)]
     package: Vec<String>,
-    /// Accept a constraint suggestion: NAME (same style, evidenced version) or NAME=REQUIREMENT.
+    /// Accept a suggestion: NAME (same style, evidenced version; for GitHub Actions the newest major, else a commit pin) or NAME=REQUIREMENT.
     #[arg(long, global = true, value_name = "NAME[=REQUIREMENT]")]
     accept: Vec<String>,
     /// Allow the selected packages' declared constraints to change (requires --package).

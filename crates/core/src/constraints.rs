@@ -622,34 +622,45 @@ pub(crate) fn accept(
     let mut notes = vec![];
     for (acceptance, versioned) in plans {
         let name = &acceptance.name;
-        for declaration in versioned {
+        let own = versioned
+            .iter()
+            .map(|d| {
+                adapter.accept_reference(
+                    stage,
+                    d,
+                    acceptance.requirement.as_deref(),
+                    lookup.options,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // One change per acceptance: when the adapter moves any declaration
+        // (such as to a newer major release), a bare acceptance makes only
+        // those moves and leaves the others as they are.
+        let moving = acceptance.requirement.is_none() && own.iter().any(Option::is_some);
+        for (declaration, own) in versioned.into_iter().zip(own) {
             let old = &declaration.requirement;
             let scheme = ecosystem::scheme(&declaration.ecosystem).unwrap();
             let mut comment = None;
-            let own = adapter.accept_reference(
-                stage,
-                declaration,
-                acceptance.requirement.as_deref(),
-                lookup.options,
-            )?;
-            let (new, cited) = match &acceptance.requirement {
-                _ if own.is_some() => {
-                    let pin = own.unwrap();
+            let (new, cited) = match (own, &acceptance.requirement) {
+                (Some(pin), _) => {
                     comment = pin.comment;
                     (pin.requirement, pin.note)
                 }
-                Some(requirement) => (requirement.clone(), "explicit replacement".to_owned()),
-                None if scheme.pinned(old) == Some(true) => {
+                (None, None) if moving => continue,
+                (None, Some(requirement)) => {
+                    (requirement.clone(), "explicit replacement".to_owned())
+                }
+                (None, None) if scheme.pinned(old) == Some(true) => {
                     return Err(Error::Invalid(format!(
                         "{name} {old} is already a commit pin; nothing to accept"
                     )))
                 }
-                None if scheme.pinned(old) == Some(false) => {
+                (None, None) if scheme.pinned(old) == Some(false) => {
                     let pin = adapter.pin(stage, declaration, lookup.options)?;
                     comment = pin.comment;
                     (pin.requirement, pin.note)
                 }
-                None => {
+                (None, None) => {
                     let (excluded, failures) =
                         lookup.excluded(&declaration.ecosystem, name, old)?;
                     let newest = excluded
