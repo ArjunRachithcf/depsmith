@@ -125,6 +125,25 @@ pub(crate) fn redact(text: &str, env: &[(String, String)]) -> String {
     text
 }
 
+/// `text` without terminal escape sequences, which some tools emit despite
+/// `NO_COLOR` (Pixi relays uv's resolver hints in color).
+fn strip_styling(text: &str) -> std::borrow::Cow<'_, str> {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| {
+            Regex::new(
+                r"(?x)\x1b(?:
+                    \[[0-?]*[\ -/]*[@-~]              # CSI, such as colors
+                  | \][^\x07\x1b]*(?:\x07|\x1b\\)    # OSC, such as links
+                  | [\ -/]+[0-~]                      # nF, such as charset selection
+                  | [@-_]                             # other single-character escapes
+                )",
+            )
+            .unwrap()
+        })
+        .replace_all(text, "")
+}
+
 /// The last lines of captured stderr, redacted, for failure diagnostics.
 fn tail(mut errors: std::fs::File, env: &[(String, String)]) -> String {
     const LINES: usize = 40;
@@ -138,7 +157,9 @@ fn tail(mut errors: std::fs::File, env: &[(String, String)]) -> String {
     {
         return String::new();
     }
+    // Strip before redaction so styling cannot split a secret from its key.
     let text = String::from_utf8_lossy(&bytes);
+    let text = strip_styling(&text);
     let lines: Vec<&str> = text.lines().collect();
     let kept = lines[lines.len().saturating_sub(LINES)..].join("\n");
     redact(&kept, env)
@@ -310,5 +331,25 @@ fn wait(
             )));
         }
         thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_styling;
+
+    #[test]
+    fn styling_is_stripped_and_text_kept() {
+        for (styled, plain) in [
+            ("\x1b[36m\x1b[1mhint\x1b[0m: x", "hint: x"),
+            ("\x1b[?25lhidden cursor", "hidden cursor"),
+            ("\x1b]8;;https://pixi.sh\x07docs\x1b]8;;\x07", "docs"),
+            ("\x1b]8;;https://pixi.sh\x1b\\docs\x1b]8;;\x1b\\", "docs"),
+            ("\x1b(B\x1b[mreset", "reset"),
+            ("\x1bMup", "up"),
+            ("plain [brackets] stay", "plain [brackets] stay"),
+        ] {
+            assert_eq!(strip_styling(styled), plain, "{styled:?}");
+        }
     }
 }

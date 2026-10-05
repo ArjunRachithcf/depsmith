@@ -86,6 +86,36 @@ exit 1
     );
 }
 
+/// Some tools color their output despite `NO_COLOR` (Pixi relays uv's
+/// resolver hints with ANSI styling), so the tail is reported as plain text.
+#[cfg(unix)]
+#[test]
+fn failures_report_the_output_tail_without_terminal_styling() {
+    let script = r"
+printf '\033[36m\033[1mhint\033[0m\033[39m\033[1m:\033[0m `\033[36mdepsmith\033[39m` was filtered by `\033[32mexclude-newer\033[39m`\n' >&2
+printf '\033[1mtoken\033[0m=abc123 \033[1mBearer\033[0m eyJhbGciOi.payload\n' >&2
+printf '\033(B\033[mdone\033(B\n' >&2
+exit 1
+";
+    let error = depsmith_core::process::run(
+        "sh",
+        &["-c".into(), script.into()],
+        std::path::Path::new("."),
+        10,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(!error.contains('\x1b'), "{error:?}");
+    assert!(
+        error.contains("hint: `depsmith` was filtered by `exclude-newer`"),
+        "{error}"
+    );
+    for secret in ["abc123", "eyJhbGciOi"] {
+        assert!(!error.contains(secret), "leaked {secret}: {error}");
+    }
+    assert!(error.contains("\ndone"), "{error:?}");
+}
+
 /// A freshly written executable can be briefly busy (ETXTBSY) while any
 /// process still holds a write handle, e.g. a concurrently forked child that
 /// inherited it. Starting the tool must wait that out rather than fail.
