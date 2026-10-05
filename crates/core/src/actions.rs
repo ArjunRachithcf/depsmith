@@ -644,7 +644,7 @@ impl Adapter for Actions {
         })
     }
     /// A bare `--accept` moves to the newest major release when it is newer
-    /// than the reference's (see [`move_to`]). An explicit tag names a
+    /// than the reference's, in the reference's own style. An explicit tag names a
     /// release, or a release line such as `v5` or `v5.0` that resolves to its
     /// newest release in the reference's style; a commit pin moves to that
     /// release's commit. An explicit commit is left to the shared rules.
