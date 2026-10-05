@@ -234,6 +234,12 @@ pub trait Adapter: Send + Sync {
     fn declarations(&self, _root: &Path, _target: &Target) -> Result<Vec<Declaration>> {
         Ok(vec![])
     }
+    /// The `pyproject.toml` files, relative to `root`, of other local
+    /// projects the target installs from a path, whose own dependencies are
+    /// resolved with the target. The default installs none.
+    fn local_projects(&self, _root: &Path, _target: &Target) -> Result<Vec<PathBuf>> {
+        Ok(vec![])
+    }
     /// Apply accepted requirements to the target's files in `stage`, keeping
     /// everything else (comments, layout, other declarations) unchanged.
     fn rewrite(&self, _stage: &Path, _target: &Target, _edits: &[Edit]) -> Result<()> {

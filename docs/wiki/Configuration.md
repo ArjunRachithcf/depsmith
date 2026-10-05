@@ -35,13 +35,18 @@ conda = "/opt/micromamba/bin/micromamba"  # the solver conda-lock drives
 `--pixi` and `--grype` (and the matching option fields) still work as
 deprecated aliases.
 
-## Saving an interactive selection
+## Saving a selection
 
-When no targets are configured, an interactive CLI run asks about each
-discovered target, then offers to save the selection as `targets` (default
-no). The rest of the file and its comments are kept, and an existing selection
-is never replaced. JSON output, `--non-interactive` and the Python API never
-prompt or save.
+`depsmith init` chooses targets and saves them as `targets`: it offers the
+discovered targets a package manager at a time (then file by file when a
+group is declined), or takes `--all` / `--target`, and appends the choice.
+Saved targets are never removed; a saved target that is no longer found is
+reported and skipped. `--no-save` leaves the file alone. The rest of the file
+and its comments are kept.
+
+When no targets are configured, an interactive `check` or `update` asks in the
+same way and then offers to save the selection (default no).
+`--non-interactive` and the Python API never prompt or save.
 
 ## Cooldown
 

@@ -48,7 +48,8 @@ group), and saves the choice as `targets` in `depsmith.toml`, which `check`,
 targets and offers only the ones found since; without a terminal it chooses
 nothing and lists them as not selected. `--all` or `--target` choose without
 asking, and `--no-save` leaves `depsmith.toml` alone. It warns when a target
-declares depsmith itself as a dependency: depsmith belongs in a tool
+declares depsmith itself as a dependency, directly or in a local project it
+installs (such as a Pixi `{ path = "." }` package): depsmith belongs in a tool
 environment (`uv tool install depsmith`, or `uvx depsmith`), not in the
 project it updates, where it is resolved with the project's own constraints.
 It then reports what the chosen targets' adapters support.

@@ -81,3 +81,35 @@ fn init_warns_when_a_target_declares_depsmith_itself() {
     .unwrap();
     assert_eq!(init(root.path(), &[])["warnings"], serde_json::json!([]));
 }
+
+/// Pixi installs a local project from its path, so depsmith declared in that
+/// project's pyproject.toml is resolved with the Pixi workspace too.
+#[test]
+fn init_warns_when_a_pixi_workspace_installs_a_local_project_declaring_depsmith() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("pixi.toml"),
+        "[workspace]\nname = \"w\"\nchannels = [\"conda-forge\"]\nplatforms = [\"linux-64\"]\n\n[pypi-dependencies]\napp = { path = \".\", editable = true }\ntool = { path = \"tools/tool\" }\n\n[feature.dev.pypi-dependencies]\nhelper = { path = \"helper\" }\n",
+    )
+    .unwrap();
+    let project = "[project]\nname = \"app\"\nversion = \"1.0\"\ndependencies = [\"six\"]\n";
+    fs::write(root.path().join("pyproject.toml"), project).unwrap();
+    fs::create_dir_all(root.path().join("tools/tool")).unwrap();
+    fs::write(root.path().join("tools/tool/pyproject.toml"), project).unwrap();
+    fs::create_dir_all(root.path().join("helper")).unwrap();
+    fs::write(
+        root.path().join("helper/pyproject.toml"),
+        "[project]\nname = \"helper\"\nversion = \"1.0\"\ndependencies = [\"Depsmith>=0.1\"]\n",
+    )
+    .unwrap();
+    let report = init(root.path(), &[]);
+    assert_eq!(report["targets"], serde_json::json!(["pixi:pixi.toml"]));
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning
+            .starts_with("pixi:pixi.toml installs helper/pyproject.toml, which declares depsmith"),
+        "{warning}"
+    );
+}

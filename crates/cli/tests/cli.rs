@@ -317,6 +317,8 @@ fn init_saves_the_selection_and_reports_what_was_not_selected() {
 
     let unsaved = report(&["--all", "--no-save"]);
     assert_eq!(unsaved["targets"], serde_json::json!([a, b]));
+    assert_eq!(unsaved["config"]["saved"], false);
+    assert_eq!(unsaved["config"]["added"], serde_json::json!([a, b]));
     assert!(!config.exists());
 
     let saved = report(&["--all"]);
@@ -334,4 +336,18 @@ fn init_saves_the_selection_and_reports_what_was_not_selected() {
     let human = String::from_utf8(init(&[]).stdout).unwrap();
     assert!(human.contains(&format!("Not selected: {c}")), "{human}");
     assert!(human.contains("Adapter github-actions"), "{human}");
+
+    // A saved target that is gone is reported and skipped, not an error.
+    fs::remove_file(workflows.join("b.yml")).unwrap();
+    let stale = report(&[]);
+    assert_eq!(stale["targets"], serde_json::json!([a]));
+    assert_eq!(stale["config"]["stale"], serde_json::json!([b]));
+    let human = String::from_utf8(init(&[]).stdout).unwrap();
+    assert!(human.contains(&format!("No longer found: {b}")), "{human}");
+    let unsaved = String::from_utf8(init(&["--target", c, "--no-save"]).stdout).unwrap();
+    assert!(
+        unsaved.contains(&format!("Chosen but not saved (--no-save): {c}")),
+        "{unsaved}"
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), text);
 }

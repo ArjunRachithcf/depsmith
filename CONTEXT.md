@@ -49,7 +49,7 @@ An executable an adapter or the scanner runs, such as Pixi, uv, cargo or Grype, 
 _Avoid_: Binary, dependency
 
 **Init**:
-Checking the native tools a repository's targets use and, with consent, installing each missing one from its pinned, checksum-verified release.
+Choosing a repository's targets and saving them to `depsmith.toml`, then checking the native tools they use and, with consent, installing each missing one from its pinned, checksum-verified release. It also reports what the targets' adapters support and warns about depsmith declared as a project dependency.
 _Avoid_: Setup, bootstrap
 
 **Tool cache**:

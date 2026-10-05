@@ -547,8 +547,12 @@ def init(
             the scanner to the tools checked.
 
     Returns:
-        The same report as ``depsmith init --json``: ``targets``, ``tools``
-        (each with ``used_by``), ``installed``, ``failed`` and ``missing``.
+        The report of ``depsmith init --json`` without its ``config`` (this
+        never chooses or saves targets): ``targets``, ``tools`` (each with
+        ``used_by``), ``installed``, ``failed``, ``missing``, ``adapters``
+        (what each target's adapter supports) and ``warnings`` (targets that
+        declare depsmith itself, directly or in a local project they
+        install).
     """
     return json.loads(
         _native.init_json(

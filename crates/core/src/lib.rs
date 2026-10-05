@@ -672,8 +672,10 @@ impl Engine {
     ///
     /// Returns a report with the `targets`, a `doctor`-style entry per used
     /// tool (with the targets using it), the tools `installed`, the installs
-    /// that `failed` (with the error), and the tools still `missing`
-    /// (unavailable).
+    /// that `failed` (with the error), the tools still `missing`
+    /// (unavailable), the specs of the targets' `adapters`, and `warnings`
+    /// for targets that declare depsmith itself, directly or in a local
+    /// project they install.
     ///
     /// # Errors
     ///
@@ -799,20 +801,38 @@ impl Engine {
         // depsmith declared by the project itself is resolved with the
         // project, where its constraints (such as a cutoff) can fail the
         // whole solve; it belongs in a tool environment instead.
-        let warnings: Vec<String> = targets
-            .iter()
-            .filter(|t| {
-                self.adapter(t)
-                    .declarations(root, t)
-                    .is_ok_and(|d| d.iter().any(|d| d.package.eq_ignore_ascii_case("depsmith")))
-            })
-            .map(|t| {
-                format!(
-                    "{} declares depsmith as a project dependency; remove it and install depsmith as a tool (`uv tool install depsmith`, or run it with `uvx depsmith`)",
-                    t.id
-                )
-            })
-            .collect();
+        let declares_depsmith = |declarations: &[constraints::Declaration]| {
+            declarations
+                .iter()
+                .any(|d| d.package.eq_ignore_ascii_case("depsmith"))
+        };
+        let remedy = "remove it and install depsmith as a tool (`uv tool install depsmith`, or run it with `uvx depsmith`)";
+        let mut warnings: Vec<String> = vec![];
+        for target in &targets {
+            let adapter = self.adapter(target);
+            if adapter
+                .declarations(root, target)
+                .is_ok_and(|d| declares_depsmith(&d))
+            {
+                warnings.push(format!(
+                    "{} declares depsmith as a project dependency; {remedy}",
+                    target.id
+                ));
+            }
+            for project in adapter.local_projects(root, target).unwrap_or_default() {
+                let declared = fs::read_to_string(root.join(&project))
+                    .ok()
+                    .and_then(|text| pyproject::declarations(&text, &project, &[]).ok())
+                    .is_some_and(|d| declares_depsmith(&d));
+                if declared {
+                    warnings.push(format!(
+                        "{} installs {}, which declares depsmith as a dependency; {remedy}",
+                        target.id,
+                        project.display()
+                    ));
+                }
+            }
+        }
         Ok(
             serde_json::json!({"schema_version": 1, "targets": ids, "tools": reports,
             "installed": installed, "failed": failed, "missing": missing,

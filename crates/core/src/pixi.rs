@@ -9,7 +9,11 @@ use crate::{
     process::run_env,
     Error, Result, Target, UpdateOptions,
 };
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Component, Path, PathBuf},
+};
 
 /// The Pixi adapter. Targets are `pixi.toml` files and `pyproject.toml` files
 /// with a `[tool.pixi]` table; Pixi itself resolves in the stage.
@@ -97,6 +101,34 @@ impl Adapter for Pixi {
     fn declarations(&self, root: &Path, target: &Target) -> Result<Vec<Declaration>> {
         let text = fs::read_to_string(root.join(&target.manifest))?;
         manifest_declarations(&text, is_pyproject(target), &target.manifest)
+    }
+    /// The projects in `path` entries of PyPI dependency tables (including
+    /// features and platform targets) that have a `pyproject.toml`, other
+    /// than the target's own manifest.
+    fn local_projects(&self, root: &Path, target: &Target) -> Result<Vec<PathBuf>> {
+        let parsed: toml::Value = fs::read_to_string(root.join(&target.manifest))?
+            .parse()
+            .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
+        let mut paths = vec![];
+        path_dependencies(&parsed, &mut paths);
+        let base = target.manifest.parent().unwrap_or(Path::new(""));
+        let mut projects: Vec<PathBuf> = vec![];
+        for path in paths {
+            let mut file = PathBuf::new();
+            for component in base.join(path).join("pyproject.toml").components() {
+                match component {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        file.pop();
+                    }
+                    other => file.push(other),
+                }
+            }
+            if file != target.manifest && root.join(&file).is_file() && !projects.contains(&file) {
+                projects.push(file);
+            }
+        }
+        Ok(projects)
     }
     fn rewrite(&self, stage: &Path, target: &Target, edits: &[Edit]) -> Result<()> {
         if edits.is_empty() {
@@ -273,6 +305,22 @@ fn git_artifacts(packages: &[crate::Package]) -> std::collections::BTreeSet<Stri
         .filter(|p| p.artifact.starts_with("git+") || p.artifact.contains(".git"))
         .map(|p| p.artifact.clone())
         .collect()
+}
+
+/// The `path` of every entry of the `pypi-dependencies` tables in `value`.
+fn path_dependencies<'a>(value: &'a toml::Value, output: &mut Vec<&'a str>) {
+    for (key, val) in value.as_table().into_iter().flatten() {
+        if key == "pypi-dependencies" {
+            output.extend(
+                val.as_table()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(_, spec)| spec.get("path")?.as_str()),
+            );
+        } else {
+            path_dependencies(val, output);
+        }
+    }
 }
 
 /// The ecosystem of the entries of a Pixi dependency table named `key`.
