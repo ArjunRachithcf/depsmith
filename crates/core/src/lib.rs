@@ -828,7 +828,8 @@ impl Engine {
                     warnings.push(format!(
                         "{} installs {}, which declares depsmith as a dependency; {remedy}",
                         target.id,
-                        project.display()
+                        // Spelled like target ids on every platform.
+                        project.to_string_lossy().replace('\\', "/")
                     ));
                 }
             }
