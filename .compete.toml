@@ -33,10 +33,12 @@ area; respect them.
 exclude = ["Cargo.lock", "docs/wiki/CLI-reference.md", "docs/wiki/Python-API.md"]
 
 [sources]
+# Work is queued as issues: one issue per step, labelled `compete` by someone with
+# write access. HANDOFF.md is a local, gitignored note, so it is not a source.
 label = "compete"
 bot_labels = ["latest-tools", "docs-drift"]
-plan_file = "HANDOFF.md"
-plan_heading = "Resume here"
+# The bot labels come from this repo's own workflows.
+trusted_actors = ["github-actions[bot]"]
 
 [[gates]]
 name = "fmt"
