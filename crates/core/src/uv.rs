@@ -8,6 +8,7 @@ use crate::{
         LockCheck, ManagedFiles, Support, ToolSpec,
     },
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
+    graph::{LockGraph, Node, Requirement},
     process::run_env,
     Error, Package, Result, Target, UpdateOptions,
 };
@@ -148,39 +149,89 @@ fn parse_lock(text: &str) -> Result<toml::Value> {
     Ok(parsed)
 }
 
+/// The `uv.lock` beside a target's manifest.
+fn lock_path(target: &Target) -> PathBuf {
+    target.manifest.with_file_name("uv.lock")
+}
+
+/// The `[[package]]` rows of a parsed `uv.lock`.
+fn packages(parsed: &toml::Value) -> impl Iterator<Item = &toml::Value> {
+    parsed
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// A row's dependency lists: `dependencies`, then each dependency group.
+fn dependency_lists(row: &toml::Value) -> impl Iterator<Item = &toml::Value> {
+    let groups = row
+        .get("dev-dependencies")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(|groups| groups.values());
+    row.get("dependencies").into_iter().chain(groups)
+}
+
+/// The `name` of a lock row or dependency entry.
+fn name_of(value: &toml::Value) -> Option<&str> {
+    value.get("name").and_then(toml::Value::as_str)
+}
+
 /// The lock graph of a `uv.lock`: one `pypi` node per package, on platform
 /// `any` (uv locks every platform together). uv records dependency names
-/// only, so requirements have no `spec`. Optional-dependency extras are left
-/// out, as they are not installed by default; dependency groups are kept.
+/// only, so requirements have no `spec`.
+///
+/// A package's edges are its dependencies, its dependency groups, and the
+/// requirements of each of its extras that some locked package asks for
+/// (`{ name = "requests", extra = ["socks"] }`). Extras nobody asks for, such
+/// as the project's own, are not installed by default and are left out.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Invalid`] when the lock is not valid TOML or has an
 /// unsupported `version`.
-pub fn lock_graph(text: &str) -> Result<crate::graph::LockGraph> {
-    use crate::graph::{LockGraph, Node, Requirement};
+pub fn lock_graph(text: &str) -> Result<LockGraph> {
     let parsed = parse_lock(text)?;
+    let mut requested: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for row in packages(&parsed) {
+        for dependency in
+            dependency_lists(row).flat_map(|list| list.as_array().into_iter().flatten())
+        {
+            let (Some(name), Some(extras)) = (
+                name_of(dependency),
+                dependency.get("extra").and_then(toml::Value::as_array),
+            ) else {
+                continue;
+            };
+            requested
+                .entry(name)
+                .or_default()
+                .extend(extras.iter().filter_map(toml::Value::as_str));
+        }
+    }
+
     let mut nodes = vec![];
-    for row in parsed
-        .get("package")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(name) = row.get("name").and_then(toml::Value::as_str) else {
+    for row in packages(&parsed) {
+        let Some(name) = name_of(row) else {
             continue;
         };
-        let groups = row
-            .get("dev-dependencies")
-            .and_then(toml::Value::as_table)
+        let optional = row
+            .get("optional-dependencies")
+            .and_then(toml::Value::as_table);
+        let extras = requested
+            .get(name)
             .into_iter()
-            .flat_map(|t| t.values());
+            .flatten()
+            .filter_map(|extra| optional?.get(*extra));
         let mut requires: Vec<Requirement> = vec![];
-        for list in row.get("dependencies").into_iter().chain(groups) {
-            for dependency in list.as_array().into_iter().flatten() {
-                let Some(required) = dependency.get("name").and_then(toml::Value::as_str) else {
-                    continue;
-                };
+        for dependencies in dependency_lists(row).chain(extras) {
+            for required in dependencies
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(name_of)
+            {
                 if !requires.iter().any(|r| r.name == required) {
                     requires.push(Requirement {
                         name: required.into(),
@@ -211,13 +262,8 @@ pub fn lock_graph(text: &str) -> Result<crate::graph::LockGraph> {
 /// unsupported `version`.
 pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
     let parsed = parse_lock(text)?;
-    let mut packages = vec![];
-    for row in parsed
-        .get("package")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    let mut inventory = vec![];
+    for row in packages(&parsed) {
         let field = |name: &str| row.get(name).and_then(toml::Value::as_str);
         let (Some(name), Some(version), Some(source)) =
             (field("name"), field("version"), row.get("source"))
@@ -252,7 +298,7 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
         let Some(artifact) = artifact else {
             continue;
         };
-        packages.push(Package {
+        inventory.push(Package {
             ecosystem: "pypi".into(),
             name: name.into(),
             version: version.into(),
@@ -260,7 +306,7 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
             platform: "any".into(),
         });
     }
-    Ok(packages)
+    Ok(inventory)
 }
 
 impl Adapter for Uv {
@@ -332,7 +378,7 @@ impl Adapter for Uv {
         true
     }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<Package>> {
-        let lock = target.manifest.with_file_name("uv.lock");
+        let lock = lock_path(target);
         match fs::read_to_string(root.join(&lock)) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(Error::Invalid(format!(
                 "{}: no {} to scan; create it with `uv lock` or `depsmith update`",
@@ -342,8 +388,8 @@ impl Adapter for Uv {
             result => lock_inventory(&result?),
         }
     }
-    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<crate::graph::LockGraph>> {
-        match fs::read_to_string(root.join(target.manifest.with_file_name("uv.lock"))) {
+    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<LockGraph>> {
+        match fs::read_to_string(root.join(lock_path(target))) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             result => lock_graph(&result?).map(Some),
         }
@@ -424,7 +470,7 @@ impl Adapter for Uv {
         let check = LockCheck::take(
             stage,
             manifests(stage, target)?,
-            target.manifest.with_file_name("uv.lock"),
+            lock_path(target),
             lock_inventory,
         )?;
         let lock = |extra: &[&str]| -> Vec<String> {

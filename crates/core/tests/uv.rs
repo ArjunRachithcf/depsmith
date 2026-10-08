@@ -689,7 +689,7 @@ name = "app"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "requests" },
+    { name = "requests", extra = ["socks"] },
     { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
 
@@ -708,35 +708,62 @@ dependencies = [
     { name = "urllib3" },
 ]
 
+[package.optional-dependencies]
+socks = [{ name = "pysocks" }]
+use-chardet-on-py3 = [{ name = "chardet" }]
+
 [[package]]
 name = "urllib3"
 version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pysocks"
+version = "1.7.1"
+source = { registry = "https://pypi.org/simple" }
 "#;
 
-#[test]
-fn lock_graph_records_dependency_names_without_specs_or_extras() {
-    let graph = depsmith_core::uv::lock_graph(GRAPH_LOCK).unwrap();
-    let requires = |name: &str| -> Vec<(String, Option<String>)> {
-        let nodes: Vec<_> = graph.nodes.iter().filter(|n| n.name == name).collect();
-        assert_eq!(nodes.len(), 1, "{name}");
-        assert_eq!(
-            (nodes[0].ecosystem.as_str(), nodes[0].platform.as_str()),
-            ("pypi", "any")
-        );
-        nodes[0]
-            .requires
-            .iter()
-            .map(|r| (r.name.clone(), r.spec.clone()))
-            .collect()
-    };
-    let pair = |n: &str| (n.to_owned(), None);
-    // Optional extras are not installed by default; dev groups are.
+/// The names `name` requires in `graph`, checking it is one `pypi` node on `any`.
+fn required_names(graph: &depsmith_core::graph::LockGraph, name: &str) -> Vec<String> {
+    let nodes: Vec<_> = graph.nodes.iter().filter(|n| n.name == name).collect();
+    assert_eq!(nodes.len(), 1, "{name}");
     assert_eq!(
-        requires("app"),
-        [pair("requests"), pair("colorama"), pair("pytest")]
+        (nodes[0].ecosystem.as_str(), nodes[0].platform.as_str()),
+        ("pypi", "any")
     );
-    assert_eq!(requires("requests"), [pair("urllib3")]);
-    assert!(requires("urllib3").is_empty());
+    assert!(nodes[0].requires.iter().all(|r| r.spec.is_none()), "{name}");
+    nodes[0].requires.iter().map(|r| r.name.clone()).collect()
+}
+
+#[test]
+fn lock_graph_follows_dependencies_groups_and_requested_extras() {
+    let graph = depsmith_core::uv::lock_graph(GRAPH_LOCK).unwrap();
+    // The project's own extras are not installed by default; its dev group is.
+    assert_eq!(
+        required_names(&graph, "app"),
+        ["requests", "colorama", "pytest"]
+    );
+    // app asks for requests[socks], so that extra's requirements are requests'
+    // edges; the extra nobody asks for is not.
+    assert_eq!(required_names(&graph, "requests"), ["urllib3", "pysocks"]);
+    assert!(required_names(&graph, "urllib3").is_empty());
+    assert!(required_names(&graph, "pysocks").is_empty());
+}
+
+#[test]
+fn lock_graph_rejects_an_unsupported_lock_version() {
     assert!(depsmith_core::uv::lock_graph("version = 2\n").is_err());
+}
+
+#[test]
+fn adapter_reads_the_lock_beside_the_manifest() {
+    let root = tempfile::tempdir().unwrap();
+    let uv = Uv::default();
+    let target = target("svc/pyproject.toml");
+    write(root.path(), &[("svc/pyproject.toml", &project("app", ""))]);
+    assert!(uv.lock_graph(root.path(), &target).unwrap().is_none());
+
+    write(root.path(), &[("svc/uv.lock", GRAPH_LOCK)]);
+    let graph = uv.lock_graph(root.path(), &target).unwrap().unwrap();
+    assert_eq!(required_names(&graph, "requests"), ["urllib3", "pysocks"]);
 }
