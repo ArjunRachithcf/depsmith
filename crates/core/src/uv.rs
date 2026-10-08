@@ -134,6 +134,71 @@ fn entries(root: &Path, target: &Target) -> Result<Vec<Entry>> {
     Ok(output)
 }
 
+fn parse_lock(text: &str) -> Result<toml::Value> {
+    let parsed: toml::Value = text
+        .parse()
+        .map_err(|e| Error::Invalid(format!("invalid uv.lock: {e}")))?;
+    let version = parsed.get("version").and_then(toml::Value::as_integer);
+    if version != Some(1) {
+        return Err(Error::Invalid(format!(
+            "unsupported uv.lock version {}; supported: 1",
+            version.map_or_else(|| "(missing)".into(), |v| v.to_string())
+        )));
+    }
+    Ok(parsed)
+}
+
+/// The lock graph of a `uv.lock`: one `pypi` node per package, on platform
+/// `any` (uv locks every platform together). uv records dependency names
+/// only, so requirements have no `spec`. Optional-dependency extras are left
+/// out, as they are not installed by default; dependency groups are kept.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the lock is not valid TOML or has an
+/// unsupported `version`.
+pub fn lock_graph(text: &str) -> Result<crate::graph::LockGraph> {
+    use crate::graph::{LockGraph, Node, Requirement};
+    let parsed = parse_lock(text)?;
+    let mut nodes = vec![];
+    for row in parsed
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = row.get("name").and_then(toml::Value::as_str) else {
+            continue;
+        };
+        let groups = row
+            .get("dev-dependencies")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flat_map(|t| t.values());
+        let mut requires: Vec<Requirement> = vec![];
+        for list in row.get("dependencies").into_iter().chain(groups) {
+            for dependency in list.as_array().into_iter().flatten() {
+                let Some(required) = dependency.get("name").and_then(toml::Value::as_str) else {
+                    continue;
+                };
+                if !requires.iter().any(|r| r.name == required) {
+                    requires.push(Requirement {
+                        name: required.into(),
+                        spec: None,
+                    });
+                }
+            }
+        }
+        nodes.push(Node {
+            ecosystem: "pypi".into(),
+            name: name.into(),
+            platform: "any".into(),
+            requires,
+        });
+    }
+    Ok(LockGraph { nodes })
+}
+
 /// Resolved packages of a `uv.lock`. Virtual, editable and path packages are
 /// the project itself (or local code) and are omitted. An index package's
 /// artifact is its sdist, else its first wheel (under the registry directory
@@ -145,16 +210,7 @@ fn entries(root: &Path, target: &Target) -> Result<Vec<Entry>> {
 /// Returns [`Error::Invalid`] when the lock is not valid TOML or has an
 /// unsupported `version`.
 pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
-    let parsed: toml::Value = text
-        .parse()
-        .map_err(|e| Error::Invalid(format!("invalid uv.lock: {e}")))?;
-    let version = parsed.get("version").and_then(toml::Value::as_integer);
-    if version != Some(1) {
-        return Err(Error::Invalid(format!(
-            "unsupported uv.lock version {}; supported: 1",
-            version.map_or_else(|| "(missing)".into(), |v| v.to_string())
-        )));
-    }
+    let parsed = parse_lock(text)?;
     let mut packages = vec![];
     for row in parsed
         .get("package")
@@ -284,6 +340,12 @@ impl Adapter for Uv {
                 lock.display()
             ))),
             result => lock_inventory(&result?),
+        }
+    }
+    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<crate::graph::LockGraph>> {
+        match fs::read_to_string(root.join(target.manifest.with_file_name("uv.lock"))) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            result => lock_graph(&result?).map(Some),
         }
     }
     fn select(

@@ -679,3 +679,64 @@ mod stand_in {
         );
     }
 }
+
+const GRAPH_LOCK: &str = r#"version = 1
+revision = 3
+requires-python = ">=3.10"
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "requests" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+
+[package.optional-dependencies]
+fast = [{ name = "ujson" }]
+
+[package.dev-dependencies]
+dev = [{ name = "pytest" }]
+
+[[package]]
+name = "requests"
+version = "2.32.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "urllib3" },
+    { name = "urllib3" },
+]
+
+[[package]]
+name = "urllib3"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+
+#[test]
+fn lock_graph_records_dependency_names_without_specs_or_extras() {
+    let graph = depsmith_core::uv::lock_graph(GRAPH_LOCK).unwrap();
+    let requires = |name: &str| -> Vec<(String, Option<String>)> {
+        let nodes: Vec<_> = graph.nodes.iter().filter(|n| n.name == name).collect();
+        assert_eq!(nodes.len(), 1, "{name}");
+        assert_eq!(
+            (nodes[0].ecosystem.as_str(), nodes[0].platform.as_str()),
+            ("pypi", "any")
+        );
+        nodes[0]
+            .requires
+            .iter()
+            .map(|r| (r.name.clone(), r.spec.clone()))
+            .collect()
+    };
+    let pair = |n: &str| (n.to_owned(), None);
+    // Optional extras are not installed by default; dev groups are.
+    assert_eq!(
+        requires("app"),
+        [pair("requests"), pair("colorama"), pair("pytest")]
+    );
+    assert_eq!(requires("requests"), [pair("urllib3")]);
+    assert!(requires("urllib3").is_empty());
+    assert!(depsmith_core::uv::lock_graph("version = 2\n").is_err());
+}
