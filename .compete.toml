@@ -1,0 +1,68 @@
+# ai-compete (github.com/ArjunRachithcf/ai_compete, private): Opus and Sonnet
+# each attempt one task in a container, every gate below must pass, a blind
+# judge breaks ties, and the winner becomes a draft PR labelled `compete`.
+
+[compete]
+models = ["opus", "sonnet"]
+judge = "opus"
+base = "main"
+containerfile = "Containerfile"
+volumes = [
+  "~/.cache/ai-compete/cargo-registry:/home/agent/.cargo/registry:z",
+  "~/.cache/ai-compete/cargo-git:/home/agent/.cargo/git:z",
+  "~/.cache/ai-compete/depsmith-target-{model}:/work/target:Z",
+]
+preamble = """
+You are working on depsmith, a Rust CLI and typed Python API for preparing,
+reviewing and applying dependency updates. Before you change anything, read
+CONTEXT.md for the domain language and the ADRs in docs/adr/ that touch your
+area; respect them.
+
+- Work test first: write a failing test at the public interface, then the
+  smallest change that passes it. Test behaviour, not internals.
+- Keep public doc comments free of intra-doc links to private items; rustdoc
+  runs with -D warnings.
+- When CLI help or the Python API changes, run
+  `python scripts/gen-reference.py` to regenerate docs/wiki/CLI-reference.md
+  and docs/wiki/Python-API.md. Update the hand-written wiki pages in
+  docs/wiki/ when behaviour they describe changes.
+- Match the surrounding code's naming, comment density and idiom.
+"""
+
+[limits]
+exclude = ["Cargo.lock", "docs/wiki/CLI-reference.md", "docs/wiki/Python-API.md"]
+
+[sources]
+label = "compete"
+bot_labels = ["latest-tools", "docs-drift"]
+plan_file = "HANDOFF.md"
+plan_heading = "Resume here"
+
+[[gates]]
+name = "fmt"
+run = "cargo fmt --all -- --check"
+
+[[gates]]
+name = "clippy"
+run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+
+[[gates]]
+name = "test"
+run = "cargo test --workspace --locked --no-fail-fast"
+
+[[gates]]
+name = "rustdoc"
+run = "RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked"
+
+[[gates]]
+name = "prek"
+# shellcheck's hook needs Docker, which the container does not have; the next gate runs it directly.
+run = "SKIP=shellcheck prek run --all-files"
+
+[[gates]]
+name = "shellcheck"
+run = "git ls-files -z '*.sh' | xargs -0 -r shellcheck"
+
+[[gates]]
+name = "gen-reference"
+run = "uv venv -q --python 3.10 /tmp/venv && uv pip install -q --python /tmp/venv . && /tmp/venv/bin/python scripts/gen-reference.py --check"
