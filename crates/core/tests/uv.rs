@@ -1,6 +1,7 @@
 //! The uv adapter offline: lock-owner discovery, workspace declarations,
 //! rewrites, and suggestions, `--accept` and Git-pin preservation with a
-//! fixture registry and a stand-in uv.
+//! fixture registry and a stand-in uv, and lock graph construction from
+//! `uv.lock`.
 use depsmith_core::{adapter::Adapter, conformance, uv::Uv, Engine, Target};
 use std::{
     fs,
