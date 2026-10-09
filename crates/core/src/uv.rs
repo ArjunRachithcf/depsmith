@@ -196,6 +196,18 @@ fn requested_extras(entry: &toml::Value) -> impl Iterator<Item = (&str, &str)> {
         .filter_map(move |extra| Some((name?, extra)))
 }
 
+/// The requirement lists of `name`'s extra `extra`, from every locked
+/// version of `name`.
+fn extra_lists<'a>(
+    rows: &'a [(&'a str, &'a toml::Value)],
+    name: &'a str,
+    extra: &'a str,
+) -> impl Iterator<Item = &'a toml::Value> {
+    rows.iter()
+        .filter(move |(row_name, _)| *row_name == name)
+        .filter_map(move |(_, row)| row.get("optional-dependencies")?.get(extra))
+}
+
 /// Whether a lock row is one of the lock's own projects rather than a
 /// resolved package.
 fn is_project(row: &toml::Value) -> bool {
@@ -221,22 +233,19 @@ fn is_project(row: &toml::Value) -> bool {
 /// unsupported `version`.
 pub fn lock_graph(text: &str) -> Result<LockGraph> {
     let parsed = parse_lock(text)?;
-    let rows: BTreeMap<&str, &toml::Value> = packages(&parsed)
+    // Every row, in lock order: a forked resolution locks one name at several versions.
+    let rows: Vec<(&str, &toml::Value)> = packages(&parsed)
         .filter_map(|row| Some((name_of(row)?, row)))
         .collect();
-    let extra = |name: &str, extra: &str| rows.get(name)?.get("optional-dependencies")?.get(extra);
-
     let mut queue: Vec<(&str, &str)> = vec![];
-    for (&name, &row) in &rows {
+    for &(name, row) in &rows {
         if is_project(row) {
-            let own = row
+            let own_extras = row
                 .get("optional-dependencies")
-                .and_then(toml::Value::as_table);
-            queue.extend(
-                own.into_iter()
-                    .flat_map(|t| t.keys())
-                    .map(|e| (name, e.as_str())),
-            );
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flat_map(|extras| extras.keys());
+            queue.extend(own_extras.map(|extra| (name, extra.as_str())));
         }
         queue.extend(
             dependency_lists(row)
@@ -245,11 +254,10 @@ pub fn lock_graph(text: &str) -> Result<LockGraph> {
         );
     }
     let mut installed: BTreeSet<(&str, &str)> = BTreeSet::new();
-    while let Some((name, wanted)) = queue.pop() {
-        if installed.insert((name, wanted)) {
+    while let Some((name, extra)) = queue.pop() {
+        if installed.insert((name, extra)) {
             queue.extend(
-                extra(name, wanted)
-                    .into_iter()
+                extra_lists(&rows, name, extra)
                     .flat_map(list_entries)
                     .flat_map(requested_extras),
             );
@@ -257,11 +265,12 @@ pub fn lock_graph(text: &str) -> Result<LockGraph> {
     }
 
     let mut nodes = vec![];
-    for (&name, &row) in &rows {
+    for &(name, row) in &rows {
+        let optional = row.get("optional-dependencies");
         let extras = installed
             .iter()
             .filter(|(package, _)| *package == name)
-            .filter_map(|(_, wanted)| extra(name, wanted));
+            .filter_map(|(_, extra)| optional?.get(extra));
         let mut requires: Vec<Requirement> = vec![];
         for required in dependency_lists(row)
             .chain(extras)

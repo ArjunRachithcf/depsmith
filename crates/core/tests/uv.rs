@@ -817,3 +817,57 @@ source = { registry = "https://pypi.org/simple" }
     assert_eq!(required_names(&graph, "a"), ["b"]);
     assert_eq!(required_names(&graph, "b"), ["c", "d"]);
 }
+
+#[test]
+fn lock_graph_keeps_every_version_of_a_forked_package() {
+    // A forked resolution locks numpy twice; each row is its own node, in lock
+    // order, with its own edges, and an extra asked for by name reaches both.
+    let lock = r#"version = 1
+revision = 3
+resolution-markers = ["python_full_version >= '3.12'", "python_full_version < '3.12'"]
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [{ name = "numpy", extra = ["blas"] }]
+
+[[package]]
+name = "numpy"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["python_full_version >= '3.12'"]
+
+[package.optional-dependencies]
+blas = [{ name = "openblas" }]
+
+[[package]]
+name = "numpy"
+version = "1.26.4"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["python_full_version < '3.12'"]
+dependencies = [{ name = "setuptools" }]
+
+[package.optional-dependencies]
+blas = [{ name = "mkl" }]
+"#;
+    let graph = depsmith_core::uv::lock_graph(lock).unwrap();
+    let nodes: Vec<(&str, Vec<&str>)> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.name.as_str(),
+                n.requires.iter().map(|r| r.name.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        nodes,
+        [
+            ("app", vec!["numpy"]),
+            ("numpy", vec!["openblas"]),
+            ("numpy", vec!["setuptools", "mkl"]),
+        ]
+    );
+}
