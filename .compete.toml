@@ -70,3 +70,25 @@ run = "git ls-files -z '*.sh' | xargs -0 -r shellcheck"
 [[gates]]
 name = "gen-reference"
 run = "uv venv -q --python 3.10 /tmp/venv && uv pip install -q --python /tmp/venv . && /tmp/venv/bin/python scripts/gen-reference.py --check"
+
+[landing]
+# Land a PR unattended when the adversarial review passed on its head, every
+# check and CodeQL are green, and none of the paths below changed. At most one
+# a day. Add the adverserai:hold label to #61 to stop all landing.
+enabled = true
+control_issue = 61
+max_per_day = 1
+# Never landed unattended: CI, installers, packaging, releases, this config.
+protected = [
+  ".github/**",
+  "scripts/install*",
+  "recipes/**",
+  ".compete.toml",
+  "Containerfile",
+  "Cargo.toml",
+  "crates/*/Cargo.toml",
+  "pyproject.toml",
+  "docs/releasing.md",
+]
+# The docstrings workflow's docs-only commits need no new review.
+trusted_bots = ["depsmith-docs-bot[bot]"]
