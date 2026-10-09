@@ -431,3 +431,81 @@ mod stand_in {
         );
     }
 }
+
+const GRAPH_LOCK: &str = r#"version = 4
+
+[[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "old 0.1.0",
+ "old 0.2.0",
+ "dup 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = ["serde_derive"]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "old"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "old"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = ["serde_derive"]
+
+[[package]]
+name = "dup"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#;
+
+fn requires<'a>(graph: &'a depsmith_core::graph::LockGraph, name: &str) -> Vec<&'a str> {
+    let node = graph.nodes.iter().find(|n| n.name == name).unwrap();
+    assert!(node.requires.iter().all(|r| r.spec.is_none()));
+    node.requires.iter().map(|r| r.name.as_str()).collect()
+}
+
+#[test]
+fn lock_graph_reads_nodes_edges_and_paths_from_cargo_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let cargo = Cargo::default();
+    let target = target("svc/Cargo.toml");
+    assert!(cargo.lock_graph(root.path(), &target).unwrap().is_none());
+
+    write(root.path(), &[("svc/Cargo.lock", GRAPH_LOCK)]);
+    let graph = cargo.lock_graph(root.path(), &target).unwrap().unwrap();
+    assert!(graph.nodes.iter().all(|n| n.ecosystem == "cargo"));
+    assert_eq!(graph.nodes.len(), 6);
+    // A name locked once stays plain; one locked twice is told apart by version.
+    assert_eq!(
+        requires(&graph, "app"),
+        ["serde", "old 0.1.0", "old 0.2.0", "dup"]
+    );
+    assert_eq!(requires(&graph, "serde"), ["serde_derive"]);
+    assert!(requires(&graph, "old 0.1.0").is_empty());
+    assert_eq!(requires(&graph, "old 0.2.0"), ["serde_derive"]);
+
+    let roots = [("cargo".to_owned(), "app".to_owned())];
+    assert_eq!(
+        graph.paths_to("any", &roots, "cargo", "serde_derive"),
+        [["app", "serde", "serde_derive"]]
+    );
+}
+
+#[test]
+fn lock_graph_rejects_invalid_toml() {
+    assert!(depsmith_core::cargo::lock_graph("[").is_err());
+}

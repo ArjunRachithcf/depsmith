@@ -9,6 +9,7 @@ use crate::{
     },
     constraint::Excluded,
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
+    graph::{LockGraph, Node, Requirement},
     process::{run_env, run_env_output},
     Error, Package, Result, Suggestion, Target, UpdateOptions,
 };
@@ -235,6 +236,97 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
     Ok(packages)
 }
 
+/// The lock graph of a `Cargo.lock`: one `cargo` node per package, on
+/// platform `any`, workspace members included. Cargo.lock records dependency
+/// names only, so requirements have no `spec`.
+///
+/// A name locked at several versions is spelled `name version` on its nodes
+/// and on the edges that name it, so each edge reaches the right node; other
+/// names are spelled as they are.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the lock is not valid TOML.
+pub fn lock_graph(text: &str) -> Result<LockGraph> {
+    let parsed: toml::Value = text
+        .parse()
+        .map_err(|e| Error::Invalid(format!("invalid Cargo.lock: {e}")))?;
+    let rows: Vec<&toml::Value> = parsed
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let field = |row: &toml::Value, name: &str| {
+        row.get(name)
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+    };
+    // (name, version, source) of every row that has a name and a version.
+    let locked: Vec<(String, String, Option<String>)> = rows
+        .iter()
+        .filter_map(|row| {
+            Some((
+                field(row, "name")?,
+                field(row, "version")?,
+                field(row, "source"),
+            ))
+        })
+        .collect();
+    let spelled = |name: &str, version: &str| {
+        if locked.iter().filter(|(n, ..)| n == name).count() > 1 {
+            format!("{name} {version}")
+        } else {
+            name.to_owned()
+        }
+    };
+    let mut nodes = vec![];
+    for row in rows {
+        let (Some(name), Some(version)) = (field(row, "name"), field(row, "version")) else {
+            continue;
+        };
+        let mut requires: Vec<Requirement> = vec![];
+        for entry in row
+            .get("dependencies")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+        {
+            // `name`, `name version` or `name version (source)`.
+            let mut parts = entry.splitn(3, ' ');
+            let (dep, dep_version) = (parts.next().unwrap_or_default(), parts.next());
+            let source = parts
+                .next()
+                .map(|s| s.trim_start_matches('(').trim_end_matches(')'));
+            let mut names: Vec<String> = locked
+                .iter()
+                .filter(|(n, v, s)| {
+                    n == dep
+                        && dep_version.is_none_or(|d| d == v)
+                        && source.is_none_or(|d| s.as_deref() == Some(d))
+                })
+                .map(|(n, v, _)| spelled(n, v))
+                .collect();
+            if names.is_empty() {
+                names.push(dep.to_owned());
+            }
+            for name in names {
+                if !requires.iter().any(|r| r.name == name) {
+                    requires.push(Requirement { name, spec: None });
+                }
+            }
+        }
+        nodes.push(Node {
+            ecosystem: "cargo".into(),
+            name: spelled(&name, &version),
+            platform: "any".into(),
+            requires,
+        });
+    }
+    Ok(LockGraph { nodes })
+}
+
 /// Path of a crate's file in a sparse index.
 fn sparse_path(name: &str) -> String {
     let name = name.to_ascii_lowercase();
@@ -455,6 +547,12 @@ impl Adapter for Cargo {
                 lock.display()
             ))),
             result => lock_inventory(&result?),
+        }
+    }
+    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<LockGraph>> {
+        match fs::read_to_string(root.join(target.manifest.with_file_name("Cargo.lock"))) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            result => lock_graph(&result?).map(Some),
         }
     }
     fn select(

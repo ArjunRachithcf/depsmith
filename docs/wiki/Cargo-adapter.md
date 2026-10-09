@@ -57,3 +57,10 @@ a valid Cargo requirement.
 Crates from crates.io are scanned as `pkg:cargo/NAME`. Git and path sources
 stay unassessed, and workspace members are the project itself, not
 dependencies.
+
+## Dependency introducers
+
+A changed crate that the target does not declare is reported with the direct
+dependencies that pull it in. The graph comes from `Cargo.lock`, which records
+dependency names only. A crate locked at several versions is spelled
+`name version`.
