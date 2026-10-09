@@ -1,4 +1,4 @@
-# ai-compete (github.com/ArjunRachithcf/ai_compete, private): Opus and Sonnet
+# ai-compete (github.com/ArjunRachithcf/adverserai, private): Opus and Sonnet
 # each attempt one task in a container, every gate below must pass, a blind
 # judge breaks ties, and the winner becomes a draft PR labelled `compete`.
 
