@@ -59,7 +59,9 @@ run = "RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked"
 [[gates]]
 name = "prek"
 # shellcheck's hook needs Docker, which the container does not have; the next gate runs it directly.
-run = "SKIP=shellcheck prek run --all-files"
+# The Python hook environments are prepared one at a time first: prepared together,
+# they race on uv's shared interpreter cache and fail about one run in four.
+run = "prek prepare-hooks trailing-whitespace && prek prepare-hooks ruff-check && SKIP=shellcheck prek run --all-files"
 
 [[gates]]
 name = "shellcheck"
