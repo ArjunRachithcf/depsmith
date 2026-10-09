@@ -438,22 +438,16 @@ const GRAPH_LOCK: &str = r#"version = 4
 name = "app"
 version = "0.1.0"
 dependencies = [
- "serde",
- "old 0.1.0",
- "old 0.2.0",
  "dup 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "old 0.2.0",
+ "serde",
 ]
 
 [[package]]
 name = "serde"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = ["serde_derive"]
-
-[[package]]
-name = "serde_derive"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = ["old 0.1.0"]
 
 [[package]]
 name = "old"
@@ -464,7 +458,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "old"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = ["serde_derive"]
+dependencies = ["leaf"]
+
+[[package]]
+name = "leaf"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "dup"
@@ -472,14 +471,30 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
 
-fn requires<'a>(graph: &'a depsmith_core::graph::LockGraph, name: &str) -> Vec<&'a str> {
-    let node = graph.nodes.iter().find(|n| n.name == name).unwrap();
-    assert!(node.requires.iter().all(|r| r.spec.is_none()));
-    node.requires.iter().map(|r| r.name.as_str()).collect()
+/// Each node of `graph` as (name, version, required names with versions).
+type Row<'a> = (&'a str, Option<&'a str>, Vec<(&'a str, Option<&'a str>)>);
+fn rows(graph: &depsmith_core::graph::LockGraph) -> Vec<Row<'_>> {
+    graph
+        .nodes
+        .iter()
+        .map(|n| {
+            assert_eq!(
+                (n.ecosystem.as_str(), n.platform.as_str()),
+                ("cargo", "any")
+            );
+            assert!(n.requires.iter().all(|r| r.spec.is_none()), "{}", n.name);
+            let requires = n
+                .requires
+                .iter()
+                .map(|r| (r.name.as_str(), r.version.as_deref()))
+                .collect();
+            (n.name.as_str(), n.version.as_deref(), requires)
+        })
+        .collect()
 }
 
 #[test]
-fn lock_graph_reads_nodes_edges_and_paths_from_cargo_lock() {
+fn adapter_reads_the_lock_beside_the_manifest() {
     let root = tempfile::tempdir().unwrap();
     let cargo = Cargo::default();
     let target = target("svc/Cargo.toml");
@@ -487,22 +502,46 @@ fn lock_graph_reads_nodes_edges_and_paths_from_cargo_lock() {
 
     write(root.path(), &[("svc/Cargo.lock", GRAPH_LOCK)]);
     let graph = cargo.lock_graph(root.path(), &target).unwrap().unwrap();
-    assert!(graph.nodes.iter().all(|n| n.ecosystem == "cargo"));
     assert_eq!(graph.nodes.len(), 6);
-    // A name locked once stays plain; one locked twice is told apart by version.
-    assert_eq!(
-        requires(&graph, "app"),
-        ["serde", "old 0.1.0", "old 0.2.0", "dup"]
-    );
-    assert_eq!(requires(&graph, "serde"), ["serde_derive"]);
-    assert!(requires(&graph, "old 0.1.0").is_empty());
-    assert_eq!(requires(&graph, "old 0.2.0"), ["serde_derive"]);
+}
 
-    let roots = [("cargo".to_owned(), "app".to_owned())];
+#[test]
+fn lock_graph_keeps_names_and_records_the_version_each_edge_names() {
+    let graph = depsmith_core::cargo::lock_graph(GRAPH_LOCK).unwrap();
     assert_eq!(
-        graph.paths_to("any", &roots, "cargo", "serde_derive"),
-        [["app", "serde", "serde_derive"]]
+        rows(&graph),
+        [
+            (
+                "app",
+                Some("0.1.0"),
+                vec![
+                    ("dup", Some("1.0.0")),
+                    ("old", Some("0.2.0")),
+                    ("serde", None)
+                ]
+            ),
+            ("serde", Some("1.0.0"), vec![("old", Some("0.1.0"))]),
+            ("old", Some("0.1.0"), vec![]),
+            ("old", Some("0.2.0"), vec![("leaf", None)]),
+            ("leaf", Some("1.0.0"), vec![]),
+            ("dup", Some("1.0.0"), vec![]),
+        ]
     );
+}
+
+#[test]
+fn a_crate_locked_at_two_versions_keeps_its_introducers_and_roots() {
+    // Introducers are found by package name, as the inventory and the
+    // declarations spell it, never by a version-qualified name.
+    let graph = depsmith_core::cargo::lock_graph(GRAPH_LOCK).unwrap();
+    let paths = |from: &str, to: &str| {
+        graph.paths_to("any", &[("cargo".to_owned(), from.to_owned())], "cargo", to)
+    };
+    assert_eq!(paths("serde", "old"), [["serde", "old"]]);
+    // serde locks old 0.1.0, which needs nothing; only old 0.2.0 needs leaf.
+    assert!(paths("serde", "leaf").is_empty());
+    assert_eq!(paths("old", "leaf"), [["old", "leaf"]]);
+    assert_eq!(paths("app", "leaf"), [["app", "old", "leaf"]]);
 }
 
 #[test]

@@ -6,12 +6,14 @@ fn node(ecosystem: &str, platform: &str, name: &str, requires: &[&str]) -> Node 
     Node {
         ecosystem: ecosystem.into(),
         name: name.into(),
+        version: None,
         platform: platform.into(),
         requires: requires
             .iter()
             .map(|r| Requirement {
                 name: (*r).into(),
                 spec: None,
+                version: None,
             })
             .collect(),
     }
@@ -118,4 +120,42 @@ fn a_package_locked_in_several_environments_keeps_every_requirement() {
         graph.paths_to("linux-64", &roots, "conda", "new"),
         [vec!["app", "lib", "new"]]
     );
+}
+
+/// A `cargo` node at `version` whose requirements may name an exact version.
+fn versioned(name: &str, version: &str, requires: &[(&str, Option<&str>)]) -> Node {
+    Node {
+        ecosystem: "cargo".into(),
+        name: name.into(),
+        version: Some(version.into()),
+        platform: "any".into(),
+        requires: requires
+            .iter()
+            .map(|(name, version)| Requirement {
+                name: (*name).into(),
+                spec: None,
+                version: version.map(Into::into),
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn a_requirement_naming_a_version_reaches_only_that_version() {
+    // serde needs old 0.1.0; only old 0.2.0 needs leaf. app names old without
+    // a version, so it reaches every locked old.
+    let graph = LockGraph {
+        nodes: vec![
+            versioned("app", "0.1.0", &[("serde", None), ("old", None)]),
+            versioned("serde", "1.0.0", &[("old", Some("0.1.0"))]),
+            versioned("old", "0.1.0", &[]),
+            versioned("old", "0.2.0", &[("leaf", None)]),
+            versioned("leaf", "1.0.0", &[]),
+        ],
+    };
+    let paths = |from: &str, to: &str| graph.paths_to("any", &[root("cargo", from)], "cargo", to);
+    assert_eq!(paths("serde", "old"), [["serde", "old"]]);
+    assert!(paths("serde", "leaf").is_empty());
+    assert_eq!(paths("old", "leaf"), [["old", "leaf"]]);
+    assert_eq!(paths("app", "leaf"), [["app", "old", "leaf"]]);
 }

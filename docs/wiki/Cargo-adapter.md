@@ -62,5 +62,6 @@ dependencies.
 
 A changed crate that the target does not declare is reported with the direct
 dependencies that pull it in. The graph comes from `Cargo.lock`, which records
-dependency names only. A crate locked at several versions is spelled
-`name version`.
+dependency names only. Where a crate is locked at several versions, each
+dependency follows the version Cargo locked for it, so a version that nothing
+needs does not explain anything.

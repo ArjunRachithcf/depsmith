@@ -179,6 +179,7 @@ pub fn pixi_graph(text: &str) -> Result<LockGraph> {
             nodes.push(Node {
                 ecosystem: record.ecosystem.into(),
                 name: record.name.into(),
+                version: None,
                 platform,
                 requires: requires.clone(),
             });
@@ -223,5 +224,6 @@ fn requirement(name: &str, spec: &str) -> Requirement {
     Requirement {
         name: name.trim().into(),
         spec: (!spec.is_empty()).then(|| spec.into()),
+        version: None,
     }
 }

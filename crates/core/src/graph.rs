@@ -18,6 +18,10 @@ pub struct Node {
     pub ecosystem: String,
     /// Package name as the lock spells it.
     pub name: String,
+    /// The locked version, where the lock tells several versions of one
+    /// package apart (Cargo.lock).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Platform the package was resolved for, such as `linux-64`.
     pub platform: String,
     /// The packages it requires, from its own ecosystem.
@@ -31,6 +35,10 @@ pub struct Requirement {
     pub name: String,
     /// The version requirement, where the lock records one.
     pub spec: Option<String>,
+    /// The exact locked version this requirement resolved to, where the lock
+    /// names it; the requirement then reaches only that version's node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// A package identity in a graph: its ecosystem and normalized name.
@@ -64,48 +72,89 @@ impl LockGraph {
     /// Everything `roots` (ecosystem and name) reach on `platform`. A
     /// requirement resolves to a package of its node's ecosystem, else to
     /// one of another ecosystem with that name, so a PyPI requirement can be
-    /// satisfied by a conda package. A package locked in several
-    /// environments keeps every requirement.
+    /// satisfied by a conda package. A requirement naming a locked version
+    /// reaches only that version; otherwise it reaches every locked version
+    /// of the package. A package locked in several environments keeps every
+    /// requirement. Roots and reached packages are matched by name.
     pub fn reach(&self, platform: &str, roots: &[(String, String)]) -> Reach {
-        let mut edges: HashMap<Id, Vec<&Requirement>> = HashMap::new();
+        let mut edges: HashMap<Vertex, Vec<&Requirement>> = HashMap::new();
         for node in self.nodes.iter().filter(|n| n.platform == platform) {
             let requires = edges
-                .entry(identity(&node.ecosystem, &node.name))
+                .entry((identity(&node.ecosystem, &node.name), node.version.clone()))
                 .or_default();
             for requirement in &node.requires {
-                if !requires.iter().any(|r| r.name == requirement.name) {
+                if !requires
+                    .iter()
+                    .any(|r| r.name == requirement.name && r.version == requirement.version)
+                {
                     requires.push(requirement);
                 }
             }
         }
-        let resolve = |from: &str, name: &str| -> Id {
-            let own = identity(from, name);
-            if edges.contains_key(&own) {
-                return own;
-            }
-            edges
-                .keys()
-                .find(|(ecosystem, _)| {
-                    ecosystem != from && edges.contains_key(&identity(ecosystem, name))
+        let mut versions: HashMap<Id, Vec<Vertex>> = HashMap::new();
+        for vertex in edges.keys() {
+            versions
+                .entry(vertex.0.clone())
+                .or_default()
+                .push(vertex.clone());
+        }
+        for locked in versions.values_mut() {
+            locked.sort();
+        }
+        let vertices = |id: Id| {
+            versions
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| vec![(id, None)])
+        };
+        let resolve = |from: &str, requirement: &Requirement| -> Vec<Vertex> {
+            let own = identity(from, &requirement.name);
+            let id = if versions.contains_key(&own) {
+                own
+            } else {
+                versions
+                    .keys()
+                    .find(|(ecosystem, _)| {
+                        ecosystem != from
+                            && versions.contains_key(&identity(ecosystem, &requirement.name))
+                    })
+                    .map_or(own, |(ecosystem, _)| identity(ecosystem, &requirement.name))
+            };
+            let all = vertices(id);
+            let exact: Vec<Vertex> = all
+                .iter()
+                .filter(|(_, version)| {
+                    requirement.version.is_some() && *version == requirement.version
                 })
-                .map_or(own, |(ecosystem, _)| identity(ecosystem, name))
+                .cloned()
+                .collect();
+            if exact.is_empty() {
+                all
+            } else {
+                exact
+            }
         };
         let searches = roots
             .iter()
             .map(|(ecosystem, name)| {
                 let start = identity(ecosystem, name);
-                let mut seen: HashMap<Id, (Option<Id>, String)> =
-                    HashMap::from([(start.clone(), (None, name.clone()))]);
-                let mut queue = VecDeque::from([start.clone()]);
+                let mut seen: HashMap<Vertex, Step> = HashMap::new();
+                let mut queue = VecDeque::new();
+                for vertex in vertices(start.clone()) {
+                    seen.insert(vertex.clone(), (None, name.clone(), 0));
+                    queue.push_back(vertex);
+                }
                 while let Some(current) = queue.pop_front() {
+                    let depth = seen[&current].2;
                     for requirement in edges.get(&current).into_iter().flatten() {
-                        let next = resolve(&current.0, &requirement.name);
-                        if !seen.contains_key(&next) {
-                            seen.insert(
-                                next.clone(),
-                                (Some(current.clone()), requirement.name.clone()),
-                            );
-                            queue.push_back(next);
+                        for next in resolve(&current.0 .0, requirement) {
+                            if !seen.contains_key(&next) {
+                                seen.insert(
+                                    next.clone(),
+                                    (Some(current.clone()), requirement.name.clone(), depth + 1),
+                                );
+                                queue.push_back(next);
+                            }
                         }
                     }
                 }
@@ -116,9 +165,16 @@ impl LockGraph {
     }
 }
 
-/// One root's search: its identity, and each reached package's predecessor
-/// and spelling.
-type Search = (Id, HashMap<Id, (Option<Id>, String)>);
+/// A package in a search: its identity and, where the lock tells versions
+/// apart, its version.
+type Vertex = (Id, Option<String>);
+
+/// How a search reached a package: the package before it, the package's
+/// spelling, and the path length.
+type Step = (Option<Vertex>, String, usize);
+
+/// One root's search: its identity, and how it reached each package.
+type Search = (Id, HashMap<Vertex, Step>);
 
 /// What declared dependencies reach in one platform's lock graph, for
 /// finding the dependency paths to many packages.
@@ -129,20 +185,28 @@ pub struct Reach {
 
 impl Reach {
     /// The shortest dependency path from each root that reaches the package
-    /// `name` of `ecosystem`, in the order of the roots, each spelled as the
-    /// requirements along it spell the packages. A root never explains
-    /// itself.
+    /// `name` of `ecosystem`, at any locked version, in the order of the
+    /// roots, each spelled as the requirements along it spell the packages.
+    /// A root never explains itself.
     pub fn paths_to(&self, ecosystem: &str, name: &str) -> Vec<Vec<String>> {
         let target = identity(ecosystem, name);
         let mut paths = vec![];
         for (start, seen) in &self.searches {
-            if *start == target || !seen.contains_key(&target) {
+            if *start == target {
                 continue;
             }
+            let Some(end) = seen
+                .iter()
+                .filter(|(vertex, _)| vertex.0 == target)
+                .min_by(|(a, (_, _, x)), (b, (_, _, y))| x.cmp(y).then_with(|| a.cmp(b)))
+                .map(|(vertex, _)| vertex.clone())
+            else {
+                continue;
+            };
             let mut path = vec![];
-            let mut current = Some(target.clone());
-            while let Some(id) = current {
-                let (previous, spelled) = &seen[&id];
+            let mut current = Some(end);
+            while let Some(vertex) = current {
+                let (previous, spelled, _) = &seen[&vertex];
                 path.push(spelled.clone());
                 current = previous.clone();
             }

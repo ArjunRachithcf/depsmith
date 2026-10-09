@@ -281,12 +281,14 @@ pub fn lock_graph(text: &str) -> Result<LockGraph> {
                 requires.push(Requirement {
                     name: required.into(),
                     spec: None,
+                    version: None,
                 });
             }
         }
         nodes.push(Node {
             ecosystem: "pypi".into(),
             name: name.into(),
+            version: None,
             platform: "any".into(),
             requires,
         });

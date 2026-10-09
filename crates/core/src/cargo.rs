@@ -203,16 +203,9 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
 ///
 /// Returns [`Error::Invalid`] when the lock is not valid TOML.
 pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
-    let parsed: toml::Value = text
-        .parse()
-        .map_err(|e| Error::Invalid(format!("invalid Cargo.lock: {e}")))?;
-    let mut packages = vec![];
-    for row in parsed
-        .get("package")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    let parsed = parse_lock(text)?;
+    let mut inventory = vec![];
+    for row in packages(&parsed) {
         let field = |name: &str| row.get(name).and_then(toml::Value::as_str);
         let (Some(name), Some(version), Some(source)) =
             (field("name"), field("version"), field("source"))
@@ -221,7 +214,7 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
         };
         let crates_io = source == "registry+https://github.com/rust-lang/crates.io-index"
             || source == format!("sparse+{CRATES_IO_INDEX}");
-        packages.push(Package {
+        inventory.push(Package {
             ecosystem: "cargo".into(),
             name: name.into(),
             version: version.into(),
@@ -233,56 +226,25 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
             platform: "any".into(),
         });
     }
-    Ok(packages)
+    Ok(inventory)
 }
 
-/// The lock graph of a `Cargo.lock`: one `cargo` node per package, on
-/// platform `any`, workspace members included. Cargo.lock records dependency
-/// names only, so requirements have no `spec`.
-///
-/// A name locked at several versions is spelled `name version` on its nodes
-/// and on the edges that name it, so each edge reaches the right node; other
-/// names are spelled as they are.
+/// The lock graph of a `Cargo.lock`: one `cargo` node per locked crate,
+/// workspace members included, on platform `any`, with its version.
+/// Cargo.lock records dependency names only, so requirements have no `spec`.
+/// Where Cargo names a version in a dependency entry, because the name is
+/// locked at several versions, the requirement records it and reaches only
+/// that version. The same name and version from two sources share a node.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Invalid`] when the lock is not valid TOML.
 pub fn lock_graph(text: &str) -> Result<LockGraph> {
-    let parsed: toml::Value = text
-        .parse()
-        .map_err(|e| Error::Invalid(format!("invalid Cargo.lock: {e}")))?;
-    let rows: Vec<&toml::Value> = parsed
-        .get("package")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-        .collect();
-    let field = |row: &toml::Value, name: &str| {
-        row.get(name)
-            .and_then(toml::Value::as_str)
-            .map(str::to_owned)
-    };
-    // (name, version, source) of every row that has a name and a version.
-    let locked: Vec<(String, String, Option<String>)> = rows
-        .iter()
-        .filter_map(|row| {
-            Some((
-                field(row, "name")?,
-                field(row, "version")?,
-                field(row, "source"),
-            ))
-        })
-        .collect();
-    let spelled = |name: &str, version: &str| {
-        if locked.iter().filter(|(n, ..)| n == name).count() > 1 {
-            format!("{name} {version}")
-        } else {
-            name.to_owned()
-        }
-    };
+    let parsed = parse_lock(text)?;
     let mut nodes = vec![];
-    for row in rows {
-        let (Some(name), Some(version)) = (field(row, "name"), field(row, "version")) else {
+    for row in packages(&parsed) {
+        let field = |name: &str| row.get(name).and_then(toml::Value::as_str);
+        let (Some(name), Some(version)) = (field("name"), field("version")) else {
             continue;
         };
         let mut requires: Vec<Requirement> = vec![];
@@ -293,38 +255,54 @@ pub fn lock_graph(text: &str) -> Result<LockGraph> {
             .flatten()
             .filter_map(toml::Value::as_str)
         {
-            // `name`, `name version` or `name version (source)`.
-            let mut parts = entry.splitn(3, ' ');
-            let (dep, dep_version) = (parts.next().unwrap_or_default(), parts.next());
-            let source = parts
-                .next()
-                .map(|s| s.trim_start_matches('(').trim_end_matches(')'));
-            let mut names: Vec<String> = locked
+            let (required, version) = dependency_entry(entry);
+            if !requires
                 .iter()
-                .filter(|(n, v, s)| {
-                    n == dep
-                        && dep_version.is_none_or(|d| d == v)
-                        && source.is_none_or(|d| s.as_deref() == Some(d))
-                })
-                .map(|(n, v, _)| spelled(n, v))
-                .collect();
-            if names.is_empty() {
-                names.push(dep.to_owned());
-            }
-            for name in names {
-                if !requires.iter().any(|r| r.name == name) {
-                    requires.push(Requirement { name, spec: None });
-                }
+                .any(|r| r.name == required && r.version.as_deref() == version)
+            {
+                requires.push(Requirement {
+                    name: required.into(),
+                    spec: None,
+                    version: version.map(Into::into),
+                });
             }
         }
         nodes.push(Node {
             ecosystem: "cargo".into(),
-            name: spelled(&name, &version),
+            name: name.into(),
+            version: Some(version.into()),
             platform: "any".into(),
             requires,
         });
     }
     Ok(LockGraph { nodes })
+}
+
+/// The crate name and, where Cargo wrote one, the version of a `Cargo.lock`
+/// dependency entry: `name`, `name version` or `name version (source)`.
+fn dependency_entry(entry: &str) -> (&str, Option<&str>) {
+    let mut parts = entry.split(' ');
+    (parts.next().unwrap_or_default(), parts.next())
+}
+
+/// A parsed `Cargo.lock`.
+fn parse_lock(text: &str) -> Result<toml::Value> {
+    text.parse()
+        .map_err(|e| Error::Invalid(format!("invalid Cargo.lock: {e}")))
+}
+
+/// The `[[package]]` rows of a parsed `Cargo.lock`.
+fn packages(parsed: &toml::Value) -> impl Iterator<Item = &toml::Value> {
+    parsed
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// The `Cargo.lock` beside a target's manifest.
+fn lock_path(target: &Target) -> PathBuf {
+    target.manifest.with_file_name("Cargo.lock")
 }
 
 /// Path of a crate's file in a sparse index.
@@ -539,7 +517,7 @@ impl Adapter for Cargo {
         true
     }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<Package>> {
-        let lock = target.manifest.with_file_name("Cargo.lock");
+        let lock = lock_path(target);
         match fs::read_to_string(root.join(&lock)) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(Error::Invalid(format!(
                 "{}: no {} to scan; create it with `cargo generate-lockfile` or `depsmith update`",
@@ -550,7 +528,7 @@ impl Adapter for Cargo {
         }
     }
     fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<LockGraph>> {
-        match fs::read_to_string(root.join(target.manifest.with_file_name("Cargo.lock"))) {
+        match fs::read_to_string(root.join(lock_path(target))) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             result => lock_graph(&result?).map(Some),
         }
@@ -620,7 +598,7 @@ impl Adapter for Cargo {
         let check = LockCheck::take(
             stage,
             manifests(stage, target)?,
-            target.manifest.with_file_name("Cargo.lock"),
+            lock_path(target),
             lock_inventory,
         )?;
         // The report is parsed, so never colour it (CARGO_TERM_COLOR may
