@@ -18,8 +18,8 @@ pub struct Node {
     pub ecosystem: String,
     /// Package name as the lock spells it.
     pub name: String,
-    /// The locked version, where the lock tells several versions of one
-    /// package apart (Cargo.lock).
+    /// The locked version, where the graph records versions (Cargo.lock);
+    /// a requirement naming a version reaches only that version's node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Platform the package was resolved for, such as `linux-64`.
@@ -36,7 +36,8 @@ pub struct Requirement {
     /// The version requirement, where the lock records one.
     pub spec: Option<String>,
     /// The exact locked version this requirement resolved to, where the lock
-    /// names it; the requirement then reaches only that version's node.
+    /// names it. It reaches only that version's node, or every version of the
+    /// package when no node records that version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
@@ -80,7 +81,10 @@ impl LockGraph {
         let mut edges: HashMap<Vertex, Vec<&Requirement>> = HashMap::new();
         for node in self.nodes.iter().filter(|n| n.platform == platform) {
             let requires = edges
-                .entry((identity(&node.ecosystem, &node.name), node.version.clone()))
+                .entry(Vertex {
+                    id: identity(&node.ecosystem, &node.name),
+                    version: node.version.clone(),
+                })
                 .or_default();
             for requirement in &node.requires {
                 if !requires
@@ -94,7 +98,7 @@ impl LockGraph {
         let mut versions: HashMap<Id, Vec<Vertex>> = HashMap::new();
         for vertex in edges.keys() {
             versions
-                .entry(vertex.0.clone())
+                .entry(vertex.id.clone())
                 .or_default()
                 .push(vertex.clone());
         }
@@ -105,7 +109,7 @@ impl LockGraph {
             versions
                 .get(&id)
                 .cloned()
-                .unwrap_or_else(|| vec![(id, None)])
+                .unwrap_or_else(|| vec![Vertex { id, version: None }])
         };
         let resolve = |from: &str, requirement: &Requirement| -> Vec<Vertex> {
             let own = identity(from, &requirement.name);
@@ -123,8 +127,8 @@ impl LockGraph {
             let all = vertices(id);
             let exact: Vec<Vertex> = all
                 .iter()
-                .filter(|(_, version)| {
-                    requirement.version.is_some() && *version == requirement.version
+                .filter(|vertex| {
+                    requirement.version.is_some() && vertex.version == requirement.version
                 })
                 .cloned()
                 .collect();
@@ -141,18 +145,25 @@ impl LockGraph {
                 let mut seen: HashMap<Vertex, Step> = HashMap::new();
                 let mut queue = VecDeque::new();
                 for vertex in vertices(start.clone()) {
-                    seen.insert(vertex.clone(), (None, name.clone(), 0));
+                    let root = Step {
+                        previous: None,
+                        spelled: name.clone(),
+                        depth: 0,
+                    };
+                    seen.insert(vertex.clone(), root);
                     queue.push_back(vertex);
                 }
                 while let Some(current) = queue.pop_front() {
-                    let depth = seen[&current].2;
+                    let depth = seen[&current].depth;
                     for requirement in edges.get(&current).into_iter().flatten() {
-                        for next in resolve(&current.0 .0, requirement) {
+                        for next in resolve(&current.id.0, requirement) {
                             if !seen.contains_key(&next) {
-                                seen.insert(
-                                    next.clone(),
-                                    (Some(current.clone()), requirement.name.clone(), depth + 1),
-                                );
+                                let step = Step {
+                                    previous: Some(current.clone()),
+                                    spelled: requirement.name.clone(),
+                                    depth: depth + 1,
+                                };
+                                seen.insert(next.clone(), step);
                                 queue.push_back(next);
                             }
                         }
@@ -165,13 +176,23 @@ impl LockGraph {
     }
 }
 
-/// A package in a search: its identity and, where the lock tells versions
-/// apart, its version.
-type Vertex = (Id, Option<String>);
+/// A package in a search: its identity and, where the graph records one,
+/// its version.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct Vertex {
+    id: Id,
+    version: Option<String>,
+}
 
-/// How a search reached a package: the package before it, the package's
-/// spelling, and the path length.
-type Step = (Option<Vertex>, String, usize);
+/// How a search reached a package.
+struct Step {
+    /// The package before it on the path, none for a root.
+    previous: Option<Vertex>,
+    /// The package as the requirement along the path spells it.
+    spelled: String,
+    /// The path's length.
+    depth: usize,
+}
 
 /// One root's search: its identity, and how it reached each package.
 type Search = (Id, HashMap<Vertex, Step>);
@@ -197,8 +218,8 @@ impl Reach {
             }
             let Some(end) = seen
                 .iter()
-                .filter(|(vertex, _)| vertex.0 == target)
-                .min_by(|(a, (_, _, x)), (b, (_, _, y))| x.cmp(y).then_with(|| a.cmp(b)))
+                .filter(|(vertex, _)| vertex.id == target)
+                .min_by(|(a, x), (b, y)| x.depth.cmp(&y.depth).then_with(|| a.cmp(b)))
                 .map(|(vertex, _)| vertex.clone())
             else {
                 continue;
@@ -206,9 +227,9 @@ impl Reach {
             let mut path = vec![];
             let mut current = Some(end);
             while let Some(vertex) = current {
-                let (previous, spelled, _) = &seen[&vertex];
-                path.push(spelled.clone());
-                current = previous.clone();
+                let step = &seen[&vertex];
+                path.push(step.spelled.clone());
+                current = step.previous.clone();
             }
             path.reverse();
             paths.push(path);
