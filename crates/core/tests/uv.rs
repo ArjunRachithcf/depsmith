@@ -738,10 +738,11 @@ fn required_names(graph: &depsmith_core::graph::LockGraph, name: &str) -> Vec<St
 #[test]
 fn lock_graph_follows_dependencies_groups_and_requested_extras() {
     let graph = depsmith_core::uv::lock_graph(GRAPH_LOCK).unwrap();
-    // The project's own extras are not installed by default; its dev group is.
+    // depsmith declares the project's own extras like its dependencies, so
+    // they are edges too, as is its dev group.
     assert_eq!(
         required_names(&graph, "app"),
-        ["requests", "colorama", "pytest"]
+        ["requests", "colorama", "pytest", "ujson"]
     );
     // app asks for requests[socks], so that extra's requirements are requests'
     // edges; the extra nobody asks for is not.
@@ -766,4 +767,53 @@ fn adapter_reads_the_lock_beside_the_manifest() {
     write(root.path(), &[("svc/uv.lock", GRAPH_LOCK)]);
     let graph = uv.lock_graph(root.path(), &target).unwrap().unwrap();
     assert_eq!(required_names(&graph, "requests"), ["urllib3", "pysocks"]);
+}
+
+#[test]
+fn lock_graph_follows_extras_requested_by_requested_extras() {
+    // app asks for a[x]; a's extra x asks for b[y]; b's extra y requires c.
+    // app's own extra asks for b[z]; b's extra z requires d.
+    let lock = r#"version = 1
+revision = 3
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [{ name = "a", extra = ["x"] }]
+
+[package.optional-dependencies]
+http = [{ name = "b", extra = ["z"] }]
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[package.optional-dependencies]
+x = [{ name = "b", extra = ["y"] }]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[package.optional-dependencies]
+y = [{ name = "c" }]
+z = [{ name = "d" }]
+
+[[package]]
+name = "c"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "d"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+    let graph = depsmith_core::uv::lock_graph(lock).unwrap();
+    assert_eq!(required_names(&graph, "app"), ["a", "b"]);
+    assert_eq!(required_names(&graph, "a"), ["b"]);
+    assert_eq!(required_names(&graph, "b"), ["c", "d"]);
 }

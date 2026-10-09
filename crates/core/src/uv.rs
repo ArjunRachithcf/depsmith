@@ -178,14 +178,42 @@ fn name_of(value: &toml::Value) -> Option<&str> {
     value.get("name").and_then(toml::Value::as_str)
 }
 
+/// The entries of a lock dependency list.
+fn list_entries(list: &toml::Value) -> impl Iterator<Item = &toml::Value> {
+    list.as_array().into_iter().flatten()
+}
+
+/// The `(package, extra)` pairs a dependency entry asks for, as in
+/// `{ name = "requests", extra = ["socks"] }`.
+fn requested_extras(entry: &toml::Value) -> impl Iterator<Item = (&str, &str)> {
+    let name = name_of(entry);
+    entry
+        .get("extra")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+        .filter_map(move |extra| Some((name?, extra)))
+}
+
+/// Whether a lock row is one of the lock's own projects rather than a
+/// resolved package.
+fn is_project(row: &toml::Value) -> bool {
+    row.get("source")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|source| source.contains_key("virtual") || source.contains_key("editable"))
+}
+
 /// The lock graph of a `uv.lock`: one `pypi` node per package, on platform
 /// `any` (uv locks every platform together). uv records dependency names
 /// only, so requirements have no `spec`.
 ///
 /// A package's edges are its dependencies, its dependency groups, and the
-/// requirements of each of its extras that some locked package asks for
-/// (`{ name = "requests", extra = ["socks"] }`). Extras nobody asks for, such
-/// as the project's own, are not installed by default and are left out.
+/// requirements of each of its extras that is installed. An extra is
+/// installed when it belongs to one of the lock's own projects (depsmith
+/// declares a project's extras like its dependencies), or when a dependency,
+/// a dependency group or another installed extra asks for it. Other extras
+/// are left out.
 ///
 /// # Errors
 ///
@@ -193,51 +221,58 @@ fn name_of(value: &toml::Value) -> Option<&str> {
 /// unsupported `version`.
 pub fn lock_graph(text: &str) -> Result<LockGraph> {
     let parsed = parse_lock(text)?;
-    let mut requested: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for row in packages(&parsed) {
-        for dependency in
-            dependency_lists(row).flat_map(|list| list.as_array().into_iter().flatten())
-        {
-            let (Some(name), Some(extras)) = (
-                name_of(dependency),
-                dependency.get("extra").and_then(toml::Value::as_array),
-            ) else {
-                continue;
-            };
-            requested
-                .entry(name)
-                .or_default()
-                .extend(extras.iter().filter_map(toml::Value::as_str));
+    let rows: BTreeMap<&str, &toml::Value> = packages(&parsed)
+        .filter_map(|row| Some((name_of(row)?, row)))
+        .collect();
+    let extra = |name: &str, extra: &str| rows.get(name)?.get("optional-dependencies")?.get(extra);
+
+    let mut queue: Vec<(&str, &str)> = vec![];
+    for (&name, &row) in &rows {
+        if is_project(row) {
+            let own = row
+                .get("optional-dependencies")
+                .and_then(toml::Value::as_table);
+            queue.extend(
+                own.into_iter()
+                    .flat_map(|t| t.keys())
+                    .map(|e| (name, e.as_str())),
+            );
+        }
+        queue.extend(
+            dependency_lists(row)
+                .flat_map(list_entries)
+                .flat_map(requested_extras),
+        );
+    }
+    let mut installed: BTreeSet<(&str, &str)> = BTreeSet::new();
+    while let Some((name, wanted)) = queue.pop() {
+        if installed.insert((name, wanted)) {
+            queue.extend(
+                extra(name, wanted)
+                    .into_iter()
+                    .flat_map(list_entries)
+                    .flat_map(requested_extras),
+            );
         }
     }
 
     let mut nodes = vec![];
-    for row in packages(&parsed) {
-        let Some(name) = name_of(row) else {
-            continue;
-        };
-        let optional = row
-            .get("optional-dependencies")
-            .and_then(toml::Value::as_table);
-        let extras = requested
-            .get(name)
-            .into_iter()
-            .flatten()
-            .filter_map(|extra| optional?.get(*extra));
+    for (&name, &row) in &rows {
+        let extras = installed
+            .iter()
+            .filter(|(package, _)| *package == name)
+            .filter_map(|(_, wanted)| extra(name, wanted));
         let mut requires: Vec<Requirement> = vec![];
-        for dependencies in dependency_lists(row).chain(extras) {
-            for required in dependencies
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(name_of)
-            {
-                if !requires.iter().any(|r| r.name == required) {
-                    requires.push(Requirement {
-                        name: required.into(),
-                        spec: None,
-                    });
-                }
+        for required in dependency_lists(row)
+            .chain(extras)
+            .flat_map(list_entries)
+            .filter_map(name_of)
+        {
+            if !requires.iter().any(|r| r.name == required) {
+                requires.push(Requirement {
+                    name: required.into(),
+                    spec: None,
+                });
             }
         }
         nodes.push(Node {
