@@ -535,3 +535,141 @@ mod stand_in {
             .contains("unexpectedly changed package.json"));
     }
 }
+
+const GRAPH_LOCK: &str = r#"{
+  "name": "root",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {
+      "name": "root",
+      "workspaces": ["packages/*"],
+      "dependencies": { "debug": "^3.0.0", "ms": "2.0.0" }
+    },
+    "node_modules/a": { "resolved": "packages/a", "link": true },
+    "node_modules/debug": {
+      "version": "3.2.7",
+      "resolved": "https://registry.npmjs.org/debug/-/debug-3.2.7.tgz",
+      "dependencies": { "ms": "^2.1.1" }
+    },
+    "node_modules/debug/node_modules/ms": {
+      "version": "2.1.3",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz"
+    },
+    "node_modules/ms": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.0.0.tgz"
+    },
+    "node_modules/wrap": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/wrap/-/wrap-1.0.0.tgz",
+      "dependencies": { "timer": "npm:ms@2.0.0" },
+      "optionalDependencies": { "absent": "^1.0.0" }
+    },
+    "node_modules/timer": {
+      "name": "ms",
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.0.0.tgz"
+    },
+    "packages/a": {
+      "name": "a",
+      "version": "1.0.0",
+      "dependencies": { "left-pad": "^1.1.0" }
+    },
+    "packages/a/node_modules/left-pad": {
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
+      "dependencies": { "wrap": "^1.0.0" }
+    }
+  }
+}"#;
+
+/// `(name, spec, version)` of each requirement of the node `name` at `version`.
+fn requires(
+    graph: &depsmith_core::graph::LockGraph,
+    name: &str,
+    version: &str,
+) -> Vec<(String, Option<String>, Option<String>)> {
+    let node = graph
+        .nodes
+        .iter()
+        .find(|n| n.name == name && n.version.as_deref() == Some(version))
+        .unwrap();
+    node.requires
+        .iter()
+        .map(|r| (r.name.clone(), r.spec.clone(), r.version.clone()))
+        .collect()
+}
+
+#[test]
+fn lock_graph_reads_nodes_edges_and_paths_from_package_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let npm = Npm::default();
+    let target = target("web/package.json");
+    write(root.path(), &[("web/package.json", "{\"name\": \"root\"}")]);
+    assert!(npm.lock_graph(root.path(), &target).unwrap().is_none());
+
+    write(root.path(), &[("web/package-lock.json", GRAPH_LOCK)]);
+    let graph = npm.lock_graph(root.path(), &target).unwrap().unwrap();
+    assert!(graph
+        .nodes
+        .iter()
+        .all(|n| n.ecosystem == "npm" && n.platform == "any"));
+    let mut nodes: Vec<(&str, Option<&str>)> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.name.as_str(), n.version.as_deref()))
+        .collect();
+    nodes.sort_unstable();
+    assert_eq!(
+        nodes,
+        [
+            ("a", Some("1.0.0")),
+            ("debug", Some("3.2.7")),
+            ("left-pad", Some("1.3.0")),
+            ("ms", Some("2.0.0")),
+            ("ms", Some("2.0.0")),
+            ("ms", Some("2.1.3")),
+            ("wrap", Some("1.0.0")),
+        ]
+    );
+    let edge = |name: &str, spec: &str, version: &str| {
+        (
+            name.to_owned(),
+            Some(spec.to_owned()),
+            Some(version.to_owned()),
+        )
+    };
+    // The nested copy is nearer than the hoisted one.
+    assert_eq!(
+        requires(&graph, "debug", "3.2.7"),
+        [edge("ms", "^2.1.1", "2.1.3")]
+    );
+    // A member's dependency resolves from the member's own folder first.
+    assert_eq!(
+        requires(&graph, "a", "1.0.0"),
+        [edge("left-pad", "^1.1.0", "1.3.0")]
+    );
+    // From a nested package, npm walks up to the root's node_modules; an
+    // alias reaches the package it names, and a dependency that was not
+    // installed is left out.
+    assert_eq!(
+        requires(&graph, "left-pad", "1.3.0"),
+        [edge("wrap", "^1.0.0", "1.0.0")]
+    );
+    assert_eq!(
+        requires(&graph, "wrap", "1.0.0"),
+        [edge("ms", "npm:ms@2.0.0", "2.0.0")]
+    );
+
+    let roots = [("npm".to_owned(), "left-pad".to_owned())];
+    assert_eq!(
+        graph.paths_to("any", &roots, "npm", "ms"),
+        [["left-pad", "wrap", "ms"]]
+    );
+}
+
+#[test]
+fn lock_graph_rejects_unsupported_locks() {
+    assert!(depsmith_core::npm::lock_graph("{").is_err());
+    assert!(depsmith_core::npm::lock_graph("{\"lockfileVersion\": 1}").is_err());
+}
