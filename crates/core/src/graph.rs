@@ -18,8 +18,9 @@ pub struct Node {
     pub ecosystem: String,
     /// Package name as the lock spells it.
     pub name: String,
-    /// The locked version, where the graph records versions (Cargo.lock);
-    /// a requirement naming a version reaches only that version's node.
+    /// The locked version, where the graph records versions (Cargo.lock,
+    /// package-lock.json); a requirement naming a version reaches only that
+    /// version's node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Platform the package was resolved for, such as `linux-64`.

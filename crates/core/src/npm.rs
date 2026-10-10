@@ -10,6 +10,7 @@ use crate::{
     },
     constraint::Excluded,
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
+    graph::{LockGraph, Node, Requirement},
     process::run_env,
     Error, Package, Result, Target, UpdateOptions,
 };
@@ -218,6 +219,38 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
     Ok(text)
 }
 
+/// A `package-lock.json` of a supported `lockfileVersion` (2 or 3).
+fn parse_lock(text: &str) -> Result<Value> {
+    let parsed: Value = serde_json::from_str(without_bom(text))
+        .map_err(|e| Error::Invalid(format!("invalid package-lock.json: {e}")))?;
+    let version = parsed.get("lockfileVersion").and_then(Value::as_u64);
+    if !matches!(version, Some(2 | 3)) {
+        return Err(Error::Invalid(format!(
+            "unsupported package-lock.json lockfileVersion {}; supported: 2 and 3 (npm 7 or newer)",
+            version.map_or_else(|| "(missing)".into(), |v| v.to_string())
+        )));
+    }
+    Ok(parsed)
+}
+
+/// The lock's `packages`, keyed by their folder relative to the lock.
+fn locations(parsed: &Value) -> impl Iterator<Item = (&String, &Value)> {
+    parsed
+        .get("packages")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+}
+
+/// The lock next to the target's `package.json`, if there is one.
+fn lock_path(root: &Path, target: &Target) -> Option<PathBuf> {
+    let dir = target.manifest.parent().unwrap_or(Path::new(""));
+    LOCKS
+        .iter()
+        .map(|l| dir.join(l))
+        .find(|l| root.join(l).is_file())
+}
+
 /// Resolved packages of a `package-lock.json` (lockfileVersion 2 or 3). The
 /// root, workspace members and other links are the project itself and are
 /// omitted; a package's artifact is its `resolved` tarball or Git URL, else
@@ -228,22 +261,9 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
 /// Returns [`Error::Invalid`] when the lock is not JSON or has an unsupported
 /// `lockfileVersion`.
 pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
-    let parsed: Value = serde_json::from_str(without_bom(text))
-        .map_err(|e| Error::Invalid(format!("invalid package-lock.json: {e}")))?;
-    let version = parsed.get("lockfileVersion").and_then(Value::as_u64);
-    if !matches!(version, Some(2 | 3)) {
-        return Err(Error::Invalid(format!(
-            "unsupported package-lock.json lockfileVersion {}; supported: 2 and 3 (npm 7 or newer)",
-            version.map_or_else(|| "(missing)".into(), |v| v.to_string())
-        )));
-    }
+    let parsed = parse_lock(text)?;
     let mut packages = vec![];
-    for (key, entry) in parsed
-        .get("packages")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
-    {
+    for (key, entry) in locations(&parsed) {
         let Some((_, name)) = key.rsplit_once("node_modules/") else {
             continue;
         };
@@ -269,6 +289,110 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
         });
     }
     Ok(packages)
+}
+
+/// The lock graph of a `package-lock.json` (lockfileVersion 2 or 3): one
+/// `npm` node per installed folder, on platform `any`, with its locked
+/// version. Links, such as workspace members, are nodes of the folder they
+/// link to; the root is the project itself and is omitted.
+///
+/// Each of a package's `dependencies`, `optionalDependencies` and
+/// `peerDependencies` keeps its requirement as `spec` and reaches the copy npm
+/// resolves it to: the nearest `node_modules` folder of that name, from the
+/// package's own folder up to the root. An alias reaches the package it
+/// names, and a dependency with no installed copy is left out.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the lock is not JSON or has an unsupported
+/// `lockfileVersion`.
+pub fn lock_graph(text: &str) -> Result<LockGraph> {
+    let parsed = parse_lock(text)?;
+    let folders: BTreeMap<&str, &Value> = locations(&parsed)
+        .map(|(key, entry)| (key.as_str(), entry))
+        .collect();
+    // The folder a link points to, or the folder itself.
+    let real = |key: &str| -> Option<(String, &Value)> {
+        let entry = *folders.get(key)?;
+        if entry.get("link").and_then(Value::as_bool) != Some(true) {
+            return Some((key.to_owned(), entry));
+        }
+        let target = entry.get("resolved").and_then(Value::as_str)?;
+        Some((target.to_owned(), *folders.get(target)?))
+    };
+    // The package installed in `node_modules` folder `key`; none for others.
+    let name_of = |key: &str, entry: &Value| -> Option<String> {
+        let (_, folder) = key.rsplit_once("node_modules/")?;
+        Some(
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(folder)
+                .to_owned(),
+        )
+    };
+    let version_of = |entry: &Value| {
+        entry
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    let mut nodes = vec![];
+    for (key, _) in locations(&parsed) {
+        let Some((location, entry)) = real(key) else {
+            continue;
+        };
+        let Some(name) = name_of(key, entry) else {
+            continue;
+        };
+        let mut requires: Vec<Requirement> = vec![];
+        for object in ["dependencies", "optionalDependencies", "peerDependencies"] {
+            for (dependency, spec) in entry
+                .get(object)
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+            {
+                // npm looks in `node_modules` of the package's folder, then
+                // of each folder above it.
+                let parts: Vec<&str> = location.split('/').collect();
+                let Some((resolved, copy)) = (0..=parts.len()).rev().find_map(|depth| {
+                    let above = parts[..depth].join("/");
+                    let key = if above.is_empty() {
+                        format!("node_modules/{dependency}")
+                    } else {
+                        format!("{above}/node_modules/{dependency}")
+                    };
+                    let (_, copy) = real(&key)?;
+                    Some((key, copy))
+                }) else {
+                    continue;
+                };
+                let Some(name) = name_of(&resolved, copy) else {
+                    continue;
+                };
+                let version = version_of(copy);
+                if !requires
+                    .iter()
+                    .any(|r| r.name == name && r.version == version)
+                {
+                    requires.push(Requirement {
+                        name,
+                        spec: spec.as_str().map(str::to_owned),
+                        version,
+                    });
+                }
+            }
+        }
+        nodes.push(Node {
+            ecosystem: "npm".into(),
+            name,
+            version: version_of(entry),
+            platform: "any".into(),
+            requires,
+        });
+    }
+    Ok(LockGraph { nodes })
 }
 
 /// `${NAME}` references replaced from the environment, as npm does in
@@ -745,17 +869,21 @@ impl Adapter for Npm {
         true
     }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<Package>> {
-        let dir = target.manifest.parent().unwrap_or(Path::new(""));
-        let lock = LOCKS
-            .iter()
-            .map(|l| dir.join(l))
-            .find(|l| root.join(l).is_file());
-        match lock {
+        match lock_path(root, target) {
             None => Err(Error::Invalid(format!(
                 "{}: no package-lock.json to scan; create it with `npm install --package-lock-only` or `depsmith update`",
                 target.id
             ))),
             Some(lock) => lock_inventory(&fs::read_to_string(root.join(lock))?),
+        }
+    }
+    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<LockGraph>> {
+        let Some(lock) = lock_path(root, target) else {
+            return Ok(None);
+        };
+        match fs::read_to_string(root.join(lock)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            result => lock_graph(&result?).map(Some),
         }
     }
     fn select(
