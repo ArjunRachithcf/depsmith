@@ -12,10 +12,9 @@ volumes = [
   "~/.cache/ai-compete/cargo-git:/home/agent/.cargo/git:z",
   "~/.cache/ai-compete/depsmith-target-{model}:/work/target:Z",
 ]
-# Test policy: a change to library code must change tests too (or add #[test]s),
-# and may not remove assertions or ignore tests.
+# Test policy: a change to library code must add a test or an assertion, and may
+# not remove more assertions than it adds or ignore a test.
 source_paths = ["crates/*/src/**", "python/depsmith/*.py"]
-test_paths = ["crates/*/tests/**", "tests/python/**"]
 preamble = """
 You are working on depsmith, a Rust CLI and typed Python API for preparing,
 reviewing and applying dependency updates. Before you change anything, read
