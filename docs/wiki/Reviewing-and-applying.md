@@ -11,7 +11,7 @@ repository is never modified while preparing. A proposal records:
   including transitive dependencies and every configured platform. A package
   the target does not declare names its **introducers**, the declared
   dependencies that pull it in, with the shortest dependency path from each
-  (from the lock graph; Pixi for now). The text report lists these as
+  (from the lock graph of Pixi, uv, Cargo and conda targets). The text report lists these as
   `pulled in by …`;
 - **suggestions** about declared constraints, **unresolved references**,
   **validation** levels completed, **scan reports** when requested, and

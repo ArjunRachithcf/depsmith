@@ -46,6 +46,13 @@ build strings) leave availability "not established" instead of guessing.
 precision, and ranges need `--accept NAME=REQUIREMENT`. Only the list item's
 line changes; quotes and comments are kept.
 
+## Dependency introducers
+
+A changed package that the environment does not declare is reported with the
+declared dependencies that pull it in. The graph comes from the conda-lock
+lock, which records each package's `dependencies` with their requirements,
+per platform; virtual packages such as `__glibc` are left out.
+
 ## Scanning
 
 Conda packages are scanned through reviewed identity mappings, and PyPI

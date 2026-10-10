@@ -112,6 +112,135 @@ fn lock_inventory_reads_conda_and_pip_packages_per_platform() {
     );
 }
 
+/// A conda-lock lock where numpy needs libblas through libcblas, on two
+/// platforms, with a PyPI package needing another.
+const GRAPH_LOCK: &str = "version: 1
+metadata:
+  platforms: [linux-64, win-64]
+  sources: [environment.yml]
+package:
+- name: numpy
+  version: 1.26.4
+  manager: conda
+  platform: linux-64
+  dependencies:
+    __glibc: '>=2.17'
+    libcblas: '>=3.9.0,<4.0a0'
+    python: ''
+  url: https://conda.anaconda.org/conda-forge/linux-64/numpy-1.26.4-py312_0.conda
+  hash: {md5: a, sha256: b}
+- name: libcblas
+  version: 3.9.0
+  manager: conda
+  platform: linux-64
+  dependencies:
+    libblas: 3.9.0 20_linux64_openblas
+  url: https://conda.anaconda.org/conda-forge/linux-64/libcblas-3.9.0-20.conda
+  hash: {md5: a, sha256: b}
+- name: libblas
+  version: 3.9.0
+  manager: conda
+  platform: linux-64
+  dependencies: {}
+  url: https://conda.anaconda.org/conda-forge/linux-64/libblas-3.9.0-20.conda
+  hash: {md5: a, sha256: b}
+- name: numpy
+  version: 1.26.4
+  manager: conda
+  platform: win-64
+  dependencies: {}
+  url: https://conda.anaconda.org/conda-forge/win-64/numpy-1.26.4-py312_0.conda
+  hash: {md5: a, sha256: b}
+- name: requests
+  version: 2.31.0
+  manager: pip
+  platform: linux-64
+  dependencies:
+    idna: <4,>=2.5
+  url: https://files.pythonhosted.org/packages/x/requests-2.31.0-py3-none-any.whl
+  hash: {sha256: c}
+";
+
+#[test]
+fn lock_graph_is_none_without_a_lock() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    assert!(Conda.lock_graph(root.path(), &target()).unwrap().is_none());
+}
+
+#[test]
+fn lock_graph_passes_on_unreadable_and_invalid_locks() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("conda-lock.yml")).unwrap();
+    assert!(Conda.lock_graph(root.path(), &target()).is_err());
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("conda-lock.yml"), "[").unwrap();
+    assert!(Conda.lock_graph(root.path(), &target()).is_err());
+}
+
+#[test]
+fn lock_graph_reads_each_package_dependencies_per_platform() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    fs::write(root.path().join("conda-lock.yml"), GRAPH_LOCK).unwrap();
+    let graph = Conda.lock_graph(root.path(), &target()).unwrap().unwrap();
+    let nodes: Vec<_> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let requires: Vec<_> = n
+                .requires
+                .iter()
+                .map(|r| (r.name.as_str(), r.spec.as_deref()))
+                .collect();
+            (
+                n.ecosystem.as_str(),
+                n.name.as_str(),
+                n.platform.as_str(),
+                requires,
+            )
+        })
+        .collect();
+    assert_eq!(
+        nodes,
+        [
+            (
+                "conda",
+                "numpy",
+                "linux-64",
+                vec![("libcblas", Some(">=3.9.0,<4.0a0")), ("python", None)]
+            ),
+            (
+                "conda",
+                "libcblas",
+                "linux-64",
+                vec![("libblas", Some("3.9.0 20_linux64_openblas"))]
+            ),
+            ("conda", "libblas", "linux-64", vec![]),
+            ("conda", "numpy", "win-64", vec![]),
+            (
+                "pypi",
+                "requests",
+                "linux-64",
+                vec![("idna", Some("<4,>=2.5"))]
+            ),
+        ]
+    );
+    let roots: Vec<_> = Conda
+        .declarations(root.path(), &target())
+        .unwrap()
+        .into_iter()
+        .map(|d| (d.ecosystem, d.package))
+        .collect();
+    assert_eq!(
+        graph.paths_to("linux-64", &roots, "conda", "libblas"),
+        [vec!["numpy", "libcblas", "libblas"]]
+    );
+    assert!(graph
+        .paths_to("win-64", &roots, "conda", "libblas")
+        .is_empty());
+}
+
 #[test]
 fn conda_passes_the_conformance_suite() {
     let fixture = conformance::Fixture {

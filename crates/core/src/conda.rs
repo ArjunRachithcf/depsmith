@@ -7,6 +7,7 @@ use crate::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
     },
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
+    graph::{LockGraph, Node, Requirement},
     process::run_env,
     pyproject::Pep508,
     Error, Package, Result, Target, UpdateOptions,
@@ -269,6 +270,65 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
         });
     }
     Ok(packages)
+}
+
+/// The lock graph of a conda-lock unified lock: one node per package and
+/// platform, requiring each entry of its `dependencies` with its
+/// requirement. `pip` entries belong to the PyPI ecosystem, and virtual
+/// packages such as `__glibc` are left out.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the lock is not valid YAML.
+pub fn lock_graph(text: &str) -> Result<LockGraph> {
+    let parsed: Value = serde_yaml::from_str(text)
+        .map_err(|e| Error::Invalid(format!("invalid conda-lock file: {e}")))?;
+    let mut nodes = vec![];
+    for row in parsed
+        .get("package")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(name), Some(platform)) = (
+            row.get("name").and_then(Value::as_str),
+            row.get("platform").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let requires = row
+            .get("dependencies")
+            .and_then(Value::as_mapping)
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, spec)| {
+                let name = name.as_str()?.trim();
+                let spec = match spec {
+                    Value::String(s) => s.trim().to_owned(),
+                    Value::Number(n) => n.to_string(),
+                    _ => String::new(),
+                };
+                (!name.starts_with("__")).then(|| Requirement {
+                    name: name.into(),
+                    spec: (!spec.is_empty()).then_some(spec),
+                    version: None,
+                })
+            })
+            .collect();
+        nodes.push(Node {
+            ecosystem: if row.get("manager").and_then(Value::as_str) == Some("pip") {
+                "pypi"
+            } else {
+                "conda"
+            }
+            .into(),
+            name: name.into(),
+            version: None,
+            platform: platform.into(),
+            requires,
+        });
+    }
+    Ok(LockGraph { nodes })
 }
 
 fn strings(value: Option<&Value>) -> Vec<String> {
@@ -609,6 +669,12 @@ impl Adapter for Conda {
                 lock.display()
             ))),
             result => lock_inventory(&result?),
+        }
+    }
+    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<LockGraph>> {
+        match fs::read_to_string(root.join(lock_path(root, &target.manifest))) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            result => lock_graph(&result?).map(Some),
         }
     }
     fn select(
