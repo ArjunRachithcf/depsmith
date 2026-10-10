@@ -112,6 +112,155 @@ fn lock_inventory_reads_conda_and_pip_packages_per_platform() {
     );
 }
 
+/// A conda-lock lock where the declared numpy needs libblas, which needs
+/// libopenblas, and the pip package requests needs urllib3; linux-64 only
+/// for libopenblas, which win-64 does without.
+const GRAPH_LOCK: &str = "version: 1
+metadata:
+  platforms: [linux-64, win-64]
+  sources: [environment.yml]
+package:
+- name: numpy
+  version: 1.26.4
+  manager: conda
+  platform: linux-64
+  dependencies:
+    libblas: '>=3.9.0,<4.0a0'
+    python: '>=3.12,<3.13.0a0'
+    __glibc: '>=2.17'
+  url: https://conda.anaconda.org/conda-forge/linux-64/numpy-1.26.4-py312h.conda
+  hash: {md5: a, sha256: b}
+- name: libblas
+  version: 3.9.0
+  manager: conda
+  platform: linux-64
+  dependencies:
+    libopenblas: ''
+  url: https://conda.anaconda.org/conda-forge/linux-64/libblas-3.9.0-20_linux64_openblas.conda
+  hash: {md5: a, sha256: b}
+- name: libopenblas
+  version: 0.3.25
+  manager: conda
+  platform: linux-64
+  dependencies: {}
+  url: https://conda.anaconda.org/conda-forge/linux-64/libopenblas-0.3.25-pthreads.conda
+  hash: {md5: a, sha256: b}
+- name: numpy
+  version: 1.26.4
+  manager: conda
+  platform: win-64
+  dependencies:
+    libblas: '>=3.9.0,<4.0a0'
+  url: https://conda.anaconda.org/conda-forge/win-64/numpy-1.26.4-py312h.conda
+  hash: {md5: a, sha256: b}
+- name: libblas
+  version: 3.9.0
+  manager: conda
+  platform: win-64
+  url: https://conda.anaconda.org/conda-forge/win-64/libblas-3.9.0-mkl.conda
+  hash: {md5: a, sha256: b}
+- name: requests
+  version: 2.31.0
+  manager: pip
+  platform: linux-64
+  dependencies:
+    urllib3: <3,>=1.21.1
+  url: https://files.pythonhosted.org/packages/x/requests-2.31.0-py3-none-any.whl
+  hash: {sha256: c}
+- name: urllib3
+  version: 2.2.1
+  manager: pip
+  platform: linux-64
+  dependencies: {}
+  url: https://files.pythonhosted.org/packages/x/urllib3-2.2.1-py3-none-any.whl
+  hash: {sha256: c}
+";
+
+#[test]
+fn lock_graph_is_none_without_a_lock() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    assert!(Conda.lock_graph(root.path(), &target()).unwrap().is_none());
+}
+
+#[test]
+fn lock_graph_reads_dependencies_with_requirements_per_platform() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    fs::write(root.path().join("conda-lock.yml"), GRAPH_LOCK).unwrap();
+    let graph = Conda.lock_graph(root.path(), &target()).unwrap().unwrap();
+    let nodes: Vec<_> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.ecosystem.as_str(),
+                n.name.as_str(),
+                n.platform.as_str(),
+                n.requires
+                    .iter()
+                    .map(|r| (r.name.as_str(), r.spec.as_deref()))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    // Virtual packages such as __glibc are not edges, and an empty
+    // requirement is none.
+    assert_eq!(
+        nodes,
+        [
+            (
+                "conda",
+                "numpy",
+                "linux-64",
+                vec![
+                    ("libblas", Some(">=3.9.0,<4.0a0")),
+                    ("python", Some(">=3.12,<3.13.0a0"))
+                ]
+            ),
+            ("conda", "libblas", "linux-64", vec![("libopenblas", None)]),
+            ("conda", "libopenblas", "linux-64", vec![]),
+            (
+                "conda",
+                "numpy",
+                "win-64",
+                vec![("libblas", Some(">=3.9.0,<4.0a0"))]
+            ),
+            ("conda", "libblas", "win-64", vec![]),
+            (
+                "pypi",
+                "requests",
+                "linux-64",
+                vec![("urllib3", Some("<3,>=1.21.1"))]
+            ),
+            ("pypi", "urllib3", "linux-64", vec![]),
+        ]
+    );
+}
+
+#[test]
+fn lock_graph_paths_lead_from_declared_to_transitive_packages() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    fs::write(root.path().join("environment.conda-lock.yml"), GRAPH_LOCK).unwrap();
+    let graph = Conda.lock_graph(root.path(), &target()).unwrap().unwrap();
+    let roots = [
+        ("conda".to_owned(), "numpy".to_owned()),
+        ("pypi".to_owned(), "Requests".to_owned()),
+    ];
+    assert_eq!(
+        graph.paths_to("linux-64", &roots, "conda", "libopenblas"),
+        [vec!["numpy", "libblas", "libopenblas"]]
+    );
+    assert_eq!(
+        graph.paths_to("linux-64", &roots, "pypi", "urllib3"),
+        [vec!["Requests", "urllib3"]]
+    );
+    assert!(graph
+        .paths_to("win-64", &roots, "conda", "libopenblas")
+        .is_empty());
+}
+
 #[test]
 fn conda_passes_the_conformance_suite() {
     let fixture = conformance::Fixture {
