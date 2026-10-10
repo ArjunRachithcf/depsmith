@@ -285,3 +285,139 @@ mod stand_in {
         );
     }
 }
+
+const GRAPH_LOCK: &str = "version: 1
+metadata:
+  platforms: [linux-64, win-64]
+package:
+  - name: numpy
+    version: 1.26.4
+    manager: conda
+    platform: linux-64
+    dependencies:
+      libblas: '>=3.9.0,<4.0a0'
+      python: '>=3.12,<3.13.0a0'
+      __glibc: '>=2.17'
+  - name: numpy
+    version: 1.26.4
+    manager: conda
+    platform: win-64
+    dependencies:
+      python: '>=3.12,<3.13.0a0'
+  - name: libblas
+    version: 3.9.0
+    manager: conda
+    platform: linux-64
+    dependencies:
+      libopenblas: ''
+  - name: libopenblas
+    version: 0.3.27
+    manager: conda
+    platform: linux-64
+    dependencies: {}
+  - name: python
+    version: 3.12.3
+    manager: conda
+    platform: linux-64
+  - name: requests
+    version: 2.31.0
+    manager: pip
+    platform: linux-64
+    dependencies:
+      idna: '>=2.5,<4'
+  - name: idna
+    version: '3.6'
+    manager: pip
+    platform: linux-64
+    dependencies: {}
+";
+
+/// Ecosystem, name, platform, and each required name with its spec.
+type GraphRow<'a> = (&'a str, &'a str, &'a str, Vec<(&'a str, Option<&'a str>)>);
+
+#[test]
+fn lock_graph_is_none_without_a_lock() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    assert!(Conda.lock_graph(root.path(), &target()).unwrap().is_none());
+}
+
+#[test]
+fn lock_graph_reads_conda_and_pip_dependencies_per_platform() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    fs::write(root.path().join("conda-lock.yml"), GRAPH_LOCK).unwrap();
+    let graph = Conda.lock_graph(root.path(), &target()).unwrap().unwrap();
+    let rows: Vec<GraphRow> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let requires = n
+                .requires
+                .iter()
+                .map(|r| (r.name.as_str(), r.spec.as_deref()))
+                .collect();
+            (
+                n.ecosystem.as_str(),
+                n.name.as_str(),
+                n.platform.as_str(),
+                requires,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                "conda",
+                "numpy",
+                "linux-64",
+                vec![
+                    ("libblas", Some(">=3.9.0,<4.0a0")),
+                    ("python", Some(">=3.12,<3.13.0a0"))
+                ]
+            ),
+            (
+                "conda",
+                "numpy",
+                "win-64",
+                vec![("python", Some(">=3.12,<3.13.0a0"))]
+            ),
+            ("conda", "libblas", "linux-64", vec![("libopenblas", None)]),
+            ("conda", "libopenblas", "linux-64", vec![]),
+            ("conda", "python", "linux-64", vec![]),
+            (
+                "pypi",
+                "requests",
+                "linux-64",
+                vec![("idna", Some(">=2.5,<4"))]
+            ),
+            ("pypi", "idna", "linux-64", vec![]),
+        ]
+    );
+    assert!(graph.nodes.iter().all(|n| n.version.is_none()));
+}
+
+#[test]
+fn lock_graph_finds_the_path_from_a_declared_dependency() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    fs::write(root.path().join("environment.conda-lock.yml"), GRAPH_LOCK).unwrap();
+    let graph = Conda.lock_graph(root.path(), &target()).unwrap().unwrap();
+    let roots = [("conda".to_owned(), "numpy".to_owned())];
+    assert_eq!(
+        graph.paths_to("linux-64", &roots, "conda", "libopenblas"),
+        [["numpy", "libblas", "libopenblas"]]
+    );
+    assert!(graph
+        .paths_to("win-64", &roots, "conda", "libopenblas")
+        .is_empty());
+}
+
+#[test]
+fn lock_graph_passes_on_an_invalid_lock() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("environment.yml"), ENVIRONMENT).unwrap();
+    fs::write(root.path().join("conda-lock.yml"), "[").unwrap();
+    assert!(Conda.lock_graph(root.path(), &target()).is_err());
+}
