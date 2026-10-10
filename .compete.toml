@@ -12,6 +12,10 @@ volumes = [
   "~/.cache/ai-compete/cargo-git:/home/agent/.cargo/git:z",
   "~/.cache/ai-compete/depsmith-target-{model}:/work/target:Z",
 ]
+# Test policy: a change to library code must change tests too (or add #[test]s),
+# and may not remove assertions or ignore tests.
+source_paths = ["crates/*/src/**", "python/depsmith/*.py"]
+test_paths = ["crates/*/tests/**", "tests/python/**"]
 preamble = """
 You are working on depsmith, a Rust CLI and typed Python API for preparing,
 reviewing and applying dependency updates. Before you change anything, read
@@ -86,14 +90,19 @@ landable = [
   "crates/*/tests/**",
   "python/depsmith/*.py",
   "python/depsmith/*.pyi",
+  "tests/python/*.py",
   "docs/wiki/*.md",
 ]
 # Never unattended, even inside landable: what depsmith downloads and installs on
-# users' machines (tool provisioning, hash pins), the install instructions, and
-# the release guide.
+# users' machines (tool provisioning, hash pins, and the test guarding them), how
+# it fetches (http.rs) and its vulnerability verdicts (scan.rs), the install
+# instructions, and the release guide.
 protected = [
   "crates/core/src/provision.rs",
   "crates/*/src/pins/**",
+  "crates/core/tests/provision.rs",
+  "crates/core/src/http.rs",
+  "crates/core/src/scan.rs",
   "docs/wiki/Getting-started.md",
   "docs/wiki/Releasing.md",
 ]
