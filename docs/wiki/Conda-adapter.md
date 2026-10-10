@@ -51,3 +51,11 @@ line changes; quotes and comments are kept.
 Conda packages are scanned through reviewed identity mappings, and PyPI
 packages from files.pythonhosted.org have their own identity; see
 [Vulnerability scanning](Vulnerability-scanning).
+
+## Dependency introducers
+
+A changed package that the environment does not declare is reported with the
+declared dependencies that pull it in. The graph comes from the conda-lock
+lock, which records each package's `dependencies` with their requirements on
+every platform; virtual packages such as `__glibc` are left out, and `pip`
+entries form PyPI packages.
