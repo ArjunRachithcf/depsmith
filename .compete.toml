@@ -72,23 +72,31 @@ name = "gen-reference"
 run = "uv venv -q --python 3.10 /tmp/venv && uv pip install -q --python /tmp/venv . && /tmp/venv/bin/python scripts/gen-reference.py --check"
 
 [landing]
-# Land a PR unattended when the adversarial review passed on its head, every
-# check and CodeQL are green, and none of the paths below changed. At most one
-# a day. Add the adverserai:hold label to #61 to stop all landing.
+# Land a PR unattended only when: this tool's own adversarial review passed on its
+# head (recorded locally; the PR body is never trusted); every check and CodeQL
+# pass on that head; it is based on main; it only changes landable paths and no
+# protected ones; it fits the size cap. One a day; reverts of a red main come first
+# and do not count. A writer's adverserai:hold label on #61 stops new landings
+# (reverts still open).
 enabled = true
 control_issue = 61
-max_per_day = 1
-# Never landed unattended: CI, installers, packaging, releases, this config.
-protected = [
-  ".github/**",
-  "scripts/install*",
-  "recipes/**",
-  ".compete.toml",
-  "Containerfile",
-  "Cargo.toml",
-  "crates/*/Cargo.toml",
-  "pyproject.toml",
-  "docs/releasing.md",
+# Only these paths land unattended: library code, its tests, and the wiki.
+landable = [
+  "crates/*/src/**",
+  "crates/*/tests/**",
+  "python/depsmith/*.py",
+  "python/depsmith/*.pyi",
+  "docs/wiki/*.md",
 ]
-# The docstrings workflow's docs-only commits need no new review.
+# Never unattended, even inside landable: what depsmith downloads and installs on
+# users' machines (tool provisioning, hash pins), the install instructions, and
+# the release guide.
+protected = [
+  "crates/core/src/provision.rs",
+  "crates/*/src/pins/**",
+  "docs/wiki/Getting-started.md",
+  "docs/wiki/Releasing.md",
+]
+# The docstrings workflow's commits need no new review when their diff changes
+# only comment and Markdown lines.
 trusted_bots = ["depsmith-docs-bot[bot]"]
