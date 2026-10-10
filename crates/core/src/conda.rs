@@ -7,6 +7,7 @@ use crate::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
     },
     constraints::{AvailabilityConfig, Declaration, Edit, RegistryConfig},
+    graph::{LockGraph, Node, Requirement},
     process::run_env,
     pyproject::Pep508,
     Error, Package, Result, Target, UpdateOptions,
@@ -236,20 +237,10 @@ fn lock_path(root: &Path, environment: &Path) -> PathBuf {
 ///
 /// Returns [`Error::Invalid`] when the lock is not valid YAML.
 pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
-    let parsed: Value = serde_yaml::from_str(text)
-        .map_err(|e| Error::Invalid(format!("invalid conda-lock file: {e}")))?;
+    let parsed = parse_lock(text)?;
     let mut packages = vec![];
-    for row in parsed
-        .get("package")
-        .and_then(Value::as_sequence)
-        .into_iter()
-        .flatten()
-    {
-        let field = |name: &str| match row.get(name) {
-            Some(Value::String(s)) => Some(s.clone()),
-            Some(Value::Number(n)) => Some(n.to_string()),
-            _ => None,
-        };
+    for row in lock_rows(&parsed) {
+        let field = |name: &str| scalar(row.get(name));
         let (Some(name), Some(version), Some(platform)) =
             (field("name"), field("version"), field("platform"))
         else {
@@ -269,6 +260,76 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
         });
     }
     Ok(packages)
+}
+
+/// The lock graph of a conda-lock unified lock: each package on its
+/// platform with the `dependencies` it records, with their requirements and
+/// without virtual packages such as `__glibc`. `pip` entries belong to the
+/// PyPI ecosystem.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] when the lock is not valid YAML.
+pub fn lock_graph(text: &str) -> Result<LockGraph> {
+    let parsed = parse_lock(text)?;
+    let mut nodes = vec![];
+    for row in lock_rows(&parsed) {
+        let field = |name: &str| scalar(row.get(name));
+        let (Some(name), Some(platform)) = (field("name"), field("platform")) else {
+            continue;
+        };
+        let requires = row
+            .get("dependencies")
+            .and_then(Value::as_mapping)
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, spec)| {
+                let name = name.as_str()?.trim();
+                let spec = scalar(Some(spec)).unwrap_or_default();
+                let spec = spec.trim();
+                (!name.starts_with("__")).then(|| Requirement {
+                    name: name.into(),
+                    spec: (!spec.is_empty()).then(|| spec.into()),
+                    version: None,
+                })
+            })
+            .collect();
+        nodes.push(Node {
+            ecosystem: if field("manager").as_deref() == Some("pip") {
+                "pypi"
+            } else {
+                "conda"
+            }
+            .into(),
+            name,
+            version: None,
+            platform,
+            requires,
+        });
+    }
+    Ok(LockGraph { nodes })
+}
+
+fn parse_lock(text: &str) -> Result<Value> {
+    serde_yaml::from_str(text).map_err(|e| Error::Invalid(format!("invalid conda-lock file: {e}")))
+}
+
+/// The package rows of a parsed conda-lock lock.
+fn lock_rows(parsed: &Value) -> impl Iterator<Item = &Value> {
+    parsed
+        .get("package")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+}
+
+/// A string or number YAML value as text.
+fn scalar(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 fn strings(value: Option<&Value>) -> Vec<String> {
@@ -609,6 +670,12 @@ impl Adapter for Conda {
                 lock.display()
             ))),
             result => lock_inventory(&result?),
+        }
+    }
+    fn lock_graph(&self, root: &Path, target: &Target) -> Result<Option<LockGraph>> {
+        match fs::read_to_string(root.join(lock_path(root, &target.manifest))) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            result => lock_graph(&result?).map(Some),
         }
     }
     fn select(
