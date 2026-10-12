@@ -27,10 +27,10 @@ installed). Three layers:
 
 1. **Offline end-to-end** (`crates/cli/tests/e2e.rs`): the real executable with
    a cross-platform Pixi stand-in on every CI host.
-2. **Native integration** (ignored by default): real Pixi, uv, cargo,
-   conda-lock, Grype, pypi.org, crates.io and the GitHub API, plus a download
-   of the pinned uv.
-   `PIXI=… UV=… CARGO=… CONDA_LOCK=… CONDA_SOLVER=… GRYPE=… GITHUB_TOKEN=… cargo test --workspace -- --ignored`,
+2. **Native integration** (ignored by default): real Pixi, uv, npm, cargo,
+   conda-lock, Grype, pypi.org, crates.io, registry.npmjs.org and the GitHub
+   API, plus installs of the pinned uv, Rust toolchain, conda-lock and Node.js.
+   `PIXI=… UV=… NPM=… CARGO=… CONDA_LOCK=… CONDA_SOLVER=… GRYPE=… GITHUB_TOKEN=… cargo test --workspace -- --ignored`,
    and `PIXI=…` for the native Python tests.
 3. **CLI/Python parity** (`tests/python/test_parity.py`).
 

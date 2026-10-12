@@ -54,7 +54,13 @@ instead of being ignored. See the `depsmith_core::adapter` module docs.
 - `availability`: the registry of each ecosystem and any release-age policy,
   as data (`RegistryConfig`).
 - `pin`: an immutable replacement for a movable reference, such as the commit
-  of an action's release tag.
+  of an action's release tag; `accept_reference` lets an adapter resolve
+  `--accept` itself, as GitHub Actions does to move to a newer major.
+- `lock_graph`: the **lock graph** of the target's lock, from which the engine
+  names each changed package's **introducers**.
+- `local_projects`: the `pyproject.toml` files of local projects the target
+  installs from a path, which `init` checks for depsmith declared as a
+  dependency.
 - `inventory` and `prepare`: read a lock, and resolve a candidate.
 
 Suggestions and `--accept` are generic: the engine reads declarations, asks
@@ -105,6 +111,7 @@ adapter can speak the same contract over a subprocess bridge of JSON lines
 | `scm` | Data-only Git staging for SCM-derived versions |
 | `transaction` | Applying proposals: stale checks, locking, journal, recovery |
 | `scan`, `inventory` | Inventories, identities, Grype scanning and policy |
+| `graph` | Lock graphs, dependency paths and introducers |
 | `process` | Running backends: timeouts, process-tree cancellation, redaction |
 | `constraint`, `pep440`, `conda_version`, `cutoff`, `pypi` | Constraint acceptance, version ordering, release-age cutoffs and PyPI evidence |
 | `config` | `depsmith.toml` |
