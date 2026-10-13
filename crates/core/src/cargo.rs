@@ -464,7 +464,7 @@ impl Adapter for Cargo {
             tools: vec![ToolSpec {
                 name: "cargo".into(),
                 default: "cargo".into(),
-                tested_versions: vec!["1.98.1".into()],
+                tested_versions: vec!["1.99.0".into()],
 
                 downloads: crate::provision::pinned("cargo"),
             }],
