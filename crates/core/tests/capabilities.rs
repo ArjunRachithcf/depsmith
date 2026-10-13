@@ -122,6 +122,10 @@ fn builtin_adapters_declare_capabilities_and_tested_tools() {
     assert_eq!(tool.name, "pixi");
     assert!(tool.tested_versions.contains(&"0.80.0".to_string()));
 
+    let cargo = specs.iter().find(|s| s.manager == "cargo").unwrap();
+    assert_eq!(cargo.tools[0].name, "cargo");
+    assert_eq!(cargo.tools[0].tested_versions, ["1.99.0"]);
+
     let actions = specs
         .iter()
         .find(|s| s.manager == "github-actions")
