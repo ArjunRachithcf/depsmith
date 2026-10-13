@@ -725,7 +725,7 @@ const RUSTUP: &[(&str, &str, &str, &str)] = &[
 ];
 const RUSTUP_VERSION: &str = "1.29.1";
 /// The toolchain `depsmith init` installs for cargo: its tested version.
-const RUST_TOOLCHAIN: &str = "1.98.1";
+const RUST_TOOLCHAIN: &str = "1.99.0";
 
 /// cargo through a pinned rustup-init, which installs the pinned toolchain
 /// (minimal profile, verified by rustup) into the install directory without
