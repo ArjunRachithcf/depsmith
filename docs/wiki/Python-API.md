@@ -165,7 +165,7 @@ The exact new content of one file in a proposal.
 - `after`: Content that applying the proposal writes.
 - `diff`: Unified diff from `before` to `after`.
 
-### `Finding(id: str, namespace: str, package: str, version: str, severity: str, evidence: Any, identity: str, applicability: str, artifact: str, suppression: Suppression | None)`
+### `Finding(id: str, namespace: str, package: str, version: str, severity: str, evidence: Any, identity: str, applicability: str, artifact: str, suppression: Suppression | None, fix_versions: tuple[str, ...], fix_state: str)`
 
 One advisory matched to one inventory package.
 
@@ -181,6 +181,8 @@ One advisory matched to one inventory package.
 - `applicability`: `upstream`, or why applicability to this build is unknown.
 - `artifact`: The resolved artifact.
 - `suppression`: The suppression covering this finding, if any.
+- `fix_versions`: The releases the advisory names as fixed.
+- `fix_state`: `fixed`, `not-fixed`, `wont-fix` or `unknown`.
 
 ### `IdentityMapping(ecosystem: str, name: str, purl: str, evidence: str)`
 

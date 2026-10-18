@@ -51,6 +51,33 @@ pub struct Suppression {
     #[serde(default)]
     pub expires: Option<String>,
 }
+/// Whether an advisory names releases that resolve it, as the scanner
+/// reports it (Grype's `vulnerability.fix.state`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FixState {
+    /// The advisory names at least one fixed release.
+    Fixed,
+    /// No release resolves it yet.
+    NotFixed,
+    /// The maintainers will not fix it.
+    WontFix,
+    /// The scanner reports no state, or one depsmith does not know.
+    #[default]
+    Unknown,
+}
+
+impl FixState {
+    fn parse(state: &str) -> Self {
+        match state {
+            "fixed" => Self::Fixed,
+            "not-fixed" => Self::NotFixed,
+            "wont-fix" => Self::WontFix,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// One advisory matched to one inventory package.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
@@ -66,6 +93,12 @@ pub struct Finding {
     pub severity: String,
     /// The scanner's match details, kept verbatim.
     pub evidence: Value,
+    /// The releases the advisory names as fixed, as the scanner lists them.
+    #[serde(default)]
+    pub fix_versions: Vec<String>,
+    /// Whether the advisory is fixed, not fixed, won't be fixed, or unknown.
+    #[serde(default)]
+    pub fix_state: FixState,
     /// Package identity `ecosystem:name:platform`, used to compare baseline and
     /// candidate findings and to scope suppressions.
     pub identity: String,
@@ -210,6 +243,21 @@ fn findings(output: &str, sbom: &Value) -> Result<Vec<Finding>> {
                 package: package.name.clone(),
                 version: package.version,
                 evidence: m["matchDetails"].clone(),
+                fix_versions: m
+                    .pointer("/vulnerability/fix/versions")
+                    .and_then(Value::as_array)
+                    .map(|versions| {
+                        versions
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                fix_state: m
+                    .pointer("/vulnerability/fix/state")
+                    .and_then(Value::as_str)
+                    .map_or(FixState::Unknown, FixState::parse),
                 applicability: crate::ecosystem::build_caveat(&package.ecosystem)
                     .unwrap_or("upstream")
                     .into(),

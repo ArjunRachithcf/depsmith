@@ -257,6 +257,8 @@ class Finding:
         applicability: ``upstream``, or why applicability to this build is unknown.
         artifact: The resolved artifact.
         suppression: The suppression covering this finding, if any.
+        fix_versions: The releases the advisory names as fixed.
+        fix_state: ``fixed``, ``not-fixed``, ``wont-fix`` or ``unknown``.
     """
 
     id: str
@@ -269,6 +271,8 @@ class Finding:
     applicability: str
     artifact: str
     suppression: Suppression | None
+    fix_versions: tuple[str, ...] = ()
+    fix_state: str = "unknown"
 
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> Finding:
@@ -277,6 +281,7 @@ class Finding:
             **{
                 **data,
                 "suppression": Suppression(**suppression) if suppression else None,
+                "fix_versions": tuple(data.get("fix_versions", ())),
             }
         )
 

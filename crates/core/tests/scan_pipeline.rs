@@ -1,7 +1,7 @@
 //! Offline scan pipeline tests against a scripted stand-in for Grype.
 #![cfg(unix)]
 use depsmith_core::{
-    scan::{scan_pair, IdentityMapping, Suppression},
+    scan::{scan_pair, FixState, IdentityMapping, Suppression},
     Error, Package, UpdateOptions,
 };
 use serde_json::json;
@@ -124,6 +124,48 @@ fn baseline_comparison_classifies_findings() {
     assert_eq!(ids(&report.remaining), ["GHSA-stays"]);
     assert_eq!(ids(&report.introduced), ["GHSA-new"]);
     assert_eq!(ids(&report.findings), ["GHSA-new", "GHSA-stays"]);
+}
+
+#[test]
+fn findings_carry_the_fixed_releases_the_scanner_reports() {
+    let with_fix = |id: &str, fix: serde_json::Value| {
+        let mut row = finding("pkg:pypi/urllib3@1.26.5", id, "High");
+        row["vulnerability"]["fix"] = fix;
+        row
+    };
+    let (_dir, grype) = fake_grype(
+        json!([]),
+        json!([
+            with_fix(
+                "GHSA-fixed",
+                json!({"versions": ["1.26.18", "2.0.7"], "state": "fixed"})
+            ),
+            with_fix("GHSA-open", json!({"versions": [], "state": "not-fixed"})),
+            with_fix("GHSA-wont", json!({"versions": [], "state": "wont-fix"})),
+            with_fix(
+                "GHSA-odd",
+                json!({"versions": [], "state": "something-new"})
+            ),
+            finding("pkg:pypi/urllib3@1.26.5", "GHSA-silent", "High"),
+        ]),
+        0,
+    );
+    let report = scan_pair("t", None, &[urllib3("1.26.5")], &options(&grype), cwd()).unwrap();
+    let fix = |id: &str| {
+        let f = report.findings.iter().find(|f| f.id == id).unwrap();
+        (f.fix_state, f.fix_versions.clone())
+    };
+    assert_eq!(
+        fix("GHSA-fixed"),
+        (FixState::Fixed, vec!["1.26.18".into(), "2.0.7".into()])
+    );
+    assert_eq!(fix("GHSA-open"), (FixState::NotFixed, vec![]));
+    assert_eq!(fix("GHSA-wont"), (FixState::WontFix, vec![]));
+    // A state the scanner adds later, or no fix record at all, is unknown.
+    assert_eq!(fix("GHSA-odd"), (FixState::Unknown, vec![]));
+    assert_eq!(fix("GHSA-silent"), (FixState::Unknown, vec![]));
+    let json = serde_json::to_value(&report.findings[0]).unwrap();
+    assert!(json["fix_state"].is_string() && json["fix_versions"].is_array());
 }
 
 #[test]
