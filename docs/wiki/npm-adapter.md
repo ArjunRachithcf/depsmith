@@ -99,3 +99,11 @@ that Node first on `PATH`.
 Packages from registry.npmjs.org are scanned as `pkg:npm/NAME` (scoped names
 as `pkg:npm/%40scope/name`). Git and other sources stay unassessed, and
 workspace members are the project itself.
+
+## Dependency introducers
+
+A changed package that the target does not declare is reported with the direct
+dependencies that pull it in. The graph comes from `package-lock.json`, which
+records each package's dependencies with their ranges. Where a name is
+installed in several `node_modules` folders, each dependency follows npm's
+resolution to the nearest copy, from the package's own folder up to the root.
