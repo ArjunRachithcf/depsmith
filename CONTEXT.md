@@ -232,3 +232,37 @@ _Avoid_: Ignore, allowlist entry
 **Policy**:
 A configured rule that rejects a proposal because of its findings, such as a severity threshold.
 _Avoid_: Gate (for the configured rule)
+
+## Update impact
+
+**Update impact**:
+What a proposal's dependency changes reach in a target's own code and tests: usage sites, selected tests, full-run reasons and untested paths.
+_Avoid_: Blast radius, affected analysis
+
+**Usage site**:
+A first-party file that imports a changed package, or a package that depends on it, or names it in source.
+_Avoid_: Call site (impact is per package, not per function)
+
+**Selected test**:
+A test file chosen because the first-party import graph connects it to a usage site, reported with the chain that justifies it.
+_Avoid_: Affected test, impacted test
+
+**Full run**:
+The decision that every test must run because a change reaches what configures all of them, such as a test runner, a setup file or the interpreter; it always names its reason.
+_Avoid_: Fallback
+
+**Untested path**:
+An affected non-test file that no test imports, even transitively, with the dependency path from it to the changed package.
+_Avoid_: Coverage gap (coverage measures execution, not imports)
+
+**Exposed code**:
+Code that clients reach directly, such as entry points, web routes, CLI commands and package exports, detected heuristically and adjustable with globs.
+_Avoid_: Public API (only one kind of it), client-facing
+
+**Reachability verdict**:
+Whether a target's code reaches a package: reached, reached only as a tool, by name or as a runtime, or not reached; it annotates findings and never suppresses them.
+_Avoid_: Used, exploitable
+
+**Static verification**:
+A check, without running the target's code, that every reference on an untested path still resolves with a compatible call shape against the candidate's installed packages: verified, partial, broken or unchecked.
+_Avoid_: Smoke test, type check

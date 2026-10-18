@@ -8,7 +8,7 @@ Build a Rust package updater with a consistent local and CI workflow, plus a typ
 
 Release 0.1.0 is a public alpha on PyPI plus a draft GitHub release with standalone executables. The conda-forge recipe is prepared and validated in CI; feedstock submission follows the release and does not block it.
 
-The broader roadmap includes vcpkg, prek/pre-commit, Jenkins plugins, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
+The broader roadmap includes vcpkg, prek/pre-commit, Jenkins plugins, dependency-update impact analysis (ADR 0006), and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
 
 ## 2. Architecture and public interfaces
 
@@ -159,7 +159,7 @@ The **conda** and **uv** adapters ship in this release (§8). Conda locking uses
 
 **C. Release.** Tag `v0.1.0` on `main`, run the Release workflow without publishing, review the artifacts, then publish only with explicit approval. PyPI trusted publishing and the `pypi`/`release` environments are configured beforehand. Submit the conda-forge feedstock afterwards.
 
-**Later (0.2 and beyond).** Configured post-install project checks, interactive per-suggestion acceptance prompts, shared scanner database downloads, and an out-of-tree adapter bridge.
+**Later (0.2 and beyond).** Configured post-install project checks (which can run the tests update impact selects, ADR 0006), interactive per-suggestion acceptance prompts, shared scanner database downloads, and an out-of-tree adapter bridge.
 
 ## 7. Documentation automation
 
@@ -200,3 +200,8 @@ Designed, not built (status: proposed):
   - Adapters whose tool can target an exact version (Cargo, uv) do so. The others move the package to the newest release its constraints allow, say so, and report a blocked fix when that falls short.
   - Packages that move alongside are listed, and the scan verifies the result.
   - Blocked fixes become suggestions that cite the dependency path. Constraints change only through `--accept`.
+- [ADR 0006](adr/0006-update-impact.md): update impact.
+  - `--impact` and `depsmith impact` walk the lock graph (ADR 0005) in reverse to the target's usage sites, then through its import graph to the tests that can break, as the test runners' own configs define them.
+  - Each full run names its reason: a test runner or setup file changed, a package is referenced by name in a config, or the interpreter changed.
+  - Affected code that no test reaches is listed, exposed code is marked, and `--verify` checks the path statically against the candidate environment. Policies can reject a proposal on untested exposed code or a broken reference.
+  - Changed packages, and packages with findings, get a reachability verdict that annotates ADR 0004's findings without suppressing them. uv, Pixi and npm come first.
