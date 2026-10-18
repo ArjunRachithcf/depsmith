@@ -301,6 +301,78 @@ pub fn severity_rank(severity: &str) -> Option<u8> {
         _ => None,
     }
 }
+/// The actionable findings among `findings`, in order: those whose advisory
+/// names a fixed release (and is not marked not-fixed or won't-fix), that no
+/// suppression covers, and whose severity is at least `min_severity` (every
+/// severity when `None`). A severity depsmith does not know is never
+/// filtered out. Suppressions are read from each finding, as
+/// [`scan_pair`] applies them with their scope and expiry.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] for an unknown `min_severity`.
+pub fn actionable<'a>(
+    findings: &'a [Finding],
+    min_severity: Option<&str>,
+) -> Result<Vec<&'a Finding>> {
+    let rank = min_severity
+        .map(|level| {
+            severity_rank(level).ok_or_else(|| {
+                Error::Invalid(
+                    "minimum severity must be negligible, low, medium, high or critical".into(),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(findings
+        .iter()
+        .filter(|f| {
+            !f.fix_versions.is_empty()
+                && !matches!(f.fix_state, FixState::NotFixed | FixState::WontFix)
+        })
+        .filter(|f| f.suppression.is_none())
+        .filter(|f| rank.is_none_or(|rank| severity_rank(&f.severity).is_none_or(|s| s >= rank)))
+        .collect())
+}
+
+/// The fix version a security update aims `finding` at, as `aim` asks: the
+/// lowest fixed release above the locked version (`lowest`), the newest
+/// `available` release in that fix's major.minor line (`patch`), or the
+/// newest `available` release at or above it (`newest`). `available` holds
+/// the releases the declared constraints allow; when none reaches the lowest
+/// fix, that fix is returned, so the caller can report the fix as blocked.
+/// Versions are ordered by the finding's ecosystem. `None` when no fixed
+/// release is above the locked version.
+pub fn fix_version(
+    finding: &Finding,
+    aim: crate::SecurityTarget,
+    available: &[String],
+) -> Option<String> {
+    use std::cmp::Ordering;
+    let ecosystem = finding.identity.split(':').next().unwrap_or_default();
+    let compare = |left: &str, right: &str| match crate::ecosystem::scheme(ecosystem) {
+        Some(scheme) => scheme.compare(left, right),
+        None => left.cmp(right),
+    };
+    let lowest = finding
+        .fix_versions
+        .iter()
+        .filter(|v| compare(v, &finding.version) == Ordering::Greater)
+        .min_by(|a, b| compare(a, b))?;
+    fn line(version: &str) -> Vec<&str> {
+        version.split('.').take(2).collect()
+    }
+    let newest = available
+        .iter()
+        .filter(|v| compare(v, lowest) != Ordering::Less)
+        .filter(|v| aim != crate::SecurityTarget::Patch || line(v) == line(lowest))
+        .max_by(|a, b| compare(a, b));
+    match aim {
+        crate::SecurityTarget::Lowest => Some(lowest.clone()),
+        _ => Some(newest.unwrap_or(lowest).clone()),
+    }
+}
+
 impl Suppression {
     pub(crate) fn validate(&self) -> Result<()> {
         let invalid = |why: &str| Err(Error::Invalid(format!("suppression {:?}: {why}", self.id)));

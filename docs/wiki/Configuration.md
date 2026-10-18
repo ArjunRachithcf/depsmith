@@ -61,3 +61,15 @@ cutoff (`exclude-newer`) in the manifest instead; depsmith respects it (see
 Identity mappings and suppressions are configured as
 `[[options.identity_mappings]]` and `[[options.suppressions]]`; see
 [Vulnerability scanning](Vulnerability-scanning).
+
+Security updates act on findings of at least `min_severity` (every severity
+when unset) and aim each vulnerable package at the fixed release
+`security_target` names: `lowest` (the default, the lowest fix above the
+locked version), `patch` (the newest release in that fix's line) or `newest`
+(the newest the constraints allow):
+
+```toml
+[options]
+min_severity = "medium"
+security_target = "patch"
+```

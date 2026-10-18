@@ -85,6 +85,25 @@ pub struct UpdateOptions {
     pub identity_mappings: Vec<crate::scan::IdentityMapping>,
     /// Scoped, documented suppressions applied to policy gates.
     pub suppressions: Vec<crate::scan::Suppression>,
+    /// Lowest severity a security update acts on: `negligible`, `low`,
+    /// `medium`, `high` or `critical`; every severity when unset.
+    pub min_severity: Option<String>,
+    /// Which fixed release a security update aims each vulnerable package at.
+    pub security_target: SecurityTarget,
+}
+
+/// Which release a security update aims a vulnerable package at, among the
+/// releases its advisory names as fixed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecurityTarget {
+    /// The lowest fixed release above the locked version.
+    #[default]
+    Lowest,
+    /// The newest release in the lowest fix's release line.
+    Patch,
+    /// The newest release the constraints allow.
+    Newest,
 }
 impl Default for UpdateOptions {
     fn default() -> Self {
@@ -105,6 +124,8 @@ impl Default for UpdateOptions {
             timeout_seconds: 300,
             identity_mappings: vec![],
             suppressions: vec![],
+            min_severity: None,
+            security_target: SecurityTarget::Lowest,
         }
     }
 }
@@ -342,6 +363,15 @@ impl UpdateOptions {
                     "a vulnerability gate requires scanning".into(),
                 ));
             }
+        }
+        if self
+            .min_severity
+            .as_deref()
+            .is_some_and(|level| crate::scan::severity_rank(level).is_none())
+        {
+            return Err(Error::Invalid(
+                "minimum severity must be negligible, low, medium, high or critical".into(),
+            ));
         }
         if self.only_new && self.fail_on.is_none() {
             return Err(Error::Invalid("only_new requires fail_on".into()));

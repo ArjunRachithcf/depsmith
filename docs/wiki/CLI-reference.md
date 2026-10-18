@@ -53,6 +53,10 @@ Options:
           Reject the proposal on findings of at least this severity (negligible, low, medium, high, critical); requires --scan
       --only-new
           Apply --fail-on only to findings the update introduces
+      --min-severity <MIN_SEVERITY>
+          Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
+      --security-target <SECURITY_TARGET>
+          Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -105,6 +109,10 @@ Options:
           Reject the proposal on findings of at least this severity (negligible, low, medium, high, critical); requires --scan
       --only-new
           Apply --fail-on only to findings the update introduces
+      --min-severity <MIN_SEVERITY>
+          Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
+      --security-target <SECURITY_TARGET>
+          Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -155,6 +163,10 @@ Options:
           Reject the proposal on findings of at least this severity (negligible, low, medium, high, critical); requires --scan
       --only-new
           Apply --fail-on only to findings the update introduces
+      --min-severity <MIN_SEVERITY>
+          Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
+      --security-target <SECURITY_TARGET>
+          Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -205,6 +217,10 @@ Options:
           Reject the proposal on findings of at least this severity (negligible, low, medium, high, critical); requires --scan
       --only-new
           Apply --fail-on only to findings the update introduces
+      --min-severity <MIN_SEVERITY>
+          Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
+      --security-target <SECURITY_TARGET>
+          Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -261,6 +277,10 @@ Options:
           Reject the proposal on findings of at least this severity (negligible, low, medium, high, critical); requires --scan
       --only-new
           Apply --fail-on only to findings the update introduces
+      --min-severity <MIN_SEVERITY>
+          Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
+      --security-target <SECURITY_TARGET>
+          Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -311,6 +331,10 @@ Options:
           Reject the proposal on findings of at least this severity (negligible, low, medium, high, critical); requires --scan
       --only-new
           Apply --fail-on only to findings the update introduces
+      --min-severity <MIN_SEVERITY>
+          Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
+      --security-target <SECURITY_TARGET>
+          Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -361,6 +385,10 @@ Options:
           Reject the proposal on findings of at least this severity (negligible, low, medium, high, critical); requires --scan
       --only-new
           Apply --fail-on only to findings the update introduces
+      --min-severity <MIN_SEVERITY>
+          Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
+      --security-target <SECURITY_TARGET>
+          Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>

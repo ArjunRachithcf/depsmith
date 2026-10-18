@@ -38,6 +38,29 @@ fn noninteractive_ambiguous_selection_returns_configuration_error() {
     assert!(result["error"].as_str().unwrap().contains("target"));
 }
 
+#[test]
+fn security_update_options_are_validated_before_any_work() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("pixi.toml"), "[workspace]\nname='demo'\n").unwrap();
+    for (flag, value, message) in [
+        ("--min-severity", "severe", "minimum severity"),
+        (
+            "--security-target",
+            "latest",
+            "expected one of `lowest`, `patch`, `newest`",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_depsmith"))
+            .args(["check", "--root", root.path().to_str().unwrap()])
+            .args(["--target", "pixi:pixi.toml", "--json", flag, value])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{flag}");
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let error = result["error"].as_str().unwrap();
+        assert!(error.contains(message), "{error}");
+    }
+}
 #[cfg(unix)]
 #[test]
 fn backend_cannot_inherit_repository_overrides_but_keeps_git_auth() {

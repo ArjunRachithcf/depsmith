@@ -61,6 +61,15 @@ struct Cli {
     /// Apply --fail-on only to findings the update introduces.
     #[arg(long, global = true)]
     only_new: bool,
+    /// Act only on findings of at least this severity in a security update
+    /// (negligible, low, medium, high, critical) [default: every severity].
+    #[arg(long, global = true)]
+    min_severity: Option<String>,
+    /// Which fixed release a security update aims at: lowest (the lowest fix
+    /// above the locked version), patch (the newest release in that fix's
+    /// line) or newest (the newest the constraints allow) [default: lowest].
+    #[arg(long, global = true)]
+    security_target: Option<String>,
     /// Minimum release age in days; rejected where the package manager cannot enforce it.
     #[arg(long, global = true)]
     cooldown_days: Option<u32>,
@@ -150,6 +159,8 @@ fn overrides(cli: &Cli) -> Result<Value> {
         ("pixi", &cli.pixi),
         ("grype", &cli.grype),
         ("fail_on", &cli.fail_on),
+        ("min_severity", &cli.min_severity),
+        ("security_target", &cli.security_target),
     ] {
         if let Some(value) = value {
             values.insert(key.into(), json!(value));

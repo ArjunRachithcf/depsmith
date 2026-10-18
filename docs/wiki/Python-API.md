@@ -334,7 +334,7 @@ A reference left unchanged because it could not be resolved.
 - `reference`: The reference as written, such as `org/repo@main`.
 - `reason`: Why no release could be matched.
 
-### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None)`
+### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None, min_severity: str | None, security_target: str | None)`
 
 Options for preparing, scanning and applying updates.
 
@@ -358,6 +358,8 @@ explicit values override them.
 - `timeout_seconds`: Time limit for each backend process.
 - `identity_mappings`: Reviewed identity mappings used when scanning.
 - `suppressions`: Scoped, documented suppressions.
+- `min_severity`: Lowest severity a security update acts on; every severity when unset.
+- `security_target`: Fixed release a security update aims at: `lowest`, `patch` or `newest`.
 
 ## Exceptions
 

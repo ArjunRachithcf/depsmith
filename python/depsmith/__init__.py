@@ -108,6 +108,10 @@ class UpdateOptions:
         timeout_seconds: Time limit for each backend process.
         identity_mappings: Reviewed identity mappings used when scanning.
         suppressions: Scoped, documented suppressions.
+        min_severity: Lowest severity a security update acts on; every
+            severity when unset.
+        security_target: Fixed release a security update aims at:
+            ``lowest``, ``patch`` or ``newest``.
     """
 
     packages: Sequence[str] | None = None
@@ -126,6 +130,8 @@ class UpdateOptions:
     timeout_seconds: int | None = None
     identity_mappings: Sequence[IdentityMapping] | None = None
     suppressions: Sequence[Suppression] | None = None
+    min_severity: str | None = None
+    security_target: str | None = None
 
     def _json(self) -> str:
         return json.dumps(
