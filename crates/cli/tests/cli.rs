@@ -374,3 +374,76 @@ fn init_saves_the_selection_and_reports_what_was_not_selected() {
     );
     assert_eq!(fs::read_to_string(&config).unwrap(), text);
 }
+#[cfg(unix)]
+#[test]
+fn security_updates_check_then_fix_only_the_vulnerable_package() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempdir().unwrap();
+    let tools = tempdir().unwrap();
+    let lock = |idna: &str| {
+        let package = |name: &str, version: &str| {
+            format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\nsource = {{ registry = \"https://pypi.org/simple\" }}\nsdist = {{ url = \"https://files.pythonhosted.org/{name}-{version}.tar.gz\" }}\n\n")
+        };
+        format!(
+            "version = 1\nrevision = 3\n\n[[package]]\nname = \"p\"\nversion = \"0.1.0\"\nsource = {{ virtual = \".\" }}\n\n{}{}",
+            package("six", "1.17.0"),
+            package("idna", idna)
+        )
+    };
+    fs::write(
+        root.path().join("pyproject.toml"),
+        "[project]\nname = \"p\"\nversion = \"0.1.0\"\ndependencies = [\"six\", \"idna\"]\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("uv.lock"), lock("3.6")).unwrap();
+    let dir = tools.path();
+    fs::write(dir.join("next.lock"), lock("3.7")).unwrap();
+    let script = |name: &str, body: String| {
+        let path = dir.join(name);
+        fs::write(&path, body).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let d = dir.display();
+    let uv = script(
+        "uv",
+        format!("#!/bin/sh\ncase \"$1\" in\n  --version) echo 'uv 0.12.15';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n"),
+    );
+    let finding = r#"{"artifact":{"purl":"pkg:pypi/idna@3.6"},"matchDetails":[],"vulnerability":{"id":"GHSA-idna","namespace":"github:language:python","severity":"Medium","fix":{"versions":["3.7"],"state":"fixed"}}}"#;
+    let grype = script(
+        "grype",
+        format!("#!/bin/sh\ncase \"$1\" in\n  db) [ \"$2\" = status ] && echo '{{}}'; exit 0;;\n  sbom:*) if grep -q 'pkg:pypi/idna@3.6' \"${{1#sbom:}}\"; then echo '{{\"matches\":[{finding}]}}'; else echo '{{\"matches\":[]}}'; fi; exit 0;;\nesac\nexit 2\n"),
+    );
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_depsmith"))
+            .args(args)
+            .args(["--root", root.path().to_str().unwrap(), "--json"])
+            .args(["--target", "uv:pyproject.toml", "--non-interactive"])
+            .args([
+                "--tool",
+                &format!("uv={uv}"),
+                "--tool",
+                &format!("grype={grype}"),
+            ])
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.code(), report)
+    };
+    let (code, report) = run(&["check", "--security-only"]);
+    assert_eq!(code, Some(1), "{report}");
+    let fix = &report["proposal"]["security"][0];
+    assert_eq!(fix["advisory"], "GHSA-idna");
+    assert_eq!(fix["fix_version"], "3.7");
+    assert_eq!(fix["outcome"], "fixed");
+    assert!(fs::read_to_string(root.path().join("uv.lock"))
+        .unwrap()
+        .contains("version = \"3.6\""));
+    let (code, report) = run(&["fix", "--apply", "--yes"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert!(fs::read_to_string(root.path().join("uv.lock"))
+        .unwrap()
+        .contains("version = \"3.7\""));
+    let locks = fs::read_to_string(dir.join("locks")).unwrap();
+    assert!(locks.lines().all(|l| !l.contains("six")), "{locks}");
+}

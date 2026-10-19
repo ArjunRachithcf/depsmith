@@ -326,13 +326,23 @@ pub fn actionable<'a>(
         .transpose()?;
     Ok(findings
         .iter()
-        .filter(|f| {
-            !f.fix_versions.is_empty()
-                && !matches!(f.fix_state, FixState::NotFixed | FixState::WontFix)
-        })
-        .filter(|f| f.suppression.is_none())
-        .filter(|f| rank.is_none_or(|rank| severity_rank(&f.severity).is_none_or(|s| s >= rank)))
+        .filter(|f| f.fixable() && f.suppression.is_none() && f.meets(rank))
         .collect())
+}
+
+impl Finding {
+    /// Whether the advisory names a fixed release and is not marked as not
+    /// fixed or won't be fixed.
+    pub(crate) fn fixable(&self) -> bool {
+        !self.fix_versions.is_empty()
+            && !matches!(self.fix_state, FixState::NotFixed | FixState::WontFix)
+    }
+
+    /// Whether the severity is at least `rank` (any severity when `None`);
+    /// a severity depsmith does not know always is.
+    pub(crate) fn meets(&self, rank: Option<u8>) -> bool {
+        rank.is_none_or(|rank| severity_rank(&self.severity).is_none_or(|s| s >= rank))
+    }
 }
 
 /// The fix version a security update aims `finding` at, as `aim` asks: the

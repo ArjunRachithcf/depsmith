@@ -1,0 +1,367 @@
+//! Security updates (ADR 0004) through the engine, with stand-ins for uv
+//! and Grype: only packages with actionable findings move, each toward its
+//! fix version, and the candidate scan decides what was fixed.
+#![cfg(unix)]
+use depsmith_core::{
+    constraints::RegistryConfig, uv::Uv, Engine, Error, FixOutcome, Proposal, SecurityFix,
+    SecurityTarget, UpdateOptions,
+};
+use serde_json::json;
+use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt};
+
+const PYPROJECT: &str = "[project]\nname = \"p\"\nversion = \"0.1.0\"\ndependencies = [\n    \"six==1.15.0\",\n    \"idna\",\n]\n";
+
+/// A uv.lock with the given versions; `urllib3` is only a dependency of idna
+/// here, so it is transitive.
+fn lock(six: &str, idna: &str, urllib3: &str) -> String {
+    let package = |name: &str, version: &str| {
+        format!(
+            "[[package]]\nname = \"{name}\"\nversion = \"{version}\"\nsource = {{ registry = \"https://pypi.org/simple\" }}\nsdist = {{ url = \"https://files.pythonhosted.org/{name}-{version}.tar.gz\" }}\n\n"
+        )
+    };
+    format!(
+        "version = 1\nrevision = 3\n\n[[package]]\nname = \"p\"\nversion = \"0.1.0\"\nsource = {{ virtual = \".\" }}\n\n{}{}{}",
+        package("six", six),
+        package("idna", idna),
+        package("urllib3", urllib3)
+    )
+}
+
+/// One Grype match for `name@version`, fixed in `fixes`.
+fn advisory(
+    id: &str,
+    name: &str,
+    version: &str,
+    severity: &str,
+    fixes: &[&str],
+) -> (String, String) {
+    let state = if fixes.is_empty() {
+        "not-fixed"
+    } else {
+        "fixed"
+    };
+    let purl = format!("pkg:pypi/{name}@{version}");
+    let row = json!({"artifact": {"purl": purl}, "matchDetails": [],
+        "vulnerability": {"id": id, "namespace": "github:language:python", "severity": severity,
+            "fix": {"versions": fixes, "state": state}}});
+    (purl, row.to_string())
+}
+
+struct Run {
+    result: depsmith_core::Result<Proposal>,
+    /// The arguments of every uv `lock` invocation, one line each.
+    locks: Vec<String>,
+}
+
+/// Prepare a security update of a uv target whose lock is `baseline`, with
+/// a uv that writes `next` and a Grype that reports `advisories` for any
+/// scanned package they match.
+fn prepare(
+    baseline: &str,
+    next: &str,
+    advisories: &[(String, String)],
+    options: UpdateOptions,
+) -> Run {
+    let root = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("pyproject.toml"), PYPROJECT).unwrap();
+    fs::write(root.path().join("uv.lock"), baseline).unwrap();
+    let dir = tools.path();
+    fs::write(dir.join("next.lock"), next).unwrap();
+    let rules: String = advisories
+        .iter()
+        .map(|(purl, row)| format!("{purl}\t{row}\n"))
+        .collect();
+    fs::write(dir.join("rules"), rules).unwrap();
+    let script = |name: &str, body: String| {
+        let path = dir.join(name);
+        fs::write(&path, body).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let uv = script(
+        "uv",
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'uv 0.12.15';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n",
+            d = dir.display()
+        ),
+    );
+    let grype = script(
+        "grype",
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  db) [ \"$2\" = status ] && echo '{{\"built\":\"2026-10-01T00:00:00Z\"}}'; exit 0;;\n  sbom:*) f=\"${{1#sbom:}}\"; printf '{{\"matches\":['; sep=''\n    while IFS='\t' read -r purl row; do\n      if grep -q \"\\\"purl\\\":\\\"$purl\\\"\" \"$f\"; then printf '%s%s' \"$sep\" \"$row\"; sep=','; fi\n    done < '{d}/rules'\n    printf ']}}\\n'; exit 0;;\nesac\nexit 2\n",
+            d = dir.display()
+        ),
+    );
+    let options = UpdateOptions {
+        tools: BTreeMap::from([("uv".into(), uv), ("grype".into(), grype)]),
+        security_only: true,
+        ..options
+    };
+    // An offline registry: availability evidence is not under test.
+    let registry = RegistryConfig::Fixture {
+        releases: BTreeMap::new(),
+        failing: vec![],
+    };
+    let uv = Uv {
+        registry: Some(registry),
+    };
+    let result = Engine::new(vec![Box::new(uv)]).prepare(
+        root.path(),
+        &["uv:pyproject.toml".into()],
+        options,
+    );
+    let locks = fs::read_to_string(dir.join("locks"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    Run { result, locks }
+}
+
+fn fix<'a>(proposal: &'a Proposal, advisory: &str) -> &'a SecurityFix {
+    proposal
+        .security
+        .iter()
+        .find(|f| f.advisory == advisory)
+        .unwrap_or_else(|| panic!("no {advisory} in {:?}", proposal.security))
+}
+
+#[test]
+fn only_vulnerable_direct_packages_move_to_their_lowest_fix() {
+    let run = prepare(
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[advisory(
+            "GHSA-idna",
+            "idna",
+            "3.6",
+            "Medium",
+            &["3.7", "3.8"],
+        )],
+        UpdateOptions::default(),
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    // Only the vulnerable package is asked for, at its exact fix version.
+    let first = &run.locks[0];
+    assert!(first.contains("--upgrade-package idna==3.7"), "{first}");
+    assert!(!first.contains("six"), "{first}");
+    let idna = fix(&proposal, "GHSA-idna");
+    assert_eq!(idna.outcome, FixOutcome::Fixed);
+    assert_eq!(idna.fix_version.as_deref(), Some("3.7"));
+    assert_eq!(idna.version, "3.6");
+    assert_eq!(proposal.exit_code(true), 1);
+    assert_eq!(proposal.scans[0].resolved.len(), 1);
+}
+
+#[test]
+fn a_constraint_below_the_fix_is_a_blocked_fix_naming_its_declaration() {
+    let run = prepare(
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[advisory("GHSA-six", "six", "1.15.0", "High", &["1.16.0"])],
+        UpdateOptions::default(),
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    // The declaration excludes the fix, so the tool is not asked for it.
+    assert!(run.locks.is_empty(), "{:?}", run.locks);
+    let six = fix(&proposal, "GHSA-six");
+    assert_eq!(six.outcome, FixOutcome::Blocked);
+    let suggestion = proposal
+        .suggestions
+        .iter()
+        .find(|s| s.package == "six" && s.reason.contains("GHSA-six"))
+        .expect("a blocked-fix suggestion");
+    assert_eq!(suggestion.requirement, "==1.15.0");
+    assert!(
+        suggestion.reason.contains("GHSA-six")
+            && suggestion.reason.contains("1.16.0")
+            && suggestion.reason.contains("--accept six="),
+        "{}",
+        suggestion.reason
+    );
+    assert!(suggestion.evidence.iter().any(|e| e.contains("GHSA-six")));
+}
+
+#[test]
+fn unfixable_and_transitive_findings_are_reported_without_moving_anything() {
+    let run = prepare(
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[
+            advisory("GHSA-open", "idna", "3.7", "High", &[]),
+            advisory("GHSA-nested", "urllib3", "2.0.0", "High", &["2.0.7"]),
+        ],
+        UpdateOptions::default(),
+    );
+    let proposal = run.result.unwrap();
+    assert!(run.locks.is_empty(), "nothing to move: {:?}", run.locks);
+    assert!(proposal.changes.is_empty());
+    assert_eq!(fix(&proposal, "GHSA-open").outcome, FixOutcome::Unfixable);
+    let nested = fix(&proposal, "GHSA-nested");
+    assert_eq!(nested.outcome, FixOutcome::Blocked);
+    assert!(
+        nested.reason.contains("not a direct dependency"),
+        "{}",
+        nested.reason
+    );
+    // The baseline scan is still reported.
+    assert_eq!(proposal.scans.len(), 1);
+    assert_eq!(proposal.exit_code(true), 0);
+}
+
+#[test]
+fn findings_below_the_minimum_severity_are_left_alone() {
+    let run = prepare(
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[advisory("GHSA-idna", "idna", "3.6", "Low", &["3.7"])],
+        UpdateOptions {
+            min_severity: Some("medium".into()),
+            ..Default::default()
+        },
+    );
+    let proposal = run.result.unwrap();
+    assert!(run.locks.is_empty(), "{:?}", run.locks);
+    assert!(proposal.security.is_empty(), "{:?}", proposal.security);
+    assert!(proposal
+        .validation
+        .iter()
+        .any(|n| n.contains("no actionable findings")));
+}
+
+#[test]
+fn newest_moves_by_name_and_untargeted_moves_are_listed() {
+    let run = prepare(
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.10", "2.2.0"),
+        &[advisory("GHSA-idna", "idna", "3.6", "High", &["3.7"])],
+        UpdateOptions {
+            security_target: SecurityTarget::Newest,
+            ..Default::default()
+        },
+    );
+    let proposal = run.result.unwrap();
+    let first = &run.locks[0];
+    assert!(
+        first.contains("--upgrade-package idna") && !first.contains("idna=="),
+        "{first}"
+    );
+    assert_eq!(fix(&proposal, "GHSA-idna").outcome, FixOutcome::Fixed);
+    let note = proposal
+        .validation
+        .iter()
+        .find(|n| n.contains("moved without being targeted"))
+        .expect("untargeted moves are listed");
+    assert!(note.contains("urllib3 2.0.0 -> 2.2.0"), "{note}");
+}
+
+#[test]
+fn a_security_update_that_introduces_a_finding_fails() {
+    let run = prepare(
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[
+            advisory("GHSA-idna", "idna", "3.6", "High", &["3.7"]),
+            advisory("GHSA-new", "idna", "3.7", "Low", &["3.8"]),
+        ],
+        UpdateOptions::default(),
+    );
+    let proposal = run.result.unwrap();
+    assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.validation);
+    assert_eq!(proposal.failures[0].code, 4);
+    assert!(proposal.failures[0].message.contains("GHSA-new"));
+}
+
+#[test]
+fn security_updates_never_change_constraints_or_pick_packages() {
+    for options in [
+        UpdateOptions {
+            upgrade: true,
+            ..Default::default()
+        },
+        UpdateOptions {
+            packages: vec!["idna".into()],
+            ..Default::default()
+        },
+    ] {
+        let run = prepare(
+            &lock("1.15.0", "3.6", "2.0.0"),
+            &lock("1.15.0", "3.7", "2.0.0"),
+            &[],
+            options,
+        );
+        assert!(matches!(run.result, Err(Error::Invalid(_))));
+    }
+}
+
+#[test]
+fn accepting_a_requirement_that_admits_the_fix_lets_it_through() {
+    let run = prepare(
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &lock("1.16.0", "3.7", "2.0.0"),
+        &[advisory("GHSA-six", "six", "1.15.0", "High", &["1.16.0"])],
+        UpdateOptions {
+            accept: vec!["six===1.16.0".into()],
+            ..Default::default()
+        },
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert!(
+        run.locks[0].contains("--upgrade-package six==1.16.0"),
+        "{:?}",
+        run.locks
+    );
+    assert_eq!(fix(&proposal, "GHSA-six").outcome, FixOutcome::Fixed);
+    let manifest = proposal
+        .changes
+        .iter()
+        .find(|c| c.path.ends_with("pyproject.toml"))
+        .expect("the accepted requirement is written");
+    assert!(manifest.after.contains("six==1.16.0"), "{}", manifest.after);
+}
+
+#[test]
+fn policy_gates_still_apply_when_nothing_can_move() {
+    let run = prepare(
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[advisory("GHSA-open", "idna", "3.7", "High", &[])],
+        UpdateOptions {
+            fail_on: Some("high".into()),
+            ..Default::default()
+        },
+    );
+    let proposal = run.result.unwrap();
+    assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.validation);
+    assert_eq!(proposal.failures[0].code, 4);
+    assert_eq!(proposal.exit_code(true), 4);
+}
+
+#[test]
+fn a_suppressed_finding_the_update_introduces_does_not_fail_it() {
+    let run = prepare(
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[
+            advisory("GHSA-idna", "idna", "3.6", "High", &["3.7"]),
+            advisory("GHSA-new", "idna", "3.7", "Low", &["3.8"]),
+        ],
+        UpdateOptions {
+            suppressions: vec![depsmith_core::scan::Suppression {
+                id: "GHSA-new".into(),
+                package: Some("pypi:idna".into()),
+                target: None,
+                reason: "reviewed".into(),
+                expires: None,
+            }],
+            ..Default::default()
+        },
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(fix(&proposal, "GHSA-idna").outcome, FixOutcome::Fixed);
+}

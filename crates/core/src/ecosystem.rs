@@ -30,6 +30,11 @@ pub(crate) trait VersionScheme: Sync {
     fn pinned(&self, _requirement: &str) -> Option<bool> {
         None
     }
+    /// Whether `requirement` admits `version`; `None` when that cannot be
+    /// read. An empty requirement admits every version.
+    fn admits(&self, _requirement: &str, _version: &str) -> Option<bool> {
+        None
+    }
 }
 
 /// Whether a conda or PEP 440 requirement can exclude a newer release. Every `|`
@@ -51,6 +56,12 @@ impl VersionScheme for Conda {
     fn compare(&self, left: &str, right: &str) -> Ordering {
         crate::conda_version::compare(left, right)
     }
+    fn admits(&self, requirement: &str, version: &str) -> Option<bool> {
+        if requirement.trim().is_empty() {
+            return Some(true);
+        }
+        crate::conda_version::matches(requirement, version)
+    }
 }
 
 struct Pypi;
@@ -59,6 +70,12 @@ impl VersionScheme for Pypi {
     fn compare(&self, left: &str, right: &str) -> Ordering {
         use crate::pep440::Version;
         Version::parse(left).cmp(&Version::parse(right))
+    }
+    fn admits(&self, requirement: &str, version: &str) -> Option<bool> {
+        if requirement.trim().is_empty() {
+            return Some(true);
+        }
+        crate::pep440::satisfies(requirement, &crate::pep440::Version::parse(version)?)
     }
     fn check_explicit(&self, name: &str, requirement: &str) -> Result<()> {
         use crate::pep440::{satisfies, Version};
@@ -114,6 +131,13 @@ impl VersionScheme for CargoSemver {
             (Ok(left), Ok(right)) => left.cmp(&right),
             _ => left.cmp(right),
         }
+    }
+    fn admits(&self, requirement: &str, version: &str) -> Option<bool> {
+        if requirement.trim().is_empty() {
+            return Some(true);
+        }
+        let requirement = semver::VersionReq::parse(requirement).ok()?;
+        Some(requirement.matches(&semver::Version::parse(version).ok()?))
     }
     fn restyle(&self, requirement: &str, newest: &str) -> Option<String> {
         // Registries report full versions; pad shorter ones such as `2`.
@@ -176,6 +200,13 @@ impl VersionScheme for NpmSemver {
             (Ok(left), Ok(right)) => left.cmp(&right),
             _ => left.cmp(right),
         }
+    }
+    fn admits(&self, requirement: &str, version: &str) -> Option<bool> {
+        if requirement.trim().is_empty() {
+            return Some(true);
+        }
+        let range = nodejs_semver::Range::parse(requirement).ok()?;
+        Some(range.satisfies(&nodejs_semver::Version::parse(version).ok()?))
     }
     fn caps_newer(&self, requirement: &str) -> bool {
         let far = nodejs_semver::Version::parse("999999.0.0").expect("a valid version");
@@ -306,6 +337,21 @@ pub(crate) fn build_caveat(ecosystem: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requirements_admit_versions_by_each_scheme() {
+        let admits = |ecosystem: &str, requirement: &str, version: &str| {
+            scheme(ecosystem).unwrap().admits(requirement, version)
+        };
+        assert_eq!(admits("pypi", "==1.15.0", "1.16.0"), Some(false));
+        assert_eq!(admits("pypi", ">=1.15,<2", "1.16.0"), Some(true));
+        assert_eq!(admits("cargo", "1.0", "1.4.2"), Some(true));
+        assert_eq!(admits("cargo", "=1.0.3", "1.0.4"), Some(false));
+        assert_eq!(admits("npm", "~1.2.0", "1.3.0"), Some(false));
+        assert_eq!(admits("conda", ">=3.9,<3.11", "3.10.4"), Some(true));
+        assert_eq!(admits("conda", "", "9"), Some(true));
+        assert_eq!(admits("github-actions", "v4", "v5"), None);
+    }
 
     #[test]
     fn npm_ranges_cap_restyle_and_order_like_npm() {

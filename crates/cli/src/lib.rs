@@ -70,6 +70,10 @@ struct Cli {
     /// line) or newest (the newest the constraints allow) [default: lowest].
     #[arg(long, global = true)]
     security_target: Option<String>,
+    /// Prepare a security update: move only packages with actionable findings,
+    /// each toward its fix version (implies --scan; see `fix`).
+    #[arg(long, global = true)]
+    security_only: bool,
     /// Minimum release age in days; rejected where the package manager cannot enforce it.
     #[arg(long, global = true)]
     cooldown_days: Option<u32>,
@@ -108,6 +112,20 @@ enum Command {
     Check,
     /// Prepare a proposal, preview it, and apply it when confirmed.
     Update {
+        /// Apply the proposal (noninteractively also needs --yes).
+        #[arg(long)]
+        apply: bool,
+        /// Confirm applying without a prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Apply the successful targets even if others failed.
+        #[arg(long)]
+        allow_partial: bool,
+    },
+    /// A security update: `update --security-only`, which moves only packages
+    /// with actionable findings, each toward its fix version, and reports
+    /// blocked fixes as suggestions.
+    Fix {
         /// Apply the proposal (noninteractively also needs --yes).
         #[arg(long)]
         apply: bool,
@@ -166,7 +184,11 @@ fn overrides(cli: &Cli) -> Result<Value> {
             values.insert(key.into(), json!(value));
         }
     }
-    if cli.fail_on.is_some() || matches!(cli.command, Command::Scan) {
+    let security_only = cli.security_only || matches!(cli.command, Command::Fix { .. });
+    if security_only {
+        values.insert("security_only".into(), json!(true));
+    }
+    if cli.fail_on.is_some() || security_only || matches!(cli.command, Command::Scan) {
         values.insert("scan".into(), json!(true));
     }
     if let Some(value) = cli.cooldown_days {
@@ -360,6 +382,7 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
             (cli.upgrade, "--upgrade"),
             (cli.refresh_git, "--refresh-git"),
             (cli.install, "--install"),
+            (cli.security_only, "--security-only"),
         ] {
             if used {
                 return Err(Error::Invalid(format!("{flag} is not used by init")));
@@ -407,6 +430,11 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
     }
     let options = config.options;
     if matches!(cli.command, Command::Scan) {
+        if cli.security_only {
+            return Err(Error::Invalid(
+                "--security-only is not used by scan; run `depsmith fix`".into(),
+            ));
+        }
         let reports = core::scan_existing(&cli.root, &selected, &options)?;
         let status = if reports.iter().all(|r| r.policy_passed) {
             0
@@ -419,6 +447,11 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
     let mut status = proposal.exit_code(matches!(cli.command, Command::Check));
     let mut applied = None;
     if let Command::Update {
+        apply,
+        yes,
+        allow_partial,
+    }
+    | Command::Fix {
         apply,
         yes,
         allow_partial,
@@ -687,6 +720,25 @@ fn render(value: &Value, markdown: bool) -> String {
                     evidence.as_str().unwrap_or("?")
                 ));
             }
+        }
+        for fix in p["security"].as_array().into_iter().flatten() {
+            let text = |key: &str| fix[key].as_str().unwrap_or("?").to_owned();
+            let aim = fix["fix_version"]
+                .as_str()
+                .map(|v| format!(" -> {v}"))
+                .unwrap_or_default();
+            let reason = fix["reason"]
+                .as_str()
+                .map(|r| format!(": {r}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "- Security {} {} {} {}{aim}: {}{reason}",
+                text("advisory"),
+                text("package"),
+                text("version"),
+                text("severity"),
+                text("outcome"),
+            ));
         }
         render_scans(
             p["scans"].as_array().map_or(&[][..], Vec::as_slice),

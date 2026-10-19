@@ -96,6 +96,10 @@ pub struct UpdateOptions {
     pub min_severity: Option<String>,
     /// Which fixed release a security update aims each vulnerable package at.
     pub security_target: SecurityTarget,
+    /// Prepare a security update: move only packages with actionable
+    /// findings, each toward its fix version. Implies `scan`; cannot be
+    /// combined with `packages` or `upgrade`.
+    pub security_only: bool,
 }
 
 /// Which release a security update aims a vulnerable package at, among the
@@ -133,6 +137,7 @@ impl Default for UpdateOptions {
             suppressions: vec![],
             min_severity: None,
             security_target: SecurityTarget::Lowest,
+            security_only: false,
         }
     }
 }
@@ -264,10 +269,50 @@ pub struct Proposal {
     pub validation: Vec<String>,
     /// Vulnerability scan reports, when scanning was requested.
     pub scans: Vec<crate::scan::ScanReport>,
+    /// What a security update did about each finding it covers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security: Vec<SecurityFix>,
     #[serde(skip)]
     pub(crate) inputs: BTreeMap<PathBuf, String>,
     #[serde(skip)]
     pub(crate) layout: crate::working_tree::Layout,
+}
+
+/// What a security update did about one finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityFix {
+    /// Identifier of the target the finding belongs to.
+    pub target: String,
+    /// Advisory identifier, such as `GHSA-…`.
+    pub advisory: String,
+    /// Severity as reported.
+    pub severity: String,
+    /// Ecosystem of the vulnerable package.
+    pub ecosystem: String,
+    /// Name of the vulnerable package.
+    pub package: String,
+    /// The locked version the finding matched.
+    pub version: String,
+    /// The release the update aimed at; `None` when the finding is unfixable.
+    pub fix_version: Option<String>,
+    /// Whether the finding was fixed, blocked or unfixable.
+    pub outcome: FixOutcome,
+    /// Why, for a blocked or unfixable finding.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+/// The outcome of a security update for one finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FixOutcome {
+    /// The candidate scan no longer reports it.
+    Fixed,
+    /// It has a fixed release the update could not reach; a suggestion
+    /// names the declaration to change where there is one.
+    Blocked,
+    /// No release fixes it; nothing changed for it.
+    Unfixable,
 }
 
 /// What applying a proposal wrote.
@@ -398,6 +443,16 @@ impl UpdateOptions {
         {
             return Err(Error::Invalid(
                 "minimum severity must be negligible, low, medium, high or critical".into(),
+            ));
+        }
+        if self.security_only && self.upgrade {
+            return Err(Error::Invalid(
+                "a security update never changes constraints; drop --upgrade".into(),
+            ));
+        }
+        if self.security_only && !self.packages.is_empty() {
+            return Err(Error::Invalid(
+                "a security update chooses its packages from the findings; drop --package".into(),
             ));
         }
         if self.only_new && self.fail_on.is_none() {

@@ -10,6 +10,7 @@ project glossary (``CONTEXT.md``).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -125,6 +126,9 @@ class UpdateOptions:
             severity when unset.
         security_target: Fixed release a security update aims at:
             ``lowest``, ``patch`` or ``newest``.
+        security_only: Prepare a security update: move only packages with
+            actionable findings, each toward its fix version (implies
+            ``scan``); see :func:`fix`.
         precise: Packages, direct or transitive, to move to an exact release;
             only they (and ``packages``) move. Where the package manager has no
             precise update, each moves to the newest release its constraints
@@ -150,6 +154,7 @@ class UpdateOptions:
     min_severity: str | None = None
     security_target: str | None = None
     precise: Sequence[PreciseUpdate] | None = None
+    security_only: bool | None = None
 
     def _json(self) -> str:
         return json.dumps(
@@ -361,6 +366,33 @@ class ScanReport:
 
 
 @dataclass(frozen=True)
+class SecurityFix:
+    """What a security update did about one finding.
+
+    Attributes:
+        target: Identifier of the target the finding belongs to.
+        advisory: Advisory identifier, such as ``GHSA-…``.
+        severity: Severity as reported.
+        ecosystem: Ecosystem of the vulnerable package.
+        package: Name of the vulnerable package.
+        version: The locked version the finding matched.
+        fix_version: The release the update aimed at; ``None`` when unfixable.
+        outcome: ``fixed``, ``blocked`` or ``unfixable``.
+        reason: Why, for a blocked or unfixable finding.
+    """
+
+    target: str
+    advisory: str
+    severity: str
+    ecosystem: str
+    package: str
+    version: str
+    fix_version: str | None
+    outcome: str
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class ApplyResult:
     """What applying a proposal wrote.
 
@@ -393,6 +425,7 @@ class Proposal:
         failures: Targets that could not be prepared.
         validation: Validation levels completed and acceptance notes.
         scans: Vulnerability scan reports, when scanning was requested.
+        security: What a security update did about each finding it covers.
     """
 
     def __init__(self, native: _native.NativeProposal):
@@ -411,6 +444,7 @@ class Proposal:
         self.failures = tuple(Failure(**row) for row in data["failures"])
         self.validation: tuple[str, ...] = tuple(data["validation"])
         self.scans = tuple(ScanReport._from_dict(row) for row in data["scans"])
+        self.security = tuple(SecurityFix(**row) for row in data.get("security", ()))
         self.dependencies = tuple(
             DependencyChange(
                 Package(**row["before"]) if row["before"] else None,
@@ -504,6 +538,34 @@ def prepare(
     return Proposal(
         _native.prepare(str(root), list(targets), (options or UpdateOptions())._json())
     )
+
+
+def fix(
+    root: Path = ".",
+    *,
+    targets: Sequence[str] = (),
+    options: UpdateOptions | None = None,
+) -> Proposal:
+    """Prepare a security update: :func:`prepare` with ``security_only``.
+
+    Only packages with actionable findings move, each toward its fix
+    version; ``Proposal.security`` says what happened to each finding, and
+    blocked fixes are suggestions naming the declaration to change.
+
+    Args:
+        root: Repository root.
+        targets: Target identifiers; empty uses the saved selection.
+        options: Options overriding the repository settings.
+
+    Returns:
+        The proposal to review and apply.
+
+    Raises:
+        ConfigurationError: Invalid options, such as ``upgrade`` or
+            ``packages``, which a security update never uses.
+    """
+    options = dataclasses.replace(options or UpdateOptions(), security_only=True)
+    return prepare(root, targets=targets, options=options)
 
 
 def scan(

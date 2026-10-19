@@ -1,0 +1,454 @@
+//! Security updates (ADR 0004): the packages a target's actionable findings
+//! move, each toward its fix version, and whether the candidate fixed them.
+use crate::{
+    adapter::{pypi_key, Adapter},
+    constraints::Declaration,
+    scan::{self, Finding, FixState, ScanReport},
+    DependencyChange, Error, FixOutcome, Package, PreciseUpdate, Result, SecurityFix,
+    SecurityTarget, Suggestion, Target, UpdateOptions,
+};
+use std::cmp::Ordering;
+
+/// One package a security update moves.
+struct Move {
+    /// Ecosystem of the package.
+    ecosystem: String,
+    /// The package as the target declares it.
+    declared: String,
+    /// The release it aims at, which fixes every one of its findings.
+    fix_version: String,
+    /// The actionable findings it fixes.
+    findings: Vec<Finding>,
+}
+
+/// What a security update of one target moves, from its baseline scan.
+pub(crate) struct Selection {
+    /// The scan of the target's current lock.
+    pub(crate) baseline: ScanReport,
+    moves: Vec<Move>,
+    /// Findings the update reports without moving anything for them.
+    pub(crate) reported: Vec<SecurityFix>,
+    /// Suggestions for fixes a declared constraint blocks.
+    pub(crate) suggestions: Vec<Suggestion>,
+    /// Notes for the proposal, such as an aim that could not be honoured.
+    pub(crate) notes: Vec<String>,
+}
+
+/// The ecosystem part of a finding's `ecosystem:name:platform` identity.
+fn ecosystem_of(finding: &Finding) -> &str {
+    finding.identity.split(':').next().unwrap_or_default()
+}
+
+/// The platform part of a finding's `ecosystem:name:platform` identity.
+fn platform_of(finding: &Finding) -> &str {
+    finding.identity.rsplit(':').next().unwrap_or_default()
+}
+
+/// Whether `left` and `right` name the same package in `ecosystem`.
+pub(crate) fn same_name(ecosystem: &str, left: &str, right: &str) -> bool {
+    if ecosystem == "pypi" {
+        pypi_key(left) == pypi_key(right)
+    } else {
+        left == right
+    }
+}
+
+fn compare(ecosystem: &str, left: &str, right: &str) -> Ordering {
+    crate::ecosystem::scheme(ecosystem).map_or_else(|| left.cmp(right), |s| s.compare(left, right))
+}
+
+/// Whether `version` fixes `finding`: it is at least the fixed release in
+/// its own major.minor line, or at least every fixed release when its line
+/// has none. A version between two lines' fixes is not assumed fixed.
+fn fixes(finding: &Finding, version: &str) -> bool {
+    let ecosystem = ecosystem_of(finding);
+    let line = |v: &str| v.split('.').take(2).map(str::to_owned).collect::<Vec<_>>();
+    let same_line: Vec<&String> = finding
+        .fix_versions
+        .iter()
+        .filter(|f| line(f) == line(version))
+        .collect();
+    if same_line.is_empty() {
+        finding
+            .fix_versions
+            .iter()
+            .all(|f| compare(ecosystem, version, f) != Ordering::Less)
+    } else {
+        same_line
+            .iter()
+            .any(|f| compare(ecosystem, version, f) != Ordering::Less)
+    }
+}
+
+/// The release that fixes all of `findings` (one package's), as `aim`
+/// asks: the lowest such fixed release above the locked version, else the
+/// highest fixed release. `None` when no fixed release is above it.
+fn aim_for(findings: &[&Finding], aim: SecurityTarget) -> Option<String> {
+    let first = findings.first()?;
+    let ecosystem = ecosystem_of(first);
+    let mut candidates: Vec<String> = findings
+        .iter()
+        .filter_map(|f| scan::fix_version(f, aim, &[]))
+        .chain(findings.iter().flat_map(|f| f.fix_versions.iter().cloned()))
+        .filter(|v| compare(ecosystem, v, &first.version) == Ordering::Greater)
+        .collect();
+    candidates.sort_by(|a, b| compare(ecosystem, a, b));
+    candidates.dedup();
+    candidates
+        .iter()
+        .find(|v| findings.iter().all(|f| fixes(f, v)))
+        .or(candidates.last())
+        .cloned()
+}
+
+fn record(
+    target: &Target,
+    finding: &Finding,
+    fix_version: Option<String>,
+    outcome: FixOutcome,
+    reason: String,
+) -> SecurityFix {
+    SecurityFix {
+        target: target.id.clone(),
+        advisory: finding.id.clone(),
+        severity: finding.severity.clone(),
+        ecosystem: ecosystem_of(finding).into(),
+        package: finding.package.clone(),
+        version: finding.version.clone(),
+        fix_version,
+        outcome,
+        reason,
+    }
+}
+
+/// The suggestion for a fix that `declaration` holds back at `now`.
+fn blocked(
+    target: &Target,
+    declaration: &Declaration,
+    findings: &[&Finding],
+    fix_version: &str,
+    now: &str,
+) -> Suggestion {
+    let advisories: Vec<&str> = findings.iter().map(|f| f.id.as_str()).collect();
+    Suggestion {
+        target: target.id.clone(),
+        package: declaration.package.clone(),
+        requirement: declaration.requirement.clone(),
+        reason: format!(
+            "{} {} fixed in {fix_version}, but {} keeps {} at {now}; accept a requirement that admits {fix_version} with --accept {}=REQUIREMENT",
+            advisories.join(", "),
+            if advisories.len() == 1 { "is" } else { "are" },
+            declaration.requirement,
+            declaration.package,
+            declaration.package
+        ),
+        evidence: findings
+            .iter()
+            .map(|f| format!("{} ({})", f.id, f.namespace))
+            .collect(),
+    }
+}
+
+/// Scan the current lock of `target` under `root` and choose what a
+/// security update moves: each direct dependency with actionable findings,
+/// toward a fix version that fixes all of them. A fix its declaration
+/// excludes is blocked and suggested instead; unfixable findings, and
+/// findings in packages the target does not declare, are reported.
+pub(crate) fn select(
+    adapter: &dyn Adapter,
+    root: &std::path::Path,
+    target: &Target,
+    options: &UpdateOptions,
+) -> Result<Selection> {
+    let inventory = adapter.inventory(root, target)?;
+    let baseline = scan::scan_pair(&target.id, None, &inventory, options, root)?;
+    let actionable = scan::actionable(&baseline.findings, options.min_severity.as_deref())?;
+    let rank = options
+        .min_severity
+        .as_deref()
+        .and_then(scan::severity_rank);
+    let mut selection = Selection {
+        moves: vec![],
+        reported: vec![],
+        suggestions: vec![],
+        notes: vec![],
+        baseline: baseline.clone(),
+    };
+    for finding in &baseline.findings {
+        if finding.suppression.is_none() && finding.meets(rank) && !finding.fixable() {
+            let reason = match finding.fix_state {
+                FixState::WontFix => "its maintainers will not fix it",
+                _ => "no release fixes it",
+            };
+            selection.reported.push(record(
+                target,
+                finding,
+                None,
+                FixOutcome::Unfixable,
+                reason.into(),
+            ));
+        }
+    }
+    if options.security_target == SecurityTarget::Patch && !actionable.is_empty() {
+        selection.notes.push(format!(
+            "{}: no release data for --security-target patch; aiming at the lowest fix",
+            target.id
+        ));
+    }
+    // One move per package, whatever its findings and platforms.
+    let mut packages: Vec<(String, String, Vec<&Finding>)> = vec![];
+    for finding in actionable {
+        let ecosystem = ecosystem_of(finding);
+        match packages
+            .iter_mut()
+            .find(|(e, name, _)| e == ecosystem && same_name(ecosystem, name, &finding.package))
+        {
+            Some((_, _, findings)) => findings.push(finding),
+            None => packages.push((ecosystem.into(), finding.package.clone(), vec![finding])),
+        }
+    }
+    let declarations = adapter.declarations(root, target)?;
+    for (ecosystem, name, findings) in packages {
+        let Some(fix_version) = aim_for(&findings, options.security_target) else {
+            for finding in findings {
+                selection.reported.push(record(
+                    target,
+                    finding,
+                    None,
+                    FixOutcome::Unfixable,
+                    format!("no fixed release is above {}", finding.version),
+                ));
+            }
+            continue;
+        };
+        let declared = adapter
+            .select(root, target, std::slice::from_ref(&name))?
+            .into_values()
+            .next();
+        let Some(declared) = declared else {
+            for finding in findings {
+                selection.reported.push(record(
+                    target,
+                    finding,
+                    Some(fix_version.clone()),
+                    FixOutcome::Blocked,
+                    format!(
+                        "{name} is not a direct dependency of {}; transitive security updates are not supported yet",
+                        target.id
+                    ),
+                ));
+            }
+            continue;
+        };
+        // A declaration that excludes the fix blocks it before any tool runs.
+        let declaration = declarations
+            .iter()
+            .find(|d| d.ecosystem == ecosystem && same_name(&ecosystem, &d.package, &declared));
+        // An acceptance replaces the declared requirement before resolving;
+        // a bare `--accept NAME` is decided by the evidence, so not here.
+        let mut accepted = None;
+        for text in &options.accept {
+            let acceptance = crate::constraint::parse_accept(text)?;
+            if same_name(&ecosystem, &acceptance.name, &declared) {
+                accepted = Some(acceptance.requirement);
+            }
+        }
+        let excluded = declaration.filter(|d| {
+            let requirement = match &accepted {
+                Some(Some(requirement)) => requirement,
+                Some(None) => return false,
+                None => &d.requirement,
+            };
+            crate::ecosystem::scheme(&ecosystem).and_then(|s| s.admits(requirement, &fix_version))
+                == Some(false)
+        });
+        if let Some(declaration) = excluded {
+            let now = &findings[0].version;
+            for finding in &findings {
+                selection.reported.push(record(
+                    target,
+                    finding,
+                    Some(fix_version.clone()),
+                    FixOutcome::Blocked,
+                    format!("{} excludes {fix_version}", declaration.requirement),
+                ));
+            }
+            selection
+                .suggestions
+                .push(blocked(target, declaration, &findings, &fix_version, now));
+            continue;
+        }
+        selection.moves.push(Move {
+            ecosystem,
+            declared,
+            fix_version,
+            findings: findings.into_iter().cloned().collect(),
+        });
+    }
+    Ok(selection)
+}
+
+impl Selection {
+    /// Whether the update moves anything.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.moves.is_empty()
+    }
+
+    /// The options that move exactly the selected packages: precise
+    /// updates to their fix versions, or by name with `newest`, which is
+    /// what an update by name does.
+    pub(crate) fn options(&self, options: &UpdateOptions) -> UpdateOptions {
+        let mut options = UpdateOptions {
+            scan: true,
+            ..options.clone()
+        };
+        for m in &self.moves {
+            if options.security_target == SecurityTarget::Newest {
+                options.packages.push(m.declared.clone());
+            } else {
+                options.precise.push(PreciseUpdate {
+                    package: m.declared.clone(),
+                    version: m.fix_version.clone(),
+                });
+            }
+        }
+        options
+    }
+
+    /// Whether `name` (in `ecosystem`) is one the update moves.
+    pub(crate) fn targets(&self, ecosystem: &str, name: &str) -> bool {
+        self.moves
+            .iter()
+            .any(|m| m.ecosystem == ecosystem && same_name(ecosystem, &m.declared, name))
+    }
+
+    /// The `changes` of packages the update did not target, as
+    /// `name before -> after`.
+    pub(crate) fn untargeted(&self, changes: &[DependencyChange]) -> Vec<String> {
+        let version = |p: &Option<Package>| {
+            p.as_ref()
+                .map_or_else(|| "none".to_owned(), |p| p.version.clone())
+        };
+        changes
+            .iter()
+            .filter_map(|change| {
+                let package = change.after.as_ref().or(change.before.as_ref())?;
+                (!self.targets(&package.ecosystem, &package.name)).then(|| {
+                    format!(
+                        "{} {} -> {}",
+                        package.name,
+                        version(&change.before),
+                        version(&change.after)
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Classify each targeted finding against the candidate's `report`: fixed
+    /// when the candidate no longer has it, else blocked, with a suggestion
+    /// naming the declaration from `declarations` (read from the stage).
+    /// An unsuppressed finding the candidate introduces fails the update.
+    pub(crate) fn verify(
+        &self,
+        target: &Target,
+        report: &ScanReport,
+        after: &[Package],
+        declarations: &[Declaration],
+    ) -> Result<(Vec<SecurityFix>, Vec<Suggestion>)> {
+        let introduced: Vec<String> = report
+            .introduced
+            .iter()
+            .filter(|f| f.suppression.is_none())
+            .map(|f| format!("{} in {} {}", f.id, f.package, f.version))
+            .collect();
+        if !introduced.is_empty() {
+            return Err(Error::Policy(format!(
+                "the security update introduced findings: {}",
+                introduced.join(", ")
+            )));
+        }
+        let mut fixes = vec![];
+        let mut suggestions = vec![];
+        for m in &self.moves {
+            let remains = |f: &Finding| {
+                report
+                    .findings
+                    .iter()
+                    .any(|c| c.id == f.id && c.namespace == f.namespace && c.identity == f.identity)
+            };
+            let still: Vec<&Finding> = m.findings.iter().filter(|f| remains(f)).collect();
+            // The version on the platform where the finding remains.
+            let now = still
+                .first()
+                .and_then(|f| {
+                    after.iter().find(|p| {
+                        p.ecosystem == m.ecosystem
+                            && p.platform == platform_of(f)
+                            && same_name(&m.ecosystem, &p.name, &m.declared)
+                    })
+                })
+                .map_or("unknown", |p| p.version.as_str());
+            for finding in &m.findings {
+                let blocked = remains(finding);
+                fixes.push(record(
+                    target,
+                    finding,
+                    Some(m.fix_version.clone()),
+                    if blocked {
+                        FixOutcome::Blocked
+                    } else {
+                        FixOutcome::Fixed
+                    },
+                    if blocked {
+                        format!(
+                            "{} stays at {now}, below the fix version {}",
+                            m.declared, m.fix_version
+                        )
+                    } else {
+                        String::new()
+                    },
+                ));
+            }
+            if still.is_empty() {
+                continue;
+            }
+            if let Some(declaration) = declarations.iter().find(|d| {
+                d.ecosystem == m.ecosystem && same_name(&m.ecosystem, &d.package, &m.declared)
+            }) {
+                suggestions.push(blocked(target, declaration, &still, &m.fix_version, now));
+            }
+        }
+        Ok((fixes, suggestions))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finding(version: &str, fixes: &[&str]) -> Finding {
+        serde_json::from_value(serde_json::json!({"id": "GHSA-x", "namespace": "n",
+            "package": "p", "version": version, "severity": "High", "evidence": [],
+            "identity": "pypi:p:any", "applicability": "", "artifact": "", "suppression": null,
+            "fix_versions": fixes, "fix_state": "fixed"}))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_fix_version_fixes_every_finding_without_overshooting_a_backport() {
+        let backported = finding("2.8", &["2.9", "3.1"]);
+        let newer_only = finding("2.8", &["3.0"]);
+        // 3.0 is between the first finding's lines: not assumed fixed.
+        assert!(!fixes(&backported, "3.0"));
+        assert!(fixes(&backported, "2.9.1") && fixes(&backported, "3.1"));
+        assert_eq!(
+            aim_for(&[&backported, &newer_only], SecurityTarget::Lowest).as_deref(),
+            Some("3.1")
+        );
+        assert_eq!(
+            aim_for(&[&backported], SecurityTarget::Lowest).as_deref(),
+            Some("2.9")
+        );
+    }
+}

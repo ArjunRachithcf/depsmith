@@ -20,6 +20,7 @@ Commands:
   doctor    Report adapter capabilities and whether native tools are available
   check     Prepare a proposal without writing; exit 1 when updates are pending
   update    Prepare a proposal, preview it, and apply it when confirmed
+  fix       A security update: `update --security-only`, which moves only packages with actionable findings, each toward its fix version, and reports blocked fixes as suggestions
   scan      Scan the current locks for known vulnerabilities without updating
   recover   Restore the files of an interrupted apply
   help      Print this message or the help of the given subcommand(s)
@@ -57,6 +58,8 @@ Options:
           Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
       --security-target <SECURITY_TARGET>
           Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
+      --security-only
+          Prepare a security update: move only packages with actionable findings, each toward its fix version (implies --scan; see `fix`)
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -113,6 +116,8 @@ Options:
           Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
       --security-target <SECURITY_TARGET>
           Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
+      --security-only
+          Prepare a security update: move only packages with actionable findings, each toward its fix version (implies --scan; see `fix`)
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -167,6 +172,8 @@ Options:
           Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
       --security-target <SECURITY_TARGET>
           Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
+      --security-only
+          Prepare a security update: move only packages with actionable findings, each toward its fix version (implies --scan; see `fix`)
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -221,6 +228,8 @@ Options:
           Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
       --security-target <SECURITY_TARGET>
           Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
+      --security-only
+          Prepare a security update: move only packages with actionable findings, each toward its fix version (implies --scan; see `fix`)
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -281,6 +290,8 @@ Options:
           Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
       --security-target <SECURITY_TARGET>
           Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
+      --security-only
+          Prepare a security update: move only packages with actionable findings, each toward its fix version (implies --scan; see `fix`)
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -335,6 +346,8 @@ Options:
           Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
       --security-target <SECURITY_TARGET>
           Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
+      --security-only
+          Prepare a security update: move only packages with actionable findings, each toward its fix version (implies --scan; see `fix`)
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>
@@ -389,6 +402,8 @@ Options:
           Act only on findings of at least this severity in a security update (negligible, low, medium, high, critical) [default: every severity]
       --security-target <SECURITY_TARGET>
           Which fixed release a security update aims at: lowest (the lowest fix above the locked version), patch (the newest release in that fix's line) or newest (the newest the constraints allow) [default: lowest]
+      --security-only
+          Prepare a security update: move only packages with actionable findings, each toward its fix version (implies --scan; see `fix`)
       --cooldown-days <COOLDOWN_DAYS>
           Minimum release age in days; rejected where the package manager cannot enforce it
       --timeout-seconds <TIMEOUT_SECONDS>

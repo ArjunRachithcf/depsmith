@@ -236,6 +236,7 @@ preparation and application must occur in the same process.
 - `failures`: Targets that could not be prepared.
 - `validation`: Validation levels completed and acceptance notes.
 - `scans`: Vulnerability scan reports, when scanning was requested.
+- `security`: What a security update did about each finding it covers.
 
 ### `Proposal.to_dict(self) -> dict[str, Any]`
 
@@ -295,6 +296,22 @@ treated as clean.
 - `expired_suppressions`: Suppressions that had expired and were ignored.
 - `policy_passed`: Whether the configured policy accepted the findings.
 
+### `SecurityFix(target: str, advisory: str, severity: str, ecosystem: str, package: str, version: str, fix_version: str | None, outcome: str, reason: str)`
+
+What a security update did about one finding.
+
+**Attributes**
+
+- `target`: Identifier of the target the finding belongs to.
+- `advisory`: Advisory identifier, such as `GHSA-…`.
+- `severity`: Severity as reported.
+- `ecosystem`: Ecosystem of the vulnerable package.
+- `package`: Name of the vulnerable package.
+- `version`: The locked version the finding matched.
+- `fix_version`: The release the update aimed at; `None` when unfixable.
+- `outcome`: `fixed`, `blocked` or `unfixable`.
+- `reason`: Why, for a blocked or unfixable finding.
+
 ### `Suggestion(target: str, package: str, requirement: str, reason: str, evidence: tuple[str, ...])`
 
 An evidence-backed report that a declared constraint is worth revisiting.
@@ -343,7 +360,7 @@ A reference left unchanged because it could not be resolved.
 - `reference`: The reference as written, such as `org/repo@main`.
 - `reason`: Why no release could be matched.
 
-### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None, min_severity: str | None, security_target: str | None, precise: Sequence[PreciseUpdate] | None)`
+### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None, min_severity: str | None, security_target: str | None, precise: Sequence[PreciseUpdate] | None, security_only: bool | None)`
 
 Options for preparing, scanning and applying updates.
 
@@ -369,6 +386,7 @@ explicit values override them.
 - `suppressions`: Scoped, documented suppressions.
 - `min_severity`: Lowest severity a security update acts on; every severity when unset.
 - `security_target`: Fixed release a security update aims at: `lowest`, `patch` or `newest`.
+- `security_only`: Prepare a security update: move only packages with actionable findings, each toward its fix version (implies `scan`); see `fix`.
 - `precise`: Packages, direct or transitive, to move to an exact release; only they (and `packages`) move. Where the package manager has no precise update, each moves to the newest release its constraints allow, and the proposal says so.
 
 ## Exceptions

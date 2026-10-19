@@ -16,13 +16,23 @@ const EDIT: &str = "DEPSMITH_E2E_EDIT";
 /// File the fake writes its long-running child's PID to before hanging.
 const HANG: &str = "DEPSMITH_E2E_HANG";
 const LOCK: &str = "version: 6\npackages: []\n";
+/// File holding the lock the fake writes on `update`, instead of [`LOCK`].
+const NEXT: &str = "DEPSMITH_E2E_NEXT";
+
+/// A Pixi lock resolving idna from PyPI at `version`.
+fn idna_lock(version: &str) -> String {
+    let url = format!("https://files.pythonhosted.org/packages/idna-{version}.tar.gz");
+    format!(
+        "version: 6\nenvironments:\n  default:\n    packages:\n      linux-64:\n      - pypi: {url}\npackages:\n- pypi: {url}\n  name: idna\n  version: '{version}'\n"
+    )
+}
 
 fn main() {
     if let Ok(mode) = env::var(FAKE) {
         fake(&mode);
         return;
     }
-    let scenarios: [(&str, fn()); 3] = [
+    let scenarios: [(&str, fn()); 4] = [
         ("check, apply and recheck", check_apply_recheck),
         (
             "a concurrent edit makes apply refuse",
@@ -31,6 +41,10 @@ fn main() {
         (
             "timeout kills the backend's process tree",
             timeout_kills_process_tree,
+        ),
+        (
+            "a security update moves only the vulnerable package",
+            security_update_fixes_the_vulnerable_package,
         ),
     ];
     let mut failed = 0;
@@ -55,6 +69,23 @@ fn fake(mode: &str) {
         return;
     }
     let args: Vec<String> = env::args().skip(1).collect();
+    // The same stand-in serves as Grype: idna 3.6 has an advisory fixed in 3.7.
+    if args[0] == "db" {
+        if args.get(1).is_some_and(|a| a == "status") {
+            println!("{{}}");
+        }
+        return;
+    }
+    if let Some(sbom) = args[0].strip_prefix("sbom:") {
+        let finding = r#"{"artifact":{"purl":"pkg:pypi/idna@3.6"},"matchDetails":[],"vulnerability":{"id":"GHSA-e2e","namespace":"github:language:python","severity":"High","fix":{"versions":["3.7"],"state":"fixed"}}}"#;
+        let vulnerable = fs::read_to_string(sbom)
+            .unwrap()
+            .contains("pkg:pypi/idna@3.6");
+        let matches = if vulnerable { finding } else { "" };
+        println!("{{\"matches\":[{matches}]}}");
+        return;
+    }
+    let next = env::var(NEXT).map_or_else(|_| LOCK.to_owned(), |f| fs::read_to_string(f).unwrap());
     let manifest = args
         .iter()
         .position(|a| a == "--manifest-path")
@@ -76,9 +107,9 @@ fn fake(mode: &str) {
                 let text = fs::read_to_string(&original).unwrap();
                 fs::write(&original, format!("{text}# edited during resolution\n")).unwrap();
             }
-            fs::write(lock, LOCK).unwrap();
+            fs::write(lock, &next).unwrap();
         }
-        "lock" => assert_eq!(fs::read_to_string(lock).unwrap(), LOCK),
+        "lock" => assert_eq!(fs::read_to_string(lock).unwrap(), next),
         other => panic!("unexpected pixi command {other}"),
     }
 }
@@ -110,6 +141,10 @@ fn depsmith(project: &Project, args: &[&str], env: &[(&str, &str)]) -> (i32, ser
             "pixi:pixi.toml",
         ])
         .args(["--pixi", env::current_exe().unwrap().to_str().unwrap()])
+        .args([
+            "--tool",
+            &format!("grype={}", env::current_exe().unwrap().display()),
+        ])
         .args(["--non-interactive", "--json"])
         .env(FAKE, "pixi");
     for (key, value) in env {
@@ -216,4 +251,34 @@ fn alive(pid: &str) -> bool {
             .unwrap()
             .success()
     }
+}
+
+fn security_update_fixes_the_vulnerable_package() {
+    let project = project();
+    fs::write(
+        project.root.join("pixi.toml"),
+        "[workspace]\nname = 'demo'\nchannels = ['conda-forge']\nplatforms = ['linux-64']\n\n[pypi-dependencies]\nidna = '*'\n",
+    )
+    .unwrap();
+    fs::write(project.root.join("pixi.lock"), idna_lock("3.6")).unwrap();
+    let next = project
+        .root
+        .join("..")
+        .join(format!("e2e-next-{}.lock", std::process::id()));
+    fs::write(&next, idna_lock("3.7")).unwrap();
+    let env = [(NEXT, next.to_str().unwrap())];
+    let (code, report) = depsmith(&project, &["check", "--security-only"], &env);
+    assert_eq!(code, 1, "{report}");
+    let fix = &report["proposal"]["security"][0];
+    assert_eq!(fix["advisory"], "GHSA-e2e", "{report}");
+    assert_eq!(fix["fix_version"], "3.7");
+    assert_eq!(fix["outcome"], "fixed");
+    let notes = report["proposal"]["validation"].to_string();
+    assert!(notes.contains("has no precise update"), "{notes}");
+    let (code, report) = depsmith(&project, &["fix", "--apply", "--yes"], &env);
+    let _ = fs::remove_file(&next);
+    assert_eq!(code, 0, "{report}");
+    assert!(fs::read_to_string(project.root.join("pixi.lock"))
+        .unwrap()
+        .contains("version: '3.7'"));
 }

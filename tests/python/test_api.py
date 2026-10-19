@@ -10,6 +10,15 @@ import depsmith as updater
 
 
 class ApiTests(unittest.TestCase):
+    def test_security_updates_never_change_constraints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "pixi.toml").write_text("[workspace]\nname = 'demo'\n")
+            options = updater.UpdateOptions(upgrade=True)
+            with self.assertRaises(updater.ConfigurationError) as raised:
+                updater.fix(root, targets=["pixi:pixi.toml"], options=options)
+            self.assertIn("never changes constraints", str(raised.exception))
+
     @unittest.skipUnless(
         os.environ.get("PIXI"), "set PIXI to run the native integration"
     )

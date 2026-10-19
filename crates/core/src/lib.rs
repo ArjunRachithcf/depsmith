@@ -55,6 +55,7 @@ mod pyproject;
 /// Vulnerability scanning of inventories.
 pub mod scan;
 mod scm;
+mod security;
 /// The uv adapter: `pyproject.toml` projects locked with `uv.lock`.
 pub mod uv;
 mod working_tree;
@@ -198,39 +199,48 @@ impl Engine {
                         target.id, target.manager
                     )))
                 }
-                Support::Unsupported(_) => notes.extend(options.precise.iter().map(|p| {
-                    format!(
-                        "{}: {} has no precise update; {} moves to the newest release its \
-                         constraints allow, not {}",
-                        target.id, target.manager, p.package, p.version
-                    )
-                })),
-                Support::NotApplicable => notes.push(format!(
-                    "{}: precise update not applicable to {}",
-                    target.id, target.manager
-                )),
+                // `precise_fallback` notes how far each package moves.
+                Support::Unsupported(_) | Support::NotApplicable => {}
             }
         }
         Ok(notes)
     }
-    /// The options `target` resolves with when it cannot honour `precise`:
-    /// without a precise update its packages are updated by name, bypassing
-    /// selection since they may be transitive; where it is not applicable
-    /// they are dropped. Declarations are never edited to make up for it.
-    fn precise_fallback(&self, target: &Target, mut options: UpdateOptions) -> UpdateOptions {
+    /// The options `target` resolves with when it cannot honour `precise`,
+    /// and a note for each request it moves differently: without a precise
+    /// update its packages are updated by name, bypassing selection since
+    /// they may be transitive; where it is not applicable they are dropped.
+    /// Declarations are never edited to make up for it.
+    fn precise_fallback(
+        &self,
+        target: &Target,
+        mut options: UpdateOptions,
+    ) -> (UpdateOptions, Vec<String>) {
         use adapter::Support;
+        let mut notes = vec![];
         match self.spec(target).capabilities.precise_update {
             Support::Supported => {}
             Support::Unsupported(_) => {
                 for request in std::mem::take(&mut options.precise) {
+                    notes.push(format!(
+                        "{}: {} has no precise update; {} moves to the newest release its \
+                         constraints allow, not {}",
+                        target.id, target.manager, request.package, request.version
+                    ));
                     if !options.packages.contains(&request.package) {
                         options.packages.push(request.package);
                     }
                 }
             }
-            Support::NotApplicable => options.precise.clear(),
+            Support::NotApplicable if !options.precise.is_empty() => {
+                notes.push(format!(
+                    "{}: precise update not applicable to {}",
+                    target.id, target.manager
+                ));
+                options.precise.clear();
+            }
+            Support::NotApplicable => {}
         }
-        options
+        (options, notes)
     }
     fn adapter(&self, target: &Target) -> &dyn Adapter {
         self.adapters
@@ -333,6 +343,8 @@ impl Engine {
         mut options: UpdateOptions,
     ) -> Result<Proposal> {
         let root = working_tree::canonical(root)?;
+        // A security update is decided and verified by scanning.
+        options.scan |= options.security_only;
         options.validate()?;
         let found = self.discover(&root)?;
         if selected.is_empty() {
@@ -424,22 +436,78 @@ impl Engine {
             failures: vec![],
             validation: vec![],
             scans: vec![],
+            security: vec![],
             inputs,
             layout,
         };
         proposal.validation.extend(notes);
         let precise_requested = !options.precise.is_empty();
+        let several = targets.len() > 1;
         for ((target, selection), accept) in targets.into_iter().zip(selections).zip(accepted) {
             let adapter = self.adapter(&target);
             let selected = selection.is_some();
-            let options = self.precise_fallback(
-                &target,
-                UpdateOptions {
-                    accept,
-                    packages: selection.unwrap_or_default(),
-                    ..options.clone()
-                },
-            );
+            let mut options = UpdateOptions {
+                accept,
+                packages: selection.unwrap_or_default(),
+                ..options.clone()
+            };
+            // With several targets, each moves only the precise requests its
+            // lock resolves.
+            if precise_requested && several {
+                if let Ok(locked) = adapter.inventory(&root, &target) {
+                    options.precise.retain(|request| {
+                        locked
+                            .iter()
+                            .any(|p| security::same_name(&p.ecosystem, &p.name, &request.package))
+                    });
+                }
+            }
+            let mut security = None;
+            if options.security_only {
+                match security::select(adapter, &root, &target, &options) {
+                    Ok(mut chosen) => {
+                        proposal.security.append(&mut chosen.reported);
+                        proposal.suggestions.append(&mut chosen.suggestions);
+                        proposal.validation.append(&mut chosen.notes);
+                        if chosen.is_empty() {
+                            proposal.validation.push(format!(
+                                "{}: {}",
+                                target.id,
+                                if proposal.security.iter().any(|f| f.target == target.id) {
+                                    "no security update can move a package"
+                                } else {
+                                    "no actionable findings to fix"
+                                }
+                            ));
+                            // Policy gates still apply to what stays.
+                            if !chosen.baseline.policy_passed {
+                                proposal.failures.push(Failure {
+                                    target: target.id.clone(),
+                                    code: 4,
+                                    message: Error::Policy(
+                                        "vulnerability threshold exceeded".into(),
+                                    )
+                                    .to_string(),
+                                });
+                            }
+                            proposal.scans.push(chosen.baseline);
+                            continue;
+                        }
+                        options = chosen.options(&options);
+                        security = Some(chosen);
+                    }
+                    Err(error) => {
+                        proposal.failures.push(Failure {
+                            target: target.id,
+                            code: error.exit_code(),
+                            message: error.to_string(),
+                        });
+                        continue;
+                    }
+                }
+            }
+            let (options, fallback) = self.precise_fallback(&target, options);
+            proposal.validation.extend(fallback);
             // Moving nothing must not become moving everything.
             if options.packages.is_empty()
                 && options.precise.is_empty()
@@ -486,7 +554,7 @@ impl Engine {
                     )?);
                     Ok(candidate)
                 })
-                .and_then(|candidate| {
+                .and_then(|mut candidate| {
                     if options.scan {
                         let report = scan::scan_pair(
                             &target.id,
@@ -500,6 +568,22 @@ impl Engine {
                             stage.path(),
                         )?;
                         let passed = report.policy_passed;
+                        if let Some(chosen) = &security {
+                            let verified = adapter.declarations(stage.path(), &target).and_then(
+                                |declarations| {
+                                    chosen.verify(&target, &report, &candidate.after, &declarations)
+                                },
+                            );
+                            let (fixes, suggestions) = match verified {
+                                Ok(outcome) => outcome,
+                                Err(error) => {
+                                    proposal.scans.push(report);
+                                    return Err(error);
+                                }
+                            };
+                            proposal.security.extend(fixes);
+                            candidate.suggestions.extend(suggestions);
+                        }
                         proposal.scans.push(report);
                         if !passed {
                             return Err(Error::Policy("vulnerability threshold exceeded".into()));
@@ -576,6 +660,16 @@ impl Engine {
                                 introducers: vec![],
                                 paths: vec![],
                             });
+                        }
+                    }
+                    if let Some(chosen) = &security {
+                        let untargeted = chosen.untargeted(&proposal.dependencies[explained..]);
+                        if !untargeted.is_empty() {
+                            proposal.validation.push(format!(
+                                "{}: moved without being targeted: {}",
+                                target.id,
+                                untargeted.join(", ")
+                            ));
                         }
                     }
                     proposal.validation.extend(explain(
