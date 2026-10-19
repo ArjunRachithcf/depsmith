@@ -232,3 +232,41 @@ _Avoid_: Ignore, allowlist entry
 **Policy**:
 A configured rule that rejects a proposal because of its findings, such as a severity threshold.
 _Avoid_: Gate (for the configured rule)
+
+## Impact analysis
+
+**Affected package**:
+A package a lock change moves, adds or removes, or a declared or imported package whose dependency path reaches one.
+_Avoid_: Impacted dependency, blast radius
+
+**Usage site**:
+A first-party file that imports an affected package, or names it in source.
+_Avoid_: Call site (reach is per package, not per function)
+
+**Import graph**:
+Which first-party files import which, as the import scanners find it in the target's sources.
+_Avoid_: Dependency graph (the lock graph), module tree
+
+**Test selection**:
+The tests the import graph connects to a usage site, each with the chain that justifies it, or a full run.
+_Avoid_: Affected tests, impacted tests
+
+**Full run**:
+The decision that every test must run because a change reaches what configures all of them, such as a test runner, a setup file or the interpreter; it always names its reason.
+_Avoid_: Fallback
+
+**Untested file**:
+An affected non-test file that no test reaches through the import graph, even transitively.
+_Avoid_: Coverage gap (coverage measures execution, not imports)
+
+**Exposed file**:
+A file clients reach directly, such as an entry point, a route, a CLI command or a package export, found heuristically and adjustable with globs.
+_Avoid_: Public API (only one kind), client-facing code
+
+**Flow verification**:
+A check, without running the target's code, that each reference on an untested path still resolves and fits its signature in the new environment: verified, partial, broken or unchecked.
+_Avoid_: Smoke test, type check
+
+**Reach verdict**:
+Whether a target's code uses a package with a finding: reached, only as a development tool, by name, as a runtime, not reached, or unknown; a not-reached finding is not actionable.
+_Avoid_: Used, exploitable

@@ -8,7 +8,7 @@ Build a Rust package updater with a consistent local and CI workflow, plus a typ
 
 Release 0.1.0 is a public alpha on PyPI plus a draft GitHub release with standalone executables. The conda-forge recipe is prepared and validated in CI; feedstock submission follows the release and does not block it.
 
-The broader roadmap includes vcpkg, prek/pre-commit, Jenkins plugins, and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
+The broader roadmap includes vcpkg, prek/pre-commit, Jenkins plugins, impact analysis of dependency changes (ADR 0006), and additional ecosystems. Mainframe operating systems, installed-machine upgrades, external plugins, and PR management are outside the initial scope.
 
 ## 2. Architecture and public interfaces
 
@@ -200,3 +200,7 @@ Designed, not built (status: proposed):
   - Adapters whose tool can target an exact version (Cargo, uv) do so. The others move the package to the newest release its constraints allow, say so, and report a blocked fix when that falls short.
   - Packages that move alongside are listed, and the scan verifies the result.
   - Blocked fixes become suggestions that cite the dependency path. Constraints change only through `--accept`.
+- [ADR 0006](adr/0006-impact-analysis.md): impact analysis.
+  - `depsmith affected` walks the lock graph (ADR 0005) in reverse to the target's usage sites, then through its import graph to the tests that can break, as the test runners' own configs define them. `depsmith test` runs them, and `check|update --impact` attaches the result to a proposal.
+  - Each full run names its reason. Untested files are listed, exposed files are marked, and `--verify` checks their flows statically against the new environment.
+  - Each finding gets a reach verdict. A not-reached finding is not actionable for a security update unless `[impact] unreachable = "fix"`. uv, Pixi and npm come first.
