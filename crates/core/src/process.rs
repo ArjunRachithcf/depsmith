@@ -216,12 +216,42 @@ pub(crate) fn run_command(
 }
 
 fn run_with_env(
-    mut command: Command,
+    command: Command,
     program: &str,
     cwd: &Path,
     timeout: u64,
     env: &[(String, String)],
 ) -> Result<(String, String)> {
+    let (output, errors) = spawn(command, program, cwd, timeout, env, Stdio::null())?;
+    let mut text = String::new();
+    output.take(32 * 1024 * 1024).read_to_string(&mut text)?;
+    let mut raw = vec![];
+    errors.take(4 * 1024 * 1024).read_to_end(&mut raw)?;
+    Ok((text, String::from_utf8_lossy(&raw).into_owned()))
+}
+
+/// Like [`run_command`], reading stdin from `input` and returning stdout as
+/// a file, rewound, for output that is binary or too large to hold.
+pub(crate) fn run_command_with_input(
+    command: Command,
+    program: &str,
+    cwd: &Path,
+    timeout: u64,
+    input: std::fs::File,
+) -> Result<std::fs::File> {
+    spawn(command, program, cwd, timeout, &[], input.into()).map(|(stdout, _)| stdout)
+}
+
+/// Run `command` to completion with `stdin`, returning its stdout and stderr
+/// files, rewound.
+fn spawn(
+    mut command: Command,
+    program: &str,
+    cwd: &Path,
+    timeout: u64,
+    env: &[(String, String)],
+    stdin: Stdio,
+) -> Result<(std::fs::File, std::fs::File)> {
     // Keep authentication (e.g. GIT_ASKPASS/GIT_SSH_COMMAND), but do not let a
     // caller's repository context redirect build-hook Git operations out of
     // the stage. Git config injection can set core.worktree too.
@@ -268,7 +298,7 @@ fn run_with_env(
     RUNNING.fetch_add(1, Ordering::SeqCst);
     command
         .current_dir(cwd)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(output.try_clone()?)
         .stderr(errors.try_clone()?)
         .env("NO_COLOR", "1")
@@ -301,7 +331,7 @@ fn wait(
     mut output: std::fs::File,
     mut errors: std::fs::File,
     env: &[(String, String)],
-) -> Result<(String, String)> {
+) -> Result<(std::fs::File, std::fs::File)> {
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
@@ -312,12 +342,8 @@ fn wait(
                 )));
             }
             output.seek(SeekFrom::Start(0))?;
-            let mut text = String::new();
-            output.take(32 * 1024 * 1024).read_to_string(&mut text)?;
             errors.seek(SeekFrom::Start(0))?;
-            let mut raw = vec![];
-            errors.take(4 * 1024 * 1024).read_to_end(&mut raw)?;
-            return Ok((text, String::from_utf8_lossy(&raw).into_owned()));
+            return Ok((output, errors));
         }
         if cancelled() {
             kill_tree(child);

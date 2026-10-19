@@ -71,6 +71,17 @@ impl Side {
 pub struct Sides {
     before: Side,
     after: Side,
+    /// Where the "after" side's source code is read from, until
+    /// [`Sides::sources`] has read it.
+    sources: Option<Sources>,
+}
+
+/// The target's directory in git: at `revision`, or in the index when `None`.
+#[derive(Debug)]
+struct Sources {
+    root: PathBuf,
+    revision: Option<String>,
+    dir: PathBuf,
 }
 
 impl Sides {
@@ -83,6 +94,29 @@ impl Sides {
     pub fn after(&self) -> &Path {
         self.after.path()
     }
+
+    /// The root of the "after" side with the target's whole directory in it,
+    /// source code included. A side read from git (the index, or `head`)
+    /// holds only the target's manifest and its inputs until this is called;
+    /// then every regular file of the directory is written as git stores it,
+    /// with the ignore files above it, and without attributes, filters,
+    /// symlinks or submodules.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Invalid`] when git fails.
+    pub fn sources(&mut self) -> Result<&Path> {
+        if let Some(sources) = &self.sources {
+            scm::materialize_tree(
+                &sources.root,
+                sources.revision.as_deref(),
+                &sources.dir,
+                self.after.path(),
+            )?;
+            self.sources = None;
+        }
+        Ok(self.after.path())
+    }
 }
 
 /// The two sides of `comparison` for `target` under `root`, the repository
@@ -92,6 +126,8 @@ impl Sides {
 /// manifest and the inputs `adapter` manages beside it, such as its lock, as
 /// git has them. Files of other manifests, such as uv workspace members, are
 /// not included, so declarations are read from the "after" side.
+/// [`Sides::sources`] adds the rest of the target's directory to the "after"
+/// side.
 /// [`Comparison::OldLockfile`] writes the old lock over a copy of the
 /// worktree's files, at the first managed input named like a lock that
 /// exists, else the first one.
@@ -143,7 +179,21 @@ pub fn sides(
             (Side::Copy(dir), worktree())
         }
     };
-    Ok(Sides { before, after })
+    let sources = match comparison {
+        Comparison::Staged => Some(None),
+        Comparison::Revisions { head, .. } => Some(Some(head.clone())),
+        _ => None,
+    }
+    .map(|revision| Sources {
+        root: root.to_owned(),
+        revision,
+        dir: target.manifest.parent().unwrap_or(Path::new("")).to_owned(),
+    });
+    Ok(Sides {
+        before,
+        after,
+        sources,
+    })
 }
 
 /// The inputs `adapter` manages beside `target`'s manifest that are named

@@ -252,8 +252,12 @@ A package a lock change moves, adds or removes, or a package that depends on the
 _Avoid_: Impacted dependency, blast radius
 
 **Usage site**:
-A first-party file that imports an affected package, or names it in source.
+One place in a first-party file, a file and a line, that imports an affected package or names it in source.
 _Avoid_: Call site (reach is per package, not per function)
+
+**Affected file**:
+A first-party file that holds a usage site or imports one through the import graph, with the chain of imports that connects them.
+_Avoid_: Impacted file, dependent file
 
 **Import graph**:
 Which first-party files import which, as the import scanners find it in the target's sources.

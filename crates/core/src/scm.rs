@@ -4,6 +4,7 @@ use crate::{Error, Result};
 use std::{
     collections::BTreeMap,
     fs,
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -15,6 +16,12 @@ pub(crate) struct Snapshot {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String> {
+    crate::process::run_command(git_command(args), "git", root, 60)
+}
+
+/// `git args`, with no inherited repository overrides, system or global
+/// configuration, prompts or optional locks.
+fn git_command(args: &[&str]) -> Command {
     let mut command = Command::new("git");
     // Repository/index overrides inherited from a caller must not redirect reads.
     for (key, _) in std::env::vars_os() {
@@ -32,7 +39,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .args(["-c", "core.fsmonitor=false"])
         .args(args);
-    crate::process::run_command(command, "git", root, 60)
+    command
 }
 
 fn no_symlinks(path: &Path) -> Result<()> {
@@ -348,6 +355,86 @@ pub(crate) fn materialize(
             continue;
         }
         write_under(destination, path, git_or_invalid(root, &["show", &object])?)?;
+    }
+    Ok(())
+}
+
+/// Write every regular file under `dir` (relative to `root`, the
+/// repository or a directory in it) as it is at `revision`, or in the index
+/// when `None`, to the same path under `destination`, with the ignore files
+/// of the directories above it. Files are written exactly as git stores
+/// them: no attributes, filters or line-ending conversion apply, and
+/// symlinks, submodules and unmerged entries are left out.
+pub(crate) fn materialize_tree(
+    root: &Path,
+    revision: Option<&str>,
+    dir: &Path,
+    destination: &Path,
+) -> Result<()> {
+    in_repository(root)?;
+    let ignores: Vec<PathBuf> = dir
+        .ancestors()
+        .skip(1)
+        .map(|parent| parent.join(".gitignore"))
+        .collect();
+    materialize(root, revision, &ignores, destination)?;
+    // Run in `dir`, both listings hold only that directory, with paths
+    // relative to it.
+    let cwd = root.join(dir);
+    let listing = match revision {
+        Some(revision) => {
+            let commit = resolve(root, revision)?;
+            git_or_invalid(&cwd, &["ls-tree", "-r", "-z", &commit])?
+        }
+        None => git_or_invalid(&cwd, &["ls-files", "--stage", "-z"])?,
+    };
+    let mut blobs = vec![];
+    for record in listing.split('\0').filter(|r| !r.is_empty()) {
+        let Some((meta, path)) = record.split_once('\t') else {
+            continue;
+        };
+        // `<mode> blob <object>` from ls-tree, `<mode> <object> <stage>` from
+        // ls-files.
+        let fields: Vec<&str> = meta.split(' ').collect();
+        let (mode, object) = match (revision, fields.as_slice()) {
+            (Some(_), [mode, "blob", object]) | (None, [mode, object, "0"]) => (*mode, *object),
+            _ => continue,
+        };
+        if matches!(mode, "100644" | "100755") {
+            blobs.push((object.to_owned(), dir.join(path)));
+        }
+    }
+    let mut input = tempfile::tempfile()?;
+    for (object, _) in &blobs {
+        writeln!(input, "{object}")?;
+    }
+    input.seek(SeekFrom::Start(0))?;
+    let output = crate::process::run_command_with_input(
+        git_command(&["cat-file", "--batch"]),
+        "git",
+        root,
+        600,
+        input,
+    )?;
+    let mut output = BufReader::new(output);
+    let unreadable = || Error::Invalid("git cat-file returned an unexpected object".into());
+    for (object, path) in blobs {
+        let mut header = String::new();
+        output.read_line(&mut header)?;
+        // `<object> blob <size>`
+        let size = match header.trim_end().split(' ').collect::<Vec<_>>().as_slice() {
+            [found, "blob", size] if *found == object => size.parse().map_err(|_| unreadable())?,
+            _ => return Err(unreadable()),
+        };
+        let mut contents = vec![0; size];
+        output.read_exact(&mut contents)?;
+        output.read_exact(&mut [0; 1])?;
+        if path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            write_under(destination, &path, contents)?;
+        }
     }
     Ok(())
 }

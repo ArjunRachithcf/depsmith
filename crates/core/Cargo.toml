@@ -32,6 +32,8 @@ flate2 = "1.1.10"
 tar = "0.4.46"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 nodejs-semver = { version = "7.0.0", default-features = false }
+tree-sitter = "0.26.13"
+tree-sitter-python = "0.25.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

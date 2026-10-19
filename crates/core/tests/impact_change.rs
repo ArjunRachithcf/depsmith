@@ -628,6 +628,93 @@ fn the_after_side_has_the_manifests_and_the_worktree_is_read_in_place() {
 }
 
 #[test]
+fn the_sources_of_a_git_after_side_are_its_files_as_git_stores_them() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.name", "Test"]);
+    git(root, &["config", "user.email", "test@example.org"]);
+    // A smudge filter and export attributes must not change what is read.
+    git(root, &["config", "filter.shout.smudge", "tr a-z A-Z"]);
+    let write = |path: &str, text: &str| {
+        fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        fs::write(root.join(path), text).unwrap();
+    };
+    write(".gitignore", "*.generated.py\n");
+    write(
+        "svc/.gitattributes",
+        "tests/ export-ignore\n*.py filter=shout export-subst\n",
+    );
+    write("svc/pyproject.toml", PYPROJECT);
+    write("svc/uv.lock", &uv_lock("3.6"));
+    write("svc/src/svc/app.py", "import idna\n");
+    write("web/index.js", "require('left-pad')\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "base"]);
+    write("svc/src/svc/app.py", "import idna.core  # $Format:%H$\n");
+    write("svc/tests/test_app.py", "import svc.app\n");
+    git(root, &["add", "."]);
+    write("svc/src/svc/app.py", "import idna.codec\n");
+    let target = Target {
+        id: "uv:svc/pyproject.toml".into(),
+        manager: "uv".into(),
+        manifest: "svc/pyproject.toml".into(),
+    };
+    let read = |side: &Path, path: &str| fs::read_to_string(side.join(path)).ok();
+    let app = "import idna.core  # $Format:%H$\n";
+
+    let mut staged = sides(root, &Uv::default(), &target, &Comparison::Staged).unwrap();
+    assert!(
+        read(staged.after(), "svc/src/svc/app.py").is_none(),
+        "sources are read only when asked for"
+    );
+    let after = staged.sources().unwrap().to_owned();
+    assert_eq!(after, staged.after());
+    assert_eq!(
+        read(&after, "svc/src/svc/app.py").as_deref(),
+        Some(app),
+        "the index, not the worktree, unfiltered"
+    );
+    assert!(read(&after, "svc/tests/test_app.py").is_some());
+    assert!(read(&after, "svc/uv.lock").is_some());
+    assert!(
+        read(&after, ".gitignore").is_some(),
+        "ignore files above the target still apply"
+    );
+    assert!(
+        read(&after, "web/index.js").is_none(),
+        "only the target's directory"
+    );
+    assert!(
+        read(staged.before(), "svc/src/svc/app.py").is_none(),
+        "the before side holds only the manifest and its inputs"
+    );
+
+    git(root, &["commit", "-q", "-m", "feature"]);
+    let mut revisions = sides(
+        root,
+        &Uv::default(),
+        &target,
+        &Comparison::Revisions {
+            base: "HEAD~1".into(),
+            head: "HEAD".into(),
+        },
+    )
+    .unwrap();
+    let after = revisions.sources().unwrap().to_owned();
+    assert_eq!(read(&after, "svc/src/svc/app.py").as_deref(), Some(app));
+    assert!(
+        read(&after, "svc/tests/test_app.py").is_some(),
+        "export-ignore does not apply"
+    );
+    assert!(read(&after, "web/index.js").is_none());
+    assert!(read(revisions.before(), "svc/src/svc/app.py").is_none());
+
+    let mut worktree = sides(root, &Uv::default(), &target, &Comparison::Unstaged).unwrap();
+    assert_eq!(worktree.sources().unwrap(), root);
+}
+
+#[test]
 fn a_lock_missing_on_one_side_reads_as_no_lock() {
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path();
