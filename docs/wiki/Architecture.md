@@ -54,7 +54,11 @@ instead of being ignored. See the `depsmith_core::adapter` module docs.
 - `availability`: the registry of each ecosystem and any release-age policy,
   as data (`RegistryConfig`).
 - `pin`: an immutable replacement for a movable reference, such as the commit
-  of an action's release tag.
+  of an action's release tag; `accept_reference` lets an adapter resolve
+  `--accept` itself, as GitHub Actions does for a newer major release.
+- `lock_graph`: the **lock graph** of a lock, from which the engine names each
+  changed package's **introducers**.
+- `local_projects`: other local projects a target installs from a path.
 - `inventory` and `prepare`: read a lock, and resolve a candidate.
 
 Suggestions and `--accept` are generic: the engine reads declarations, asks
@@ -97,6 +101,7 @@ adapter can speak the same contract over a subprocess bridge of JSON lines
 | `adapter` | The adapter contract, specs and capabilities |
 | `conformance` | Contract checks every adapter's tests run |
 | `constraints`, `ecosystem` | Declarations, registries, generic suggestions and acceptance; version schemes and scan identities |
+| `graph` | Lock graphs and the dependency paths that name introducers |
 | `pixi`, `actions`, `cargo`, `conda`, `uv`, `npm` | The Pixi, GitHub Actions, Cargo, conda, uv and npm adapters |
 | `pyproject` | PEP 508 requirement lists of `pyproject.toml`, shared by the Python-aware adapters |
 | `provision` | Pinned tool downloads, the tool cache and per-repository tool records (`init`) |

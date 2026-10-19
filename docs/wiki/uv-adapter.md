@@ -63,3 +63,11 @@ Packages from an index are inventoried with their sdist (else first wheel)
 URL and scanned as `pkg:pypi/NAME` when the artifact comes from PyPI. Git
 packages keep their locked commit; editable, virtual and path packages are
 the project itself and are not inventoried.
+
+## Dependency introducers
+
+A changed package that the target does not declare is reported with the
+direct dependencies that pull it in. The graph comes from `uv.lock`, which
+covers every platform at once, and follows the extras that are actually
+installed: the projects' own extras and those a dependency, a dependency
+group or another installed extra asks for.

@@ -2,7 +2,7 @@
 
 Start with `depsmith init`: it checks the native tools your targets use and
 offers to install the missing ones. `depsmith doctor` shows every native tool
-(Pixi, uv, cargo, conda-lock and its solver, Grype), where it was found, which
+(Pixi, uv, cargo, conda-lock and its solver, npm, Grype), where it was found, which
 versions have been tested, and what each adapter supports.
 
 | Message or symptom | Cause and fix |
