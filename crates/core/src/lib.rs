@@ -37,6 +37,9 @@ mod ecosystem;
 /// from declared dependencies to it.
 pub mod graph;
 mod http;
+/// Impact analysis: what a lock change moves, the packages it affects, and
+/// the two sides of a comparison.
+pub mod impact;
 /// Reading resolved packages and lock graphs from lockfiles.
 pub mod inventory;
 mod model;
@@ -643,7 +646,7 @@ impl Engine {
                     }
                     let explained = proposal.dependencies.len();
                     for before in &candidate.before {
-                        if !candidate.after.contains(before) {
+                        if !candidate.after.iter().any(|p| p.same_resolution(before)) {
                             let after = candidate
                                 .after
                                 .iter()

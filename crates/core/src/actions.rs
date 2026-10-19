@@ -826,6 +826,7 @@ pub fn workflow_inventory(content: &str) -> Result<Vec<crate::Package>> {
                 version: reference.into(),
                 artifact: format!("https://github.com/{repo}@{reference}"),
                 platform: "workflow".into(),
+                environments: vec![],
             })
         })
         .collect())

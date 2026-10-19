@@ -4,19 +4,22 @@ use crate::{
     Error, Package, Result,
 };
 use serde_yaml::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// One package record of a `pixi.lock`, with the platforms it is locked for.
+/// One package record of a `pixi.lock`, with the platforms it is locked
+/// for, each with the environments that lock it there.
 struct Record<'a> {
     ecosystem: &'static str,
     artifact: &'a str,
     name: &'a str,
     version: &'a str,
     item: &'a Value,
-    platforms: std::collections::BTreeSet<String>,
+    platforms: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// The package records of a parsed `pixi.lock`, each with the platforms of
-/// the environments that use it (or its own subdir when none list it).
+/// the environments that use it and those environments (or its own subdir,
+/// with none, when none list it).
 fn records(value: &Value) -> Result<Vec<Record<'_>>> {
     let version = value.get("version").and_then(Value::as_u64).unwrap_or(0);
     if !(5..=7).contains(&version) {
@@ -28,10 +31,10 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
         .get("packages")
         .and_then(Value::as_sequence)
         .ok_or_else(|| Error::Operation("Pixi lockfile has no package list".into()))?;
-    let mut platforms =
-        std::collections::BTreeMap::<(String, String), std::collections::BTreeSet<String>>::new();
+    let mut platforms = BTreeMap::<(String, String), BTreeMap<String, BTreeSet<String>>>::new();
     if let Some(environments) = value.get("environments").and_then(Value::as_mapping) {
-        for environment in environments.values() {
+        for (name, environment) in environments {
+            let name = name.as_str().unwrap_or_default();
             if let Some(targets) = environment.get("packages").and_then(Value::as_mapping) {
                 for (platform, records) in targets {
                     if let (Some(platform), Some(records)) =
@@ -45,7 +48,9 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
                                     platforms
                                         .entry((ecosystem.into(), artifact.into()))
                                         .or_default()
-                                        .insert(platform.into());
+                                        .entry(platform.into())
+                                        .or_default()
+                                        .insert(name.into());
                                 }
                             }
                         }
@@ -109,7 +114,7 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
         let platforms = platforms
             .get(&(ecosystem.into(), artifact.into()))
             .cloned()
-            .unwrap_or_else(|| [platform.to_owned()].into_iter().collect());
+            .unwrap_or_else(|| BTreeMap::from([(platform.to_owned(), BTreeSet::new())]));
         result.push(Record {
             ecosystem,
             artifact,
@@ -138,13 +143,14 @@ pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
     let value = parse(text)?;
     let mut result = vec![];
     for record in records(&value)? {
-        for platform in record.platforms {
+        for (platform, environments) in record.platforms {
             result.push(Package {
                 ecosystem: record.ecosystem.into(),
                 name: record.name.into(),
                 version: record.version.into(),
                 artifact: record.artifact.into(),
                 platform,
+                environments: environments.into_iter().collect(),
             });
         }
     }
@@ -175,7 +181,7 @@ pub fn pixi_graph(text: &str) -> Result<LockGraph> {
                 .filter_map(pypi_requirement)
                 .collect(),
         };
-        for platform in record.platforms {
+        for platform in record.platforms.into_keys() {
             nodes.push(Node {
                 ecosystem: record.ecosystem.into(),
                 name: record.name.into(),

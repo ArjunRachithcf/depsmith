@@ -65,6 +65,20 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(transitive.paths, (("debug", "ms"),))
         self.assertEqual(direct.paths, ())
 
+    def test_packages_carry_the_environments_that_lock_them(self):
+        row = {
+            "ecosystem": "conda",
+            "name": "numpy",
+            "version": "2.0.0",
+            "artifact": "https://example.org/numpy",
+            "platform": "linux-64",
+        }
+        locked = updater.Package._from_dict(
+            {**row, "environments": ["default", "lint"]}
+        )
+        self.assertEqual(locked.environments, ("default", "lint"))
+        self.assertEqual(updater.Package._from_dict(row).environments, ())
+
     @unittest.skipUnless(
         os.environ.get("PIXI"), "set PIXI to run the native integration"
     )

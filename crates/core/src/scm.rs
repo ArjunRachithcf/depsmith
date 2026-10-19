@@ -275,3 +275,90 @@ fn sanitized_config(root: &Path, config: &Path) -> Result<String> {
     }
     Ok(result)
 }
+
+/// The `REVISION:./path` spec git reads a file's committed content from, or
+/// its staged content when `revision` is `None`.
+fn object_spec(revision: Option<&str>, path: &Path) -> Result<String> {
+    let mut relative = String::from(".");
+    for part in path.components() {
+        let std::path::Component::Normal(part) = part else {
+            return Err(Error::Invalid(format!(
+                "{} must be a relative path inside the repository",
+                path.display()
+            )));
+        };
+        relative.push('/');
+        relative.push_str(
+            part.to_str()
+                .ok_or_else(|| Error::Invalid("paths read from Git must be UTF-8".into()))?,
+        );
+    }
+    Ok(format!("{}:{relative}", revision.unwrap_or_default()))
+}
+
+/// `git args` in `root`, with a failure reported as an invalid request.
+fn git_or_invalid(root: &Path, args: &[&str]) -> Result<String> {
+    git(root, args).map_err(|e| Error::Invalid(format!("git {}: {e}", args.join(" "))))
+}
+
+/// Fails unless `root` is in a git repository.
+fn in_repository(root: &Path) -> Result<()> {
+    git_or_invalid(root, &["rev-parse", "--show-toplevel"]).map(|_| ())
+}
+
+/// The commit `revision` names, in the repository `root` is in.
+fn resolve(root: &Path, revision: &str) -> Result<String> {
+    let spec = format!("{revision}^{{commit}}");
+    git(root, &["rev-parse", "--verify", "--quiet", &spec])
+        .map(|sha| sha.trim().to_owned())
+        .map_err(|_| Error::Invalid(format!("unknown Git revision {revision}")))
+}
+
+/// The merge-base of `HEAD` with the default branch: `origin/HEAD`, else
+/// `origin/main`, else `main`.
+pub(crate) fn merge_base(root: &Path) -> Result<String> {
+    in_repository(root)?;
+    let branch = ["origin/HEAD", "origin/main", "main"]
+        .into_iter()
+        .find(|branch| resolve(root, branch).is_ok())
+        .ok_or_else(|| {
+            Error::Invalid(
+                "no default branch to compare with (tried origin/HEAD, origin/main and main); pass --base".into(),
+            )
+        })?;
+    Ok(git_or_invalid(root, &["merge-base", "HEAD", branch])?
+        .trim()
+        .to_owned())
+}
+
+/// Write each of `paths` (relative to `root`, the repository or a directory
+/// in it) as it is at `revision`, or in the index when `None`, under
+/// `destination`. A path missing there is left out.
+pub(crate) fn materialize(
+    root: &Path,
+    revision: Option<&str>,
+    paths: &[PathBuf],
+    destination: &Path,
+) -> Result<()> {
+    in_repository(root)?;
+    let revision = revision.map(|r| resolve(root, r)).transpose()?;
+    for path in paths {
+        let object = object_spec(revision.as_deref(), path)?;
+        if git(root, &["cat-file", "-e", &object]).is_err() {
+            continue;
+        }
+        write_under(destination, path, git_or_invalid(root, &["show", &object])?)?;
+    }
+    Ok(())
+}
+
+/// Write `contents` to `path` under `destination`, creating its directories.
+pub(crate) fn write_under(
+    destination: &Path,
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+) -> Result<()> {
+    let file = destination.join(path);
+    fs::create_dir_all(file.parent().unwrap_or(destination))?;
+    Ok(fs::write(file, contents)?)
+}

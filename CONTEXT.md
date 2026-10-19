@@ -243,8 +243,12 @@ _Avoid_: Gate (for the configured rule)
 
 ## Impact analysis
 
+**Lock change**:
+The packages that moved, were added or were removed between two resolutions of one target's lock, each on one platform and, where the lock has several, in one environment; where impact analysis starts.
+_Avoid_: Diff (reserved for file text), lock delta
+
 **Affected package**:
-A package a lock change moves, adds or removes, or a declared or imported package whose dependency path reaches one.
+A package a lock change moves, adds or removes, or a package that depends on the version that changed, through the lock graph.
 _Avoid_: Impacted dependency, blast radius
 
 **Usage site**:

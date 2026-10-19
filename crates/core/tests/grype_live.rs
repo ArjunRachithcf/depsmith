@@ -10,6 +10,7 @@ fn real_grype_compares_vulnerable_and_patched_versions_with_one_snapshot() {
         version: "1.26.5".into(),
         artifact: "https://files.pythonhosted.org/packages/urllib3.whl".into(),
         platform: "linux-64".into(),
+        environments: vec![],
     };
     // https://github.com/advisories/GHSA-v845-jxx5-vc9f: patched in 1.26.17.
     // This version can still have other advisories; do not assert it is clean.
@@ -72,6 +73,7 @@ fn real_grype_candidate_only_scan_with_scoped_suppression() {
         version: "1.26.5".into(),
         artifact: "https://files.pythonhosted.org/packages/urllib3.whl".into(),
         platform: "linux-64".into(),
+        environments: vec![],
     };
     let options = UpdateOptions {
         scan: true,

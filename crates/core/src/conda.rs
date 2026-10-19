@@ -257,6 +257,7 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
             version,
             artifact: field("url").unwrap_or_default(),
             platform,
+            environments: vec![],
         });
     }
     Ok(packages)

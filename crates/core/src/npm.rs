@@ -286,6 +286,7 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
             version: version.into(),
             artifact: resolved.into(),
             platform: "any".into(),
+            environments: vec![],
         });
     }
     Ok(packages)
@@ -300,7 +301,8 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
 /// `peerDependencies` keeps its requirement as `spec` and reaches the copy npm
 /// resolves it to: the nearest `node_modules` folder of that name, from the
 /// package's own folder up to the root. An alias reaches the package it
-/// names, and a dependency with no installed copy is left out.
+/// names; a dependency with no installed copy, and a peer
+/// `peerDependenciesMeta` marks optional, are left out.
 ///
 /// # Errors
 ///
@@ -346,12 +348,22 @@ pub fn lock_graph(text: &str) -> Result<LockGraph> {
             continue;
         };
         let mut requires: Vec<Requirement> = vec![];
+        // An optional peer is the host's to install, not this package's.
+        let optional_peer = |dependency: &str| {
+            entry
+                .get("peerDependenciesMeta")
+                .and_then(|meta| meta.get(dependency)?.get("optional")?.as_bool())
+                == Some(true)
+        };
         for object in ["dependencies", "optionalDependencies", "peerDependencies"] {
             for (dependency, spec) in entry
                 .get(object)
                 .and_then(Value::as_object)
                 .into_iter()
                 .flatten()
+                .filter(|(dependency, _)| {
+                    object != "peerDependencies" || !optional_peer(dependency)
+                })
             {
                 // npm looks in `node_modules` of the package's folder, then
                 // of each folder above it.

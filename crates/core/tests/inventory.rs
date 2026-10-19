@@ -102,3 +102,27 @@ fn pixi_graph_records_pypi_requirements_without_uninstalled_extras() {
         ]
     );
 }
+
+#[test]
+fn pixi_packages_record_the_environments_that_lock_them() {
+    let lock = "version: 6\nenvironments:\n  default:\n    packages:\n      linux-64:\n      - conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-2.0.0-0.conda\n  lint:\n    packages:\n      linux-64:\n      - conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-1.26.4-0.conda\n      win-64:\n      - conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-2.0.0-0.conda\n  test:\n    packages:\n      linux-64:\n      - conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-2.0.0-0.conda\npackages:\n- conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-2.0.0-0.conda\n  name: numpy\n  version: 2.0.0\n- conda: https://conda.anaconda.org/conda-forge/linux-64/numpy-1.26.4-0.conda\n  name: numpy\n  version: 1.26.4\n";
+    let mut packages: Vec<(String, String, Vec<String>)> = pixi_inventory(lock)
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.version, p.platform, p.environments))
+        .collect();
+    packages.sort();
+    let envs = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        packages,
+        [
+            ("1.26.4".into(), "linux-64".into(), envs(&["lint"])),
+            (
+                "2.0.0".into(),
+                "linux-64".into(),
+                envs(&["default", "test"])
+            ),
+            ("2.0.0".into(), "win-64".into(), envs(&["lint"])),
+        ]
+    );
+}

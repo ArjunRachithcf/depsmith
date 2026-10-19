@@ -195,7 +195,7 @@ A reviewed statement that a package is the same software as an upstream identity
 - `purl`: Unversioned Package URL, such as `pkg:pypi/urllib3`.
 - `evidence`: HTTPS link to the provenance that establishes the mapping.
 
-### `Package(ecosystem: str, name: str, version: str, artifact: str, platform: str)`
+### `Package(ecosystem: str, name: str, version: str, artifact: str, platform: str, environments: tuple[str, ...])`
 
 One resolved package in an inventory.
 
@@ -206,6 +206,7 @@ One resolved package in an inventory.
 - `version`: Resolved version; empty when the lock records none.
 - `artifact`: The exact artifact or reference resolved.
 - `platform`: Platform resolved for, such as `linux-64`.
+- `environments`: The environments that lock it, where the lock has several (Pixi); empty otherwise.
 
 ### `PreciseUpdate(package: str, version: str)`
 

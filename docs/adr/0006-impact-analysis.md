@@ -10,12 +10,13 @@ A proposal lists which packages move, but not what in the target's code uses the
 
 ## Consequences
 
-- **The comparison** is between two lock graphs (ADR 0005), each read with the adapter's `lock_graph`.
+- **The comparison** is between two locks of the target. The adapter's inventory decides what changed, since not every lock graph records versions or sources. Its lock graph (ADR 0005) decides what the change affects. A side without the target's lock is an empty lock, so locking for the first time adds every package.
   - The "before" side comes from git (`--base REF`, the merge-base by default when `CI` is set) or a file (`--old-lockfile`). The "after" side is the worktree, the index (`--staged`, the default locally), or a revision checked out in a temporary worktree (`--head REF`). Manifests are read from the "after" side.
   - A change is a version or source change, an addition or a removal, flagged major or direct, per environment and platform. In Pixi, an environment that catches up to another environment's version has an update, never a removal.
-- **Affected packages** are the changed packages plus every declared or imported package whose dependency path reaches one, found by walking the lock graph in reverse.
+- **Affected packages** are the changed packages plus every package that depends on the version that changed, found by walking the lock graph in reverse.
   - uv extras count only when the lock activates them. Optional npm peers are ignored.
   - In Pixi, C/C++ runtimes stop the walk (`runtime-barrier`). The interpreter is a barrier too: a change to `python` itself is a full run. Its native libraries map to the standard-library modules built on them (`openssl` to `ssl` and `hashlib`).
+  - A change to a compiler, or to a tool that builds native extensions (such as `cython` or `pybind11`), is a full run.
   - Environments without the test runner list their changes but never select tests.
 - **Usage sites** come from an import scanner per language, built on tree-sitter, which tolerates syntax it does not know instead of falling back to a line scan.
   - Python: absolute and relative imports, `importlib.import_module`, `pytest_plugins` and `pytest.importorskip`. Distribution names map to import names through the target's environment first (`.venv`, or `.pixi/envs/*/conda-meta`), then through a built-in table. `types-*` and `*-stubs` map to the package they type.
@@ -24,7 +25,7 @@ A proposal lists which packages move, but not what in the target's code uses the
 - **Test selection** walks the first-party import graph in reverse, from usage sites to test files, and reports each selected test with its chain.
   - Tests are recognised from the runners' own configs, with the deepest config per runner winning: pytest (ini, `pyproject.toml`, tox, `setup.cfg`, Pixi tasks), and vitest/vite, jest, mocha, playwright and cypress, read statically. A computed value falls back to the runner's default, with a warning.
   - An affected `conftest.py` selects every test below it. End-to-end tests are selected whenever affected app code exists.
-- **A full run always names its reason**: a test runner or one of its plugins changed, a global or setup file is affected, a config names a changed package, `typescript` changed under `ts-jest`, or a lock cannot be parsed.
+- **A full run always names its reason**: the interpreter, a compiler or an extension build tool changed, a test runner or one of its plugins changed, a global or setup file is affected, a config names a changed package, `typescript` changed under `ts-jest`, or a lock cannot be parsed.
 - **Changes that select nothing are classified**: tooling only, type stubs only, covered, unreferenced, or no visible impact.
 - **Untested files** are affected non-test files that no test reaches, even transitively. **Exposed files** are those clients reach directly: Python entry points, the top-level package `__init__`, route decorators and Click/Typer commands; npm `main`/`module`/`exports`/`bin` (mapped from `dist/` back to `src/`), Next.js routes and pages, and Express-style handlers; plus the `exposed` globs, which `internal` globs override.
 - **Flow verification** (`--verify`) checks each untested path against the installed "after" environment without running the target's code. Python checks run in the project interpreter and JS checks in node, with the input given as JSON on stdin. Every reference must still resolve, and every direct call must still fit its signature. The outcome is verified, partial, broken or unchecked; a package that isn't installed is unchecked, never broken. `--smoke` imports untested modules and runs `tsc --noEmit` for each owning tsconfig.

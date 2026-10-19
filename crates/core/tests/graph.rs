@@ -1,5 +1,6 @@
 //! Dependency paths through a lock graph: from each declared dependency to a
-//! package, shortest first, per platform and ecosystem.
+//! package, shortest first, per platform and ecosystem; and the packages that
+//! depend on one, walking the graph in reverse.
 use depsmith_core::graph::{LockGraph, Node, Requirement};
 
 fn node(ecosystem: &str, platform: &str, name: &str, requires: &[&str]) -> Node {
@@ -158,4 +159,41 @@ fn a_requirement_naming_a_version_reaches_only_that_version() {
     assert!(paths("serde", "leaf").is_empty());
     assert_eq!(paths("old", "leaf"), [["old", "leaf"]]);
     assert_eq!(paths("app", "leaf"), [["app", "old", "leaf"]]);
+}
+
+#[test]
+fn dependents_are_found_nearest_first_with_the_chain_down_to_the_package() {
+    let graph = LockGraph {
+        nodes: vec![
+            conda("linux-64", "app-cli", &["requests", "python"]),
+            conda("linux-64", "requests", &["urllib3"]),
+            conda("linux-64", "urllib3", &["python"]),
+            conda("linux-64", "python", &["libgcc"]),
+            conda("linux-64", "libgcc", &[]),
+            conda("osx-arm64", "urllib3", &[]),
+        ],
+    };
+    let found = |platform: &str, name: &str, barriers: &[(&str, &str)]| -> Vec<(String, String)> {
+        graph
+            .dependents(platform, ("conda", name), None, barriers)
+            .into_iter()
+            .map(|d| (d.name, d.path.join(">")))
+            .collect()
+    };
+    assert_eq!(
+        found("linux-64", "urllib3", &[]),
+        [
+            ("requests".into(), "requests>urllib3".into()),
+            ("app-cli".into(), "app-cli>requests>urllib3".into())
+        ]
+    );
+    // A barrier is neither reported nor walked past.
+    assert_eq!(
+        found("linux-64", "libgcc", &[("conda", "python")]),
+        Vec::<(String, String)>::new()
+    );
+    assert_eq!(
+        found("osx-arm64", "urllib3", &[]),
+        Vec::<(String, String)>::new()
+    );
 }

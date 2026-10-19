@@ -847,3 +847,19 @@ fn lock_graph_rejects_unsupported_locks() {
     assert!(depsmith_core::npm::lock_graph("{").is_err());
     assert!(depsmith_core::npm::lock_graph("{\"lockfileVersion\": 1}").is_err());
 }
+
+#[test]
+fn lock_graph_ignores_optional_peers() {
+    let lock = r#"{"lockfileVersion": 3, "packages": {
+      "": {"name": "root", "dependencies": {"plugin": "^1.0.0", "host": "^2.0.0"}},
+      "node_modules/plugin": {"version": "1.0.0", "resolved": "https://registry.npmjs.org/plugin/-/plugin-1.0.0.tgz",
+        "peerDependencies": {"host": "^2.0.0", "logger": "^1.0.0"},
+        "peerDependenciesMeta": {"logger": {"optional": true}}},
+      "node_modules/host": {"version": "2.0.0", "resolved": "https://registry.npmjs.org/host/-/host-2.0.0.tgz"},
+      "node_modules/logger": {"version": "1.0.0", "resolved": "https://registry.npmjs.org/logger/-/logger-1.0.0.tgz"}
+    }}"#;
+    let graph = depsmith_core::npm::lock_graph(lock).unwrap();
+    let names: Vec<(String, Option<String>, Option<String>)> = requires(&graph, "plugin", "1.0.0");
+    let names: Vec<&str> = names.iter().map(|(name, ..)| name.as_str()).collect();
+    assert_eq!(names, ["host"]);
+}

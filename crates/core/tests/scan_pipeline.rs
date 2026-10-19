@@ -15,6 +15,7 @@ fn urllib3(version: &str) -> Package {
         version: version.into(),
         artifact: format!("https://files.pythonhosted.org/packages/urllib3-{version}.whl"),
         platform: "linux-64".into(),
+        environments: vec![],
     }
 }
 
@@ -26,6 +27,7 @@ fn conda_openssl() -> Package {
         artifact: "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.0.0-h7f98852_0.conda"
             .into(),
         platform: "linux-64".into(),
+        environments: vec![],
     }
 }
 

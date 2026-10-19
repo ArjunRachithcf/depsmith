@@ -224,6 +224,7 @@ pub fn lock_inventory(text: &str) -> Result<Vec<Package>> {
                 source.into()
             },
             platform: "any".into(),
+            environments: vec![],
         });
     }
     Ok(inventory)

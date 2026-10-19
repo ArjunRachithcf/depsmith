@@ -172,6 +172,8 @@ class Package:
         version: Resolved version; empty when the lock records none.
         artifact: The exact artifact or reference resolved.
         platform: Platform resolved for, such as ``linux-64``.
+        environments: The environments that lock it, where the lock has
+            several (Pixi); empty otherwise.
     """
 
     ecosystem: str
@@ -179,6 +181,11 @@ class Package:
     version: str
     artifact: str
     platform: str
+    environments: tuple[str, ...] = ()
+
+    @classmethod
+    def _from_dict(cls, data: dict[str, Any]) -> Package:
+        return cls(**{**data, "environments": tuple(data.get("environments", ()))})
 
 
 @dataclass(frozen=True)
@@ -361,7 +368,7 @@ class ScanReport:
             Suppression(**row) for row in data["expired_suppressions"]
         )
         for key in ("unknown_before", "unknown_after"):
-            data[key] = tuple(Package(**row) for row in data[key])
+            data[key] = tuple(Package._from_dict(row) for row in data[key])
         return cls(**data)
 
 
@@ -456,8 +463,8 @@ class Proposal:
         )
         self.dependencies = tuple(
             DependencyChange(
-                Package(**row["before"]) if row["before"] else None,
-                Package(**row["after"]) if row["after"] else None,
+                Package._from_dict(row["before"]) if row["before"] else None,
+                Package._from_dict(row["after"]) if row["after"] else None,
                 tuple(row.get("introducers", ())),
                 tuple(tuple(path) for path in row.get("paths", ())),
             )

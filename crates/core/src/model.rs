@@ -184,6 +184,22 @@ pub struct Package {
     pub artifact: String,
     /// Platform the package was resolved for, such as `linux-64`.
     pub platform: String,
+    /// The environments that lock it, where the lock has several (Pixi);
+    /// empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environments: Vec<String>,
+}
+
+impl Package {
+    /// Whether `other` is the same resolution: everything but the
+    /// environments that lock it, which change without the package moving.
+    pub(crate) fn same_resolution(&self, other: &Package) -> bool {
+        self.ecosystem == other.ecosystem
+            && self.name == other.name
+            && self.version == other.version
+            && self.artifact == other.artifact
+            && self.platform == other.platform
+    }
 }
 
 /// A package that differs between the baseline and the candidate.

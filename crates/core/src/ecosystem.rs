@@ -384,6 +384,7 @@ mod tests {
             version: "1.0.0".into(),
             artifact: artifact.into(),
             platform: "any".into(),
+            environments: vec![],
         };
         assert_eq!(
             native_identity(&package(
@@ -444,6 +445,7 @@ mod tests {
             version: version.into(),
             artifact: artifact.into(),
             platform: "linux-64".into(),
+            environments: vec![],
         };
         let wheel = "https://files.pythonhosted.org/packages/x/zope.interface-7.0.whl";
         assert_eq!(

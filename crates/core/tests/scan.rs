@@ -11,6 +11,7 @@ fn package(ecosystem: &str, name: &str, version: &str) -> Package {
         version: version.into(),
         artifact: "https://example.org/linux-64/pkg.conda".into(),
         platform: "linux-64".into(),
+        environments: vec![],
     }
 }
 #[test]
@@ -57,6 +58,7 @@ fn github_action_inventory_keeps_the_repository_identity() {
         version: "v4.2.1".into(),
         artifact: "https://github.com/actions/checkout@v4.2.1".into(),
         platform: "workflow".into(),
+        environments: vec![],
     };
     let (sbom, unknown) = inventory_sbom(&[action], &[]).unwrap();
     assert!(unknown.is_empty());
