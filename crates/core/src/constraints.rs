@@ -198,14 +198,9 @@ impl<'a> Lookup<'a> {
         }
     }
 
-    /// Releases the requirement excludes, plus notes for registries that
-    /// could not be consulted.
-    fn excluded(
-        &self,
-        ecosystem: &str,
-        package: &str,
-        requirement: &str,
-    ) -> Result<(Vec<Excluded>, Vec<String>)> {
+    /// The stricter of the target's release-age cutoff and the cooldown, in
+    /// milliseconds, with the policy to cite.
+    fn cutoff(&self) -> Result<(Option<i64>, Option<String>)> {
         let cutoff = match &self.config.exclude_newer {
             None => None,
             Some(text) => {
@@ -221,12 +216,69 @@ impl<'a> Lookup<'a> {
             .exclude_newer
             .as_ref()
             .map(|t| format!("exclude-newer {t}"));
-        let (cutoff, policy) = with_cooldown(
+        Ok(with_cooldown(
             cutoff,
             policy,
             self.options.cooldown_days,
             crate::cutoff::now_ms(),
-        );
+        ))
+    }
+
+    /// The final, non-yanked releases of `package` its registry publishes.
+    /// PyPI's come from the first index that has the package, as uv takes
+    /// it, uploaded before the release-age cutoff; crates.io dates none, so
+    /// none are cut off. `None` where the registry gives no release listing
+    /// depsmith reads.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the registry, or an index before the one that has the
+    /// package, cannot be read: which releases the tool would see is then
+    /// unknown.
+    pub(crate) fn releases(&self, ecosystem: &str, package: &str) -> Result<Option<Vec<String>>> {
+        let (cutoff, _) = self.cutoff()?;
+        match self.config.registries.get(ecosystem) {
+            Some(RegistryConfig::PypiSimple { indexes }) => {
+                for index in indexes {
+                    let page = crate::pypi::fetch(index, package, self.options.timeout_seconds)
+                        .map_err(|e| Error::Operation(format!("{index}: {e}")))?;
+                    let releases = crate::pypi::releases(&page, cutoff);
+                    if !releases.is_empty() {
+                        return Ok(Some(releases));
+                    }
+                }
+                Ok(Some(vec![]))
+            }
+            Some(RegistryConfig::CratesSparse { index }) => {
+                crate::cargo::sparse_releases(index, package, self.options.timeout_seconds)
+                    .map(Some)
+            }
+            Some(RegistryConfig::Fixture { failing, .. })
+                if failing.iter().any(|f| f == package) =>
+            {
+                Err(Error::Operation(format!("fixture: {package}")))
+            }
+            Some(RegistryConfig::Fixture { releases, .. }) => Ok(Some(
+                releases
+                    .get(package)
+                    .into_iter()
+                    .flatten()
+                    .map(|r| r.version.clone())
+                    .collect(),
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// Releases the requirement excludes, plus notes for registries that
+    /// could not be consulted.
+    fn excluded(
+        &self,
+        ecosystem: &str,
+        package: &str,
+        requirement: &str,
+    ) -> Result<(Vec<Excluded>, Vec<String>)> {
+        let (cutoff, policy) = self.cutoff()?;
         let label = |mut excluded: Vec<Excluded>| {
             for e in &mut excluded {
                 e.policy = policy.clone();
@@ -705,6 +757,129 @@ pub(crate) fn accept(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A registry answering `GET path` with each route's `(status, content
+    /// type, body)`, and 404 otherwise; returns its base URL.
+    fn serve(routes: Vec<(&str, u16, &str, String)>) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let routes: Vec<(String, u16, String, String)> = routes
+            .into_iter()
+            .map(|(path, status, kind, body)| (path.to_owned(), status, kind.to_owned(), body))
+            .collect();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(&stream);
+                let (mut request, mut line) = (String::new(), String::new());
+                reader.read_line(&mut request).unwrap_or_default();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let path = request.split(' ').nth(1).unwrap_or_default();
+                let (status, kind, body) = routes
+                    .iter()
+                    .find(|(p, ..)| p == path)
+                    .map_or((404, "text/plain", ""), |(_, s, k, b)| {
+                        (*s, k.as_str(), b.as_str())
+                    });
+                let mut stream = &stream;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        base
+    }
+
+    fn releases(
+        registry: RegistryConfig,
+        ecosystem: &str,
+        package: &str,
+    ) -> Result<Option<Vec<String>>> {
+        let options = UpdateOptions::default();
+        let config = AvailabilityConfig {
+            registries: BTreeMap::from([(ecosystem.to_owned(), registry)]),
+            exclude_newer: None,
+        };
+        Lookup::new(Path::new("."), &options, config).releases(ecosystem, package)
+    }
+
+    const SIMPLE: &str = "application/vnd.pypi.simple.v1+json";
+
+    #[test]
+    fn pypi_releases_come_from_the_first_index_that_has_the_package() {
+        let file = |name: &str, yanked: bool| serde_json::json!({"filename": name, "url": name, "hashes": {}, "yanked": yanked});
+        let listed = serde_json::json!({"files": [
+            file("idna-3.7.tar.gz", false),
+            file("idna-3.7.1-py3-none-any.whl", false),
+            file("idna-3.7.1.tar.gz", false),
+            file("idna-3.8rc1.tar.gz", false),
+            file("idna-3.9.tar.gz", true),
+        ]});
+        let base = serve(vec![
+            ("/first/idna/", 200, SIMPLE, r#"{"files": []}"#.into()),
+            ("/second/idna/", 200, SIMPLE, listed.to_string()),
+            (
+                "/third/idna/",
+                200,
+                SIMPLE,
+                r#"{"files": [{"filename": "idna-9.0.tar.gz"}]}"#.into(),
+            ),
+            ("/broken/idna/", 500, "text/plain", String::new()),
+        ]);
+        let indexes = |names: &[&str]| RegistryConfig::PypiSimple {
+            indexes: names.iter().map(|n| format!("{base}/{n}")).collect(),
+        };
+        // Finals only, without yanked ones, from the second index alone.
+        assert_eq!(
+            releases(indexes(&["first", "second", "third"]), "pypi", "idna").unwrap(),
+            Some(vec!["3.7".to_owned(), "3.7.1".to_owned()])
+        );
+        // An index before the one with the package fails: which releases uv
+        // would see is unknown.
+        let error = releases(indexes(&["broken", "second"]), "pypi", "idna").unwrap_err();
+        assert!(error.to_string().contains("broken"), "{error}");
+    }
+
+    #[test]
+    fn crates_releases_are_the_final_unyanked_ones_in_the_sparse_index() {
+        let row = |vers: &str, yanked: bool| {
+            serde_json::json!({"name": "itoa", "vers": vers, "cksum": "c", "yanked": yanked})
+                .to_string()
+        };
+        let lines = [
+            row("1.0.5", false),
+            row("1.0.9", false),
+            row("1.1.0-beta.1", false),
+            row("1.0.10", true),
+        ]
+        .join("\n");
+        let base = serve(vec![("/it/oa/itoa", 200, "text/plain", lines)]);
+        let index = RegistryConfig::CratesSparse {
+            index: format!("{base}/"),
+        };
+        assert_eq!(
+            releases(index, "cargo", "itoa").unwrap(),
+            Some(vec!["1.0.5".to_owned(), "1.0.9".to_owned()])
+        );
+        let missing = RegistryConfig::CratesSparse {
+            index: format!("{base}/"),
+        };
+        assert!(releases(missing, "cargo", "ryu").is_err());
+    }
+
+    #[test]
+    fn registries_without_a_listing_give_none() {
+        let npm = RegistryConfig::NpmRegistry {
+            url: "https://registry.npmjs.org/".into(),
+            scopes: BTreeMap::new(),
+            npmrc: vec![],
+        };
+        assert_eq!(releases(npm, "npm", "ms").unwrap(), None);
+    }
 
     #[test]
     fn a_cooldown_applies_unless_the_native_cutoff_is_stricter() {

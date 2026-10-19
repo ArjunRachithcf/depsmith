@@ -357,6 +357,36 @@ pub(crate) fn sparse_excluded(
     requirement: &str,
     timeout: u64,
 ) -> Result<Vec<Excluded>> {
+    let rows = sparse_rows(index, name, timeout)?;
+    let borrowed: Vec<_> = rows
+        .iter()
+        .map(|(v, u, c)| (v.clone(), u.as_str(), c.as_str()))
+        .collect();
+    let scope = if index == CRATES_IO_INDEX {
+        "crates.io"
+    } else {
+        index
+    };
+    semver_excluded(scope, &borrowed, requirement)
+}
+
+/// The final, non-yanked releases of crate `name` that a sparse index
+/// publishes.
+pub(crate) fn sparse_releases(index: &str, name: &str, timeout: u64) -> Result<Vec<String>> {
+    Ok(sparse_rows(index, name, timeout)?
+        .into_iter()
+        .filter(|(version, _, _)| version.pre.is_empty())
+        .map(|(version, _, _)| version.to_string())
+        .collect())
+}
+
+/// The non-yanked releases of crate `name` in a sparse index, each with its
+/// artifact and checksum.
+fn sparse_rows(
+    index: &str,
+    name: &str,
+    timeout: u64,
+) -> Result<Vec<(semver::Version, String, String)>> {
     let client = crate::http::client(timeout)?;
     let url = format!("{index}{}", sparse_path(name));
     let response = client
@@ -394,12 +424,7 @@ pub(crate) fn sparse_excluded(
         };
         rows.push((parsed, artifact, checksum.to_owned()));
     }
-    let borrowed: Vec<_> = rows
-        .iter()
-        .map(|(v, u, c)| (v.clone(), u.as_str(), c.as_str()))
-        .collect();
-    let scope = if crates_io { "crates.io" } else { index };
-    semver_excluded(scope, &borrowed, requirement)
+    Ok(rows)
 }
 
 /// Crates `cargo update` left behind because a newer release needs a newer

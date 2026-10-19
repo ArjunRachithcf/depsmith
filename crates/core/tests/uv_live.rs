@@ -108,7 +108,11 @@ fn live_security_update_moves_a_transitive_package_precisely_or_by_name() {
         "pkg:pypi/urllib3@2.0.7",
         "2.2.1",
     );
-    for target in [SecurityTarget::Lowest, SecurityTarget::Newest] {
+    for target in [
+        SecurityTarget::Lowest,
+        SecurityTarget::Patch,
+        SecurityTarget::Newest,
+    ] {
         let mut options = options(&[]);
         options.tools.insert("grype".into(), grype.clone());
         let options = UpdateOptions {
@@ -134,6 +138,18 @@ fn live_security_update_moves_a_transitive_package_precisely_or_by_name() {
         let moved = locked(&lock.after, "urllib3");
         if target == SecurityTarget::Lowest {
             assert_eq!(moved, "2.2.1");
+        } else if target == SecurityTarget::Patch {
+            // The newest release in the fix's line, from the index.
+            assert!(
+                !proposal
+                    .validation
+                    .iter()
+                    .any(|n| n.contains("--security-target patch")),
+                "{:?}",
+                proposal.validation
+            );
+            assert!(moved.starts_with("2.2."), "{moved}");
+            assert_eq!(fix.fix_version.as_deref(), Some(moved));
         } else {
             assert_ne!(
                 moved, "2.0.7",

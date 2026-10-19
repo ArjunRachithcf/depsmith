@@ -156,6 +156,43 @@ fn file_version(filename: &str) -> Option<&str> {
     stem.rsplit_once('-').map(|(_, version)| version)
 }
 
+/// The final, non-yanked files of an index `page`, with their versions,
+/// uploaded before `cutoff` when one is given.
+fn release_files(page: &Value, cutoff: Option<i64>) -> Vec<(crate::pep440::Version, &Value)> {
+    page["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|f| matches!(f.get("yanked"), None | Some(Value::Bool(false))))
+        // Undated files cannot be shown to predate a release-age cutoff.
+        .filter(|f| {
+            cutoff.is_none_or(|c| {
+                f["upload-time"]
+                    .as_str()
+                    .and_then(crate::cutoff::timestamp)
+                    .is_some_and(|t| t <= c)
+            })
+        })
+        .filter_map(|f| {
+            let version = crate::pep440::Version::parse(file_version(f["filename"].as_str()?)?)?;
+            (!version.is_prerelease()).then_some((version, f))
+        })
+        .collect()
+}
+
+/// The final, non-yanked releases an index `page` publishes, uploaded
+/// before `cutoff` when one is given, without repeats.
+pub(crate) fn releases(page: &Value, cutoff: Option<i64>) -> Vec<String> {
+    let mut releases: Vec<String> = vec![];
+    for (version, _) in release_files(page, cutoff) {
+        let version = version.text().to_owned();
+        if !releases.contains(&version) {
+            releases.push(version);
+        }
+    }
+    releases
+}
+
 /// Per index, cite the newest final, non-yanked release the requirement
 /// excludes. Errors when the requirement is not a valid PEP 440 specifier set.
 pub(crate) fn evidence(
@@ -174,25 +211,7 @@ pub(crate) fn evidence(
     for (index, page) in pages {
         let base =
             reqwest::Url::parse(&format!("{index}/{}/", crate::adapter::pypi_key(package))).ok();
-        let releases: Vec<(Version, &Value)> = page["files"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|f| matches!(f.get("yanked"), None | Some(Value::Bool(false))))
-            // Undated files cannot be shown to predate a release-age cutoff.
-            .filter(|f| {
-                cutoff.is_none_or(|c| {
-                    f["upload-time"]
-                        .as_str()
-                        .and_then(crate::cutoff::timestamp)
-                        .is_some_and(|t| t <= c)
-                })
-            })
-            .filter_map(|f| {
-                let version = Version::parse(file_version(f["filename"].as_str()?)?)?;
-                (!version.is_prerelease()).then_some((version, f))
-            })
-            .collect();
+        let releases: Vec<(Version, &Value)> = release_files(page, cutoff);
         let Some((newest, file)) = releases.iter().max_by(|a, b| a.0.cmp(&b.0)) else {
             continue;
         };

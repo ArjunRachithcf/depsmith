@@ -3,8 +3,9 @@
 //! fix version, and the candidate scan decides what was fixed.
 #![cfg(unix)]
 use depsmith_core::{
-    constraints::RegistryConfig, uv::Uv, Engine, Error, FixOutcome, Proposal, SecurityFix,
-    SecurityTarget, UpdateOptions,
+    constraints::{FixtureRelease, RegistryConfig},
+    uv::Uv,
+    Engine, Error, FixOutcome, Proposal, SecurityFix, SecurityTarget, UpdateOptions,
 };
 use serde_json::json;
 use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt};
@@ -62,9 +63,23 @@ fn prepare(
     advisories: &[(String, String)],
     options: UpdateOptions,
 ) -> Run {
+    prepare_with_releases(PYPROJECT, baseline, next, advisories, options, &[], &[])
+}
+
+/// [`prepare`] of the project `pyproject`, with an index that publishes
+/// `releases` of each package and fails for the `failing` ones.
+fn prepare_with_releases(
+    pyproject: &str,
+    baseline: &str,
+    next: &str,
+    advisories: &[(String, String)],
+    options: UpdateOptions,
+    releases: &[(&str, &[&str])],
+    failing: &[&str],
+) -> Run {
     let root = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
-    fs::write(root.path().join("pyproject.toml"), PYPROJECT).unwrap();
+    fs::write(root.path().join("pyproject.toml"), pyproject).unwrap();
     fs::write(root.path().join("uv.lock"), baseline).unwrap();
     let dir = tools.path();
     fs::write(dir.join("next.lock"), next).unwrap();
@@ -98,10 +113,20 @@ fn prepare(
         security_only: true,
         ..options
     };
-    // An offline registry: availability evidence is not under test.
+    // An offline registry, for evidence and the releases patch aims at.
     let registry = RegistryConfig::Fixture {
-        releases: BTreeMap::new(),
-        failing: vec![],
+        releases: releases
+            .iter()
+            .map(|(name, versions)| {
+                let release = |version: &&str| FixtureRelease {
+                    version: version.to_string(),
+                    url: format!("https://files.pythonhosted.org/{name}-{version}.tar.gz"),
+                    sha256: format!("sha256-{version}"),
+                };
+                (name.to_string(), versions.iter().map(release).collect())
+            })
+            .collect(),
+        failing: failing.iter().map(|name| name.to_string()).collect(),
     };
     let uv = Uv {
         registry: Some(registry),
@@ -362,6 +387,124 @@ fn newest_moves_by_name_and_untargeted_moves_are_listed() {
         .find(|n| n.contains("moved without being targeted"))
         .expect("untargeted moves are listed");
     assert!(note.contains("urllib3 2.0.0 -> 2.2.0"), "{note}");
+}
+
+#[test]
+fn patch_aims_at_the_newest_release_in_the_fix_line_the_index_publishes() {
+    let run = prepare_with_releases(
+        PYPROJECT,
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7.1", "2.0.0"),
+        &[advisory("GHSA-idna", "idna", "3.6", "High", &["3.7"])],
+        UpdateOptions {
+            security_target: SecurityTarget::Patch,
+            ..Default::default()
+        },
+        &[("idna", &["3.6", "3.7", "3.7.1", "3.8"])],
+        &[],
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    let first = &run.locks[0];
+    assert!(first.contains("--upgrade-package idna==3.7.1"), "{first}");
+    assert_eq!(
+        fix(&proposal, "GHSA-idna").fix_version.as_deref(),
+        Some("3.7.1")
+    );
+    assert!(
+        !proposal
+            .validation
+            .iter()
+            .any(|n| n.contains("no release data")),
+        "{:?}",
+        proposal.validation
+    );
+}
+
+#[test]
+fn patch_aims_at_the_newest_release_in_the_fix_line_the_declaration_admits() {
+    let run = prepare_with_releases(
+        &PYPROJECT.replace("\"idna\"", "\"idna<3.7.5\""),
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7.4", "2.0.0"),
+        &[advisory("GHSA-idna", "idna", "3.6", "High", &["3.7"])],
+        UpdateOptions {
+            security_target: SecurityTarget::Patch,
+            ..Default::default()
+        },
+        &[("idna", &["3.7", "3.7.4", "3.7.9"])],
+        &[],
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert!(
+        run.locks[0].contains("--upgrade-package idna==3.7.4"),
+        "{:?}",
+        run.locks
+    );
+    assert_eq!(fix(&proposal, "GHSA-idna").outcome, FixOutcome::Fixed);
+    // No blocked fix: only the usual suggestion that the cap excludes 3.7.9.
+    assert!(
+        proposal
+            .suggestions
+            .iter()
+            .all(|s| !s.reason.contains("GHSA-idna")),
+        "{:?}",
+        proposal.suggestions
+    );
+}
+
+#[test]
+fn a_failed_release_listing_is_reported_and_patch_aims_at_the_lowest_fix() {
+    let run = prepare_with_releases(
+        PYPROJECT,
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[advisory("GHSA-idna", "idna", "3.6", "High", &["3.7"])],
+        UpdateOptions {
+            security_target: SecurityTarget::Patch,
+            ..Default::default()
+        },
+        &[("idna", &["3.7", "3.7.1"])],
+        &["idna"],
+    );
+    let proposal = run.result.unwrap();
+    assert!(
+        run.locks[0].ends_with("--upgrade-package idna==3.7"),
+        "{:?}",
+        run.locks
+    );
+    assert!(
+        proposal
+            .validation
+            .iter()
+            .any(|n| n.contains("idna") && n.contains("release listing failed")),
+        "{:?}",
+        proposal.validation
+    );
+}
+
+#[test]
+fn patch_without_release_data_aims_at_the_lowest_fix_and_says_so() {
+    let run = prepare(
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[advisory("GHSA-idna", "idna", "3.6", "High", &["3.7"])],
+        UpdateOptions {
+            security_target: SecurityTarget::Patch,
+            ..Default::default()
+        },
+    );
+    let proposal = run.result.unwrap();
+    assert!(run.locks[0].contains("--upgrade-package idna==3.7"));
+    assert!(
+        proposal
+            .validation
+            .iter()
+            .any(|n| n.contains("idna") && n.contains("no release data")),
+        "{:?}",
+        proposal.validation
+    );
 }
 
 #[test]

@@ -64,12 +64,16 @@ fn compare(ecosystem: &str, left: &str, right: &str) -> Ordering {
     crate::ecosystem::scheme(ecosystem).map_or_else(|| left.cmp(right), |s| s.compare(left, right))
 }
 
+/// The major.minor line of `version`.
+fn line(version: &str) -> Vec<&str> {
+    version.split('.').take(2).collect()
+}
+
 /// Whether `version` fixes `finding`: it is at least the fixed release in
 /// its own major.minor line, or at least every fixed release when its line
 /// has none. A version between two lines' fixes is not assumed fixed.
 fn fixes(finding: &Finding, version: &str) -> bool {
     let ecosystem = ecosystem_of(finding);
-    let line = |v: &str| v.split('.').take(2).map(str::to_owned).collect::<Vec<_>>();
     let same_line: Vec<&String> = finding
         .fix_versions
         .iter()
@@ -89,8 +93,10 @@ fn fixes(finding: &Finding, version: &str) -> bool {
 
 /// The release that fixes all of `findings` (one package's), as `aim`
 /// asks: the lowest such fixed release above the locked version, else the
-/// highest fixed release. `None` when no fixed release is above it.
-fn aim_for(findings: &[&Finding], aim: SecurityTarget) -> Option<String> {
+/// highest fixed release; for `patch`, the newest of the `available`
+/// releases in that release's major.minor line that still fixes them all.
+/// `None` when no fixed release is above the locked version.
+fn aim_for(findings: &[&Finding], aim: SecurityTarget, available: &[String]) -> Option<String> {
     let first = findings.first()?;
     let ecosystem = ecosystem_of(first);
     let mut candidates: Vec<String> = findings
@@ -101,11 +107,44 @@ fn aim_for(findings: &[&Finding], aim: SecurityTarget) -> Option<String> {
         .collect();
     candidates.sort_by(|a, b| compare(ecosystem, a, b));
     candidates.dedup();
-    candidates
+    let lowest = candidates
         .iter()
         .find(|v| findings.iter().all(|f| fixes(f, v)))
-        .or(candidates.last())
+        .or(candidates.last())?;
+    if aim != SecurityTarget::Patch {
+        return Some(lowest.clone());
+    }
+    available
+        .iter()
+        .filter(|v| line(v) == line(lowest))
+        .filter(|v| compare(ecosystem, v, lowest) != Ordering::Less)
+        .filter(|v| findings.iter().all(|f| fixes(f, v)))
+        .max_by(|a, b| compare(ecosystem, a, b))
+        .or(Some(lowest))
         .cloned()
+}
+
+/// The requirement that governs package `name` in a security update: an
+/// acceptance's from `accept`, else its `declaration`'s. `None` when nothing
+/// constrains it here: no declaration, or a bare `--accept NAME`, which the
+/// evidence decides.
+fn governing_requirement(
+    declaration: Option<&Declaration>,
+    accept: &[String],
+    ecosystem: &str,
+    name: &str,
+) -> Result<Option<String>> {
+    let mut accepted = None;
+    for text in accept {
+        let acceptance = crate::constraint::parse_accept(text)?;
+        if same_name(ecosystem, &acceptance.name, name) {
+            accepted = Some(acceptance.requirement);
+        }
+    }
+    Ok(match accepted {
+        Some(requirement) => requirement,
+        None => declaration.map(|d| d.requirement.clone()),
+    })
 }
 
 fn record(
@@ -344,12 +383,16 @@ pub(crate) fn select(
             ));
         }
     }
-    if options.security_target == SecurityTarget::Patch && !actionable.is_empty() {
-        selection.notes.push(format!(
-            "{}: no release data for --security-target patch; aiming at the lowest fix",
-            target.id
-        ));
-    }
+    // `patch` needs the releases the registry publishes, and only a precise
+    // update can aim at one; without it the tool moves as far as it can.
+    let lookup = (options.security_target == SecurityTarget::Patch
+        && capabilities.precise_update == Support::Supported
+        && !actionable.is_empty())
+    .then(|| {
+        adapter
+            .availability(root, target)
+            .map(|config| crate::constraints::Lookup::new(root, options, config))
+    });
     // One move per package, whatever its findings and platforms.
     let mut packages: Vec<(String, String, Vec<&Finding>)> = vec![];
     for finding in actionable {
@@ -373,7 +416,39 @@ pub(crate) fn select(
     }
     let moves_transitive = &capabilities.transitive_updates;
     for (ecosystem, name, findings) in packages {
-        let Some(fix_version) = aim_for(&findings, options.security_target) else {
+        let declaration = declarations
+            .iter()
+            .find(|d| d.ecosystem == ecosystem && same_name(&ecosystem, &d.package, &name));
+        let requirement = governing_requirement(declaration, &options.accept, &ecosystem, &name)?;
+        let scheme = crate::ecosystem::scheme(&ecosystem);
+        let mut available = vec![];
+        if let Some(lookup) = &lookup {
+            let listed = match lookup {
+                Ok(lookup) => lookup
+                    .releases(&ecosystem, &name)
+                    .map_err(|e| e.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            let problem = match listed {
+                Ok(Some(releases)) if !releases.is_empty() => {
+                    available = releases;
+                    None
+                }
+                Ok(_) => Some("no release data".to_owned()),
+                Err(error) => Some(format!("release listing failed: {error}")),
+            };
+            if let Some(problem) = problem {
+                selection.notes.push(format!(
+                    "{}: {name}: {problem}; --security-target patch aims at its lowest fix",
+                    target.id
+                ));
+            }
+            // Only what the governing requirement admits can be aimed at.
+            if let (Some(requirement), Some(scheme)) = (&requirement, &scheme) {
+                available.retain(|v| scheme.admits(requirement, v) != Some(false));
+            }
+        }
+        let Some(fix_version) = aim_for(&findings, options.security_target, &available) else {
             for finding in findings {
                 selection.reported.push(record(
                     target,
@@ -455,26 +530,13 @@ pub(crate) fn select(
             }
             continue;
         };
-        // A declaration that excludes the fix blocks it before any tool runs.
-        let declaration = declarations
-            .iter()
-            .find(|d| d.ecosystem == ecosystem && same_name(&ecosystem, &d.package, &declared));
-        // An acceptance replaces the declared requirement before resolving;
-        // a bare `--accept NAME` is decided by the evidence, so not here.
-        let mut accepted = None;
-        for text in &options.accept {
-            let acceptance = crate::constraint::parse_accept(text)?;
-            if same_name(&ecosystem, &acceptance.name, &declared) {
-                accepted = Some(acceptance.requirement);
-            }
-        }
-        let excluded = declaration.filter(|d| {
-            let requirement = match &accepted {
-                Some(Some(requirement)) => requirement,
-                Some(None) => return false,
-                None => &d.requirement,
-            };
-            crate::ecosystem::scheme(&ecosystem).and_then(|s| s.admits(requirement, &fix_version))
+        // A requirement that excludes the fix blocks it before any tool
+        // runs; an acceptance replaces the declared one before resolving.
+        let excluded = declaration.filter(|_| {
+            requirement
+                .as_ref()
+                .zip(scheme.as_ref())
+                .and_then(|(requirement, scheme)| scheme.admits(requirement, &fix_version))
                 == Some(false)
         });
         if let Some(declaration) = excluded {
@@ -682,11 +744,11 @@ mod tests {
         assert!(!fixes(&backported, "3.0"));
         assert!(fixes(&backported, "2.9.1") && fixes(&backported, "3.1"));
         assert_eq!(
-            aim_for(&[&backported, &newer_only], SecurityTarget::Lowest).as_deref(),
+            aim_for(&[&backported, &newer_only], SecurityTarget::Lowest, &[]).as_deref(),
             Some("3.1")
         );
         assert_eq!(
-            aim_for(&[&backported], SecurityTarget::Lowest).as_deref(),
+            aim_for(&[&backported], SecurityTarget::Lowest, &[]).as_deref(),
             Some("2.9")
         );
     }

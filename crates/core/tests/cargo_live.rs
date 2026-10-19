@@ -113,7 +113,11 @@ fn live_security_update_moves_a_transitive_crate_precisely_or_by_name() {
         "pkg:cargo/itoa@1.0.5",
         "1.0.9",
     );
-    for target in [SecurityTarget::Lowest, SecurityTarget::Newest] {
+    for target in [
+        SecurityTarget::Lowest,
+        SecurityTarget::Patch,
+        SecurityTarget::Newest,
+    ] {
         let mut options = options(&[]);
         options.tools.insert("grype".into(), grype.clone());
         let options = UpdateOptions {
@@ -139,6 +143,18 @@ fn live_security_update_moves_a_transitive_crate_precisely_or_by_name() {
         let moved = locked(&lock.after, "itoa");
         if target == SecurityTarget::Lowest {
             assert_eq!(moved, "1.0.9");
+        } else if target == SecurityTarget::Patch {
+            // The newest release in the fix's line, from the index.
+            assert!(
+                !proposal
+                    .validation
+                    .iter()
+                    .any(|n| n.contains("--security-target patch")),
+                "{:?}",
+                proposal.validation
+            );
+            assert!(moved.starts_with("1.0."), "{moved}");
+            assert_eq!(fix.fix_version.as_deref(), Some(moved));
         } else {
             assert_ne!(
                 moved, "1.0.5",
