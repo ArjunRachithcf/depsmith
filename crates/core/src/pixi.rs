@@ -50,6 +50,8 @@ impl Adapter for Pixi {
                 install_validation: Support::Supported,
                 lockfile: Support::Supported,
                 platforms: Support::Supported,
+                // `pixi update NAME` moves a nested package too, as
+                // tests/pixi_live.rs shows (ADR 0004).
                 precise_update: Support::Unsupported(
                     "pixi update moves a package to the newest release its constraints allow"
                         .into(),

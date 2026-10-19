@@ -1,5 +1,5 @@
 //! Opt-in acceptance tests requiring Pixi and access to conda-forge/PyPI.
-use depsmith_core::{apply, Engine, UpdateOptions};
+use depsmith_core::{apply, Engine, PreciseUpdate, UpdateOptions};
 use std::fs;
 
 #[test]
@@ -439,4 +439,95 @@ six = "*"
             );
         }
     }
+}
+
+/// Pixi has no precise update, so a precise request falls back to `pixi
+/// update NAME`. ADR 0004 asks each adapter to show that its tool moves a
+/// nested package named this way: requests accepts any idna 3, which is locked
+/// here at 3.6.
+#[test]
+#[ignore = "runs native Pixi and downloads conda-forge metadata"]
+fn precise_update_of_a_nested_package_moves_it_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let manifest = r#"[workspace]
+name = "nested-fixture"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+[dependencies]
+python = "3.12.*"
+requests = "*"
+"#;
+    let options = UpdateOptions {
+        pixi: std::env::var("PIXI").unwrap_or_else(|_| "pixi".into()),
+        ..Default::default()
+    };
+    let engine = Engine::default();
+    let targets = ["pixi:pixi.toml".into()];
+    // Lock the older nested release with a pin, then drop the pin: the lock
+    // stays valid, since idna 3.6 is within requests' range.
+    fs::write(
+        root.path().join("pixi.toml"),
+        format!("{manifest}idna = \"==3.6\"\n"),
+    )
+    .unwrap();
+    let locked = engine
+        .prepare(root.path(), &targets, options.clone())
+        .unwrap();
+    assert!(locked.failures.is_empty(), "{:?}", locked.failures);
+    apply(&locked, false).unwrap();
+    fs::write(root.path().join("pixi.toml"), manifest).unwrap();
+    let idna = || -> Vec<String> {
+        let lock = fs::read_to_string(root.path().join("pixi.lock")).unwrap();
+        depsmith_core::inventory::pixi_inventory(&lock)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.name == "idna")
+            .map(|p| p.version)
+            .collect()
+    };
+    assert_eq!(idna(), ["3.6"]);
+
+    let precise = UpdateOptions {
+        precise: vec![PreciseUpdate {
+            package: "idna".into(),
+            version: "3.7".into(),
+        }],
+        ..options
+    };
+    let proposal = engine.prepare(root.path(), &targets, precise).unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert!(
+        proposal
+            .validation
+            .iter()
+            .any(|v| v.contains("pixi has no precise update; idna moves")),
+        "{:?}",
+        proposal.validation
+    );
+    assert!(
+        proposal.dependencies.iter().any(|d| d
+            .before
+            .as_ref()
+            .is_some_and(|p| p.name == "idna" && p.version == "3.6")
+            && d.after
+                .as_ref()
+                .is_some_and(|p| p.name == "idna" && p.version != "3.6")),
+        "{:?}",
+        proposal.dependencies
+    );
+    // The declaration is not edited to make up for the missing precise update.
+    assert!(
+        !proposal
+            .changes
+            .iter()
+            .any(|c| c.path.ends_with("pixi.toml")),
+        "{:?}",
+        proposal.changes
+    );
+    apply(&proposal, false).unwrap();
+    assert_ne!(idna(), ["3.6"]);
+    assert_eq!(
+        fs::read_to_string(root.path().join("pixi.toml")).unwrap(),
+        manifest
+    );
 }

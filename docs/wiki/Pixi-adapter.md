@@ -24,6 +24,10 @@ that target's proposal.
 - **Git pins** stay at their locked commit unless `--refresh-git` is given.
 - `--install` additionally installs the candidate's default environment on the
   current host; it does not install every platform.
+- Pixi has no **precise update**: a package named by a security update moves
+  to the newest release its constraints allow, by `pixi update NAME`, and the
+  proposal says so. The live tests show that this moves a nested package
+  too, not only a declared one.
 
 Resolution can create temporary solve and build environments inside the stage,
 even without `--install`; some PyPI source packages need this. Pixi builds

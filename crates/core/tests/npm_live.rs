@@ -1,7 +1,7 @@
 //! Opt-in acceptance test with the real npm against registry.npmjs.org: a
 //! pinned package is suggested with registry evidence, accepted, applied and
-//! rechecked.
-use depsmith_core::{apply, Engine, UpdateOptions};
+//! rechecked, and a nested package named by a precise update moves.
+use depsmith_core::{apply, Engine, PreciseUpdate, UpdateOptions};
 use std::{collections::BTreeMap, fs};
 
 fn options(accept: &[&str]) -> UpdateOptions {
@@ -80,5 +80,91 @@ fn live_package_suggests_accepts_applies_and_rechecks() {
         !recheck.suggestions.iter().any(|s| s.package == "ms"),
         "{:?}",
         recheck.suggestions
+    );
+}
+
+/// npm has no precise update, so a precise request falls back to `npm update
+/// NAME`. ADR 0004 asks each adapter to show that its tool moves a nested
+/// package named this way: chalk 4.1.2 requires `ansi-styles ^4.1.0`, locked
+/// here at 4.2.1 although 4.3.0 is within that range.
+#[test]
+#[ignore = "queries registry.npmjs.org"]
+fn precise_update_of_a_nested_package_moves_it_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let manifest = "{\n  \"name\": \"live\",\n  \"private\": true,\n  \"dependencies\": {\n    \"chalk\": \"^4.1.2\"\n  }\n}\n";
+    // Lock the older nested release with an override, then drop the override:
+    // the lock stays valid, since 4.2.1 is within chalk's range.
+    fs::write(
+        root.path().join("package.json"),
+        manifest.replace(
+            "\n  }\n}",
+            "\n  },\n  \"overrides\": {\n    \"ansi-styles\": \"4.2.1\"\n  }\n}",
+        ),
+    )
+    .unwrap();
+    fs::write(root.path().join(".npmrc"), "fund=false\n").unwrap();
+    let created = std::process::Command::new(std::env::var("NPM").unwrap())
+        .args([
+            "install",
+            "--package-lock-only",
+            "--ignore-scripts",
+            "--no-audit",
+        ])
+        .current_dir(root.path())
+        .status()
+        .unwrap();
+    assert!(created.success(), "npm install: {created}");
+    fs::write(root.path().join("package.json"), manifest).unwrap();
+    let locked = || -> String {
+        let text = fs::read_to_string(root.path().join("package-lock.json")).unwrap();
+        let lock: serde_json::Value = serde_json::from_str(&text).unwrap();
+        lock["packages"]["node_modules/ansi-styles"]["version"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(locked(), "4.2.1");
+
+    let options = UpdateOptions {
+        precise: vec![PreciseUpdate {
+            package: "ansi-styles".into(),
+            version: "4.3.0".into(),
+        }],
+        ..options(&[])
+    };
+    let proposal = Engine::default()
+        .prepare(root.path(), &["npm:package.json".into()], options)
+        .unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert!(
+        proposal
+            .validation
+            .iter()
+            .any(|v| v.contains("npm has no precise update; ansi-styles moves")),
+        "{:?}",
+        proposal.validation
+    );
+    assert!(
+        proposal.dependencies.iter().any(|d| d
+            .after
+            .as_ref()
+            .is_some_and(|p| p.name == "ansi-styles" && p.version == "4.3.0")),
+        "{:?}",
+        proposal.dependencies
+    );
+    // The declaration is not edited to make up for the missing precise update.
+    assert!(
+        !proposal
+            .changes
+            .iter()
+            .any(|c| c.path.as_os_str() == "package.json"),
+        "{:?}",
+        proposal.changes
+    );
+    apply(&proposal, false).unwrap();
+    assert_eq!(locked(), "4.3.0");
+    assert_eq!(
+        fs::read_to_string(root.path().join("package.json")).unwrap(),
+        manifest
     );
 }

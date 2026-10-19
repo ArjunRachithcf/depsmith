@@ -842,6 +842,8 @@ impl Adapter for Npm {
                 lockfile: Support::Supported,
                 // package-lock.json records every platform's optional packages.
                 platforms: Support::Supported,
+                // `npm update NAME` moves a nested package too, as
+                // tests/npm_live.rs shows (ADR 0004).
                 precise_update: Support::Unsupported(
                     "npm update moves a package to the newest release its constraints allow".into(),
                 ),
