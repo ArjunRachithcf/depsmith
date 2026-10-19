@@ -1,6 +1,7 @@
 //! The Cargo adapter offline: lock-owner discovery, member declarations,
 //! resolution with the real cargo on a path-only workspace, and suggestions,
-//! `--accept` and MSRV hold-backs with a fixture registry and a stand-in cargo.
+//! `--accept`, MSRV hold-backs and precise updates with a fixture registry
+//! and a stand-in cargo.
 use depsmith_core::{adapter::Adapter, cargo::Cargo, conformance, Engine, Target, UpdateOptions};
 use std::{collections::BTreeMap, fs, path::Path};
 
