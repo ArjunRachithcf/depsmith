@@ -18,6 +18,12 @@ depsmith update --root "$PROJECT_DIR" --all --apply --yes --non-interactive --js
   summary.
 - A proposal cannot be carried between jobs: prepare and apply in the same job.
 - Scanning is opt-in: install Grype and add `--scan` and the policy flags.
+- For a job that only fixes vulnerabilities, use `check --security-only`
+  (exit 1 while a fix can be applied; a fix only a suggestion can unblock
+  leaves it at 0 unless `--fail-on` says otherwise) and
+  `fix --apply --yes --non-interactive`. A fix that introduces a finding is a
+  policy rejection (4, or 5 when other targets succeed). See
+  [Vulnerability scanning](Vulnerability-scanning).
 
 ## Exit statuses
 

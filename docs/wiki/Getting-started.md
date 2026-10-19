@@ -109,6 +109,18 @@ Updates keep your declared constraints. To move a constraint, upgrade selected
 direct dependencies with `--upgrade --package NAME`, or accept an
 evidence-backed suggestion with `--accept NAME` (see [Pixi adapter](Pixi-adapter)).
 
+## Fix vulnerabilities
+
+```sh
+depsmith check --root /path/to/project --target uv:pyproject.toml --security-only
+depsmith fix   --root /path/to/project --target uv:pyproject.toml
+```
+
+A **security update** scans the current lock with Grype and moves only the
+packages with actionable findings, each toward the release that fixes it.
+Fixes a constraint blocks come back as suggestions; see
+[Vulnerability scanning](Vulnerability-scanning).
+
 ## From Python
 
 ```python

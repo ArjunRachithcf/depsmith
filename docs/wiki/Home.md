@@ -24,7 +24,7 @@ tools your targets use and can install the missing ones.
 - [Conda adapter](Conda-adapter): conda-lock, sharded repodata evidence and `pip:` requirements.
 - [uv adapter](uv-adapter): uv workspaces, Git pins, index evidence and acceptance.
 - [npm adapter](npm-adapter): npm workspaces, Git pins, `--before` cooldowns, registry evidence and acceptance.
-- [Vulnerability scanning](Vulnerability-scanning): baseline comparison, identities, policy and suppressions.
+- [Vulnerability scanning](Vulnerability-scanning): baseline comparison, identities, policy, suppressions and security updates (`depsmith fix`).
 - [CI integration](CI-integration): noninteractive jobs, reports and exit statuses.
 - [Troubleshooting](Troubleshooting): common errors and what to do.
 

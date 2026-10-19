@@ -20,6 +20,9 @@ changes, and the reviewed files are then written without resolving again.
 - **Optional vulnerability scanning** compares before and after with one
   database snapshot. Packages it cannot assess are reported, never treated as
   clean.
+- **Security updates** (`depsmith fix`) move only packages with actionable
+  findings, direct or transitive, toward the release that fixes them, and
+  suggest the constraint changes a fix needs instead of making them.
 
 📖 **Documentation: [the wiki](https://github.com/ArjunRachithcf/depsmith/wiki)**
 

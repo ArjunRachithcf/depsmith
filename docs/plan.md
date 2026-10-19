@@ -182,7 +182,25 @@ Folded into 0.1.0 (ADR 0001). A new package manager is one adapter module plus o
 - **Conformance:** `depsmith_core::conformance::check` runs the contract offline (spec round-trip, discovery, managed files, selection, capability enforcement, declarations round-tripping through `rewrite`). Each adapter also has a native live round trip in the Integration workflow.
 - **Protocol-ready:** every seam type holds owned data only, so an out-of-tree subprocess bridge (`{method, params}` JSON lines) can be added later without redesign.
 
-## 9. Next round
+## 9. Security updates
+
+Built after 0.1.0-rc.2 (ADR 0004).
+
+- **Command:** `depsmith fix` (`update --security-only`) and `check --security-only` scan the baseline and move only packages with **actionable findings**: fixed upstream, unsuppressed and at least `--min-severity`. Constraints never change except by `--accept`.
+- **Fix version:** the lowest fixed release by default. `--security-target patch` picks the newest release in that fix's major.minor line that the constraints admit, from the registry's listing (PyPI, crates.io), where a precise update can aim at it. `newest` picks the newest release the constraints allow.
+- **Moving:**
+  - Cargo and uv move each package to exactly that release, as a **precise update**.
+  - npm, Pixi and conda-lock move it as far as its constraints allow, and the proposal says so.
+  - The candidate scan decides what was fixed and fails a fix that introduces a finding.
+  - Packages that moved without being targeted are listed.
+- **Transitive dependencies:**
+  - They move where an adapter's live tests show its tool moving one: Cargo, uv, npm and Pixi.
+  - Each fix records its dependency paths from the lock graph (Cargo, uv, npm, Pixi and conda-lock all read one).
+- **Blocked fixes:**
+  - A declaration that excludes the fix becomes a suggestion to `--accept`.
+  - A parent's requirement on every path, or a package the tool leaves below the fix, becomes a suggestion on the direct dependency the path starts from. It is described but never applied.
+
+## 10. Next round
 
 Designed, not built (status: proposed):
 
@@ -195,11 +213,6 @@ Designed, not built (status: proposed):
   - An external adapter is an executable outside depsmith, speaking a versioned JSON-lines protocol whose methods mirror `Adapter`.
   - A repository enables one by name or path, under the same trust model as `[options.tools]`.
   - Authors check theirs with `depsmith adapter check`.
-- [ADR 0004](adr/0004-security-only-updates.md): security updates, after 0.1.0-rc.2.
-  - `update --security-only` (`depsmith fix`) moves only packages with actionable findings, by default to the lowest release that fixes them.
-  - Adapters whose tool can target an exact version (Cargo, uv) do so. The others move the package to the newest release its constraints allow, say so, and report a blocked fix when that falls short.
-  - Packages that move alongside are listed, and the scan verifies the result.
-  - Blocked fixes become suggestions that cite the dependency path. Constraints change only through `--accept`.
 - [ADR 0006](adr/0006-impact-analysis.md): impact analysis.
   - `depsmith affected` walks the lock graph (ADR 0005) in reverse to the target's usage sites, then through its import graph to the tests that can break, as the test runners' own configs define them. `depsmith test` runs them, and `check|update --impact` attaches the result to a proposal.
   - Each full run names its reason. Untested files are listed, exposed files are marked, and `--verify` checks their flows statically against the new environment.

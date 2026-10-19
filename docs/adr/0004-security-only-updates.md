@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Security updates move only vulnerable packages, through the native tool, and change constraints only by acceptance
@@ -9,7 +9,7 @@ Some teams accept dependency changes only when they fix a vulnerability, so a **
 ## Consequences
 
 - **Actionable findings** have at least one fixed release, are not suppressed, and meet `--min-severity` (a new option, separate from the `--fail-on` policy gate). `--security-only` implies `--scan`.
-- **Fix version** is chosen from the advisory's fixed releases by `security_target`: `lowest` (the default), `patch` (newest release in the lowest fix's line) or `newest` (newest the constraints allow). Findings gain a field for the fixed releases Grype reports (`vulnerability.fix.versions` and its state); today only `matchDetails` is kept.
+- **Fix version** is chosen from the advisory's fixed releases by `security_target`: `lowest` (the default), `patch` (newest release in the lowest fix's line that the constraints admit, where the tool can aim at one) or `newest` (newest the constraints allow). Findings gain a field for the fixed releases Grype reports (`vulnerability.fix.versions` and its state); today only `matchDetails` is kept.
 - **Precise update** becomes an adapter capability.
   - Cargo (`cargo update -p NAME --precise VERSION`) and uv (`uv lock --upgrade-package NAME==VERSION`) have it.
   - npm, Pixi and conda-lock do not. There the package moves to the newest release its constraints allow, and the proposal says so.
