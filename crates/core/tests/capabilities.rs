@@ -1,9 +1,14 @@
 //! Capability declarations and their enforcement before any work starts.
 use depsmith_core::{
-    adapter::{tool_status, Adapter, Candidate, Support},
-    Engine, Error, Result, Target, UpdateOptions,
+    adapter::{tool_status, Adapter, AdapterSpec, Candidate, Capabilities, Support},
+    conformance, Engine, Error, PreciseUpdate, Result, Target, UpdateOptions,
 };
-use std::{fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 use tempfile::tempdir;
 
 /// Declares no capabilities; preparing it means the engine failed to enforce them.
@@ -67,6 +72,14 @@ fn unsupported_options_fail_before_the_adapter_runs() {
             },
             "package selection",
         ),
+        (
+            // Without package selection there is nothing to fall back on.
+            UpdateOptions {
+                precise: vec![precise("x", "1.0.0")],
+                ..Default::default()
+            },
+            "precise update",
+        ),
     ];
     for (options, needle) in cases {
         let error = fixture(options);
@@ -118,6 +131,11 @@ fn builtin_adapters_declare_capabilities_and_tested_tools() {
     assert_eq!(caps.package_selection, Support::Supported);
     assert_eq!(caps.lockfile, Support::Supported);
     assert!(matches!(&caps.cooldown, Support::Unsupported(hint) if hint.contains("exclude-newer")));
+    assert!(
+        matches!(&caps.precise_update, Support::Unsupported(hint) if hint.contains("newest release")),
+        "{:?}",
+        caps.precise_update
+    );
     let tool = &pixi.tools[0];
     assert_eq!(tool.name, "pixi");
     assert!(tool.tested_versions.contains(&"0.80.0".to_string()));
@@ -130,7 +148,174 @@ fn builtin_adapters_declare_capabilities_and_tested_tools() {
     assert_eq!(caps.install_validation, Support::NotApplicable);
     assert_eq!(caps.git_refresh, Support::NotApplicable);
     assert_eq!(caps.constraint_changes, Support::Supported);
+    assert_eq!(caps.precise_update, Support::NotApplicable);
     assert!(actions.tools.is_empty());
+}
+
+#[test]
+fn precise_update_is_declared_where_the_native_tool_has_it() {
+    let specs = Engine::default().specs();
+    let precise = |manager: &str| {
+        specs
+            .iter()
+            .find(|s| s.manager == manager)
+            .unwrap_or_else(|| panic!("no {manager} adapter"))
+            .capabilities
+            .precise_update
+            .clone()
+    };
+    for manager in ["cargo", "uv"] {
+        assert_eq!(precise(manager), Support::Supported, "{manager}");
+    }
+    for manager in ["npm", "pixi", "conda"] {
+        assert!(
+            matches!(&precise(manager), Support::Unsupported(hint)
+                if hint.contains("newest release its constraints allow")),
+            "{manager}: {:?}",
+            precise(manager)
+        );
+    }
+}
+
+fn precise(package: &str, version: &str) -> PreciseUpdate {
+    PreciseUpdate {
+        package: package.into(),
+        version: version.into(),
+    }
+}
+
+/// Declares `precise` support and package selection, declares no direct
+/// dependencies, and records the options it prepares with.
+struct Recording {
+    precise: Support,
+    seen: Arc<Mutex<Vec<UpdateOptions>>>,
+}
+impl Adapter for Recording {
+    fn spec(&self) -> AdapterSpec {
+        AdapterSpec {
+            capabilities: Capabilities {
+                package_selection: Support::Supported,
+                lockfile: Support::Supported,
+                precise_update: self.precise.clone(),
+                ..Capabilities::undeclared()
+            },
+            ..AdapterSpec::new("fixture", &["project.toml"])
+        }
+    }
+    fn detects(&self, path: &Path, _: &str) -> bool {
+        path == Path::new("project.toml")
+    }
+    fn select(&self, _: &Path, _: &Target, _: &[String]) -> Result<BTreeMap<String, String>> {
+        Ok(BTreeMap::new())
+    }
+    fn prepare(&self, _: &Path, _: &Target, options: &UpdateOptions) -> Result<Candidate> {
+        self.seen.lock().unwrap().push(options.clone());
+        Ok(Candidate::default())
+    }
+}
+
+/// Prepare a precise update of the transitive `nested` to 2.0.1 with an
+/// adapter declaring `support`; returns the proposal's notes and the
+/// options the adapter prepared with, if it ran.
+fn precise_run(support: Support) -> (Vec<String>, Vec<UpdateOptions>) {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("project.toml"), "").unwrap();
+    let seen = Arc::new(Mutex::new(vec![]));
+    let adapter = Recording {
+        precise: support,
+        seen: seen.clone(),
+    };
+    let options = UpdateOptions {
+        precise: vec![precise("nested", "2.0.1")],
+        ..Default::default()
+    };
+    let proposal = Engine::new(vec![Box::new(adapter)])
+        .prepare(root.path(), &["fixture:project.toml".into()], options)
+        .unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    let seen = seen.lock().unwrap().clone();
+    (proposal.validation, seen)
+}
+
+#[test]
+fn precise_updates_reach_the_adapter_unchanged_even_for_transitive_packages() {
+    let (_, seen) = precise_run(Support::Supported);
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].precise.len(), 1);
+    assert_eq!(seen[0].precise[0].package, "nested");
+    assert_eq!(seen[0].precise[0].version, "2.0.1");
+    assert!(seen[0].packages.is_empty(), "{:?}", seen[0].packages);
+}
+
+#[test]
+fn without_precise_update_the_package_moves_as_far_as_its_constraints_allow() {
+    let (notes, seen) = precise_run(Support::Unsupported("no precise update".into()));
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].precise.is_empty(), "{:?}", seen[0].precise);
+    assert_eq!(seen[0].packages, ["nested"]);
+    let note = "fixture:project.toml: fixture has no precise update; nested moves to the \
+                newest release its constraints allow, not 2.0.1";
+    assert!(notes.iter().any(|n| n == note), "{notes:?}");
+}
+
+#[test]
+fn precise_updates_are_skipped_where_not_applicable() {
+    let (notes, seen) = precise_run(Support::NotApplicable);
+    assert!(seen.is_empty(), "the adapter ran with {seen:?}");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("fixture:project.toml: precise update not applicable")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn precise_requests_need_a_package_and_a_version() {
+    for (package, version) in [("", "1.0.0"), ("x", " ")] {
+        let options = UpdateOptions {
+            precise: vec![precise(package, version)],
+            ..Default::default()
+        };
+        assert!(
+            matches!(options.validate(), Err(Error::Invalid(m)) if m.contains("precise")),
+            "{package:?} {version:?}"
+        );
+    }
+}
+
+#[test]
+fn conformance_requires_precise_update_to_select_packages_and_lock() {
+    /// Claims a precise update with nothing else to support it.
+    struct Claims;
+    impl Adapter for Claims {
+        fn spec(&self) -> AdapterSpec {
+            AdapterSpec {
+                capabilities: Capabilities {
+                    precise_update: Support::Supported,
+                    ..Capabilities::undeclared()
+                },
+                ..AdapterSpec::new("fixture", &["project.toml"])
+            }
+        }
+        fn detects(&self, path: &Path, _: &str) -> bool {
+            path == Path::new("project.toml")
+        }
+        fn prepare(&self, _: &Path, _: &Target, _: &UpdateOptions) -> Result<Candidate> {
+            Ok(Candidate::default())
+        }
+    }
+    let fixture = conformance::Fixture {
+        files: vec![("project.toml".into(), String::new())],
+        target: "fixture:project.toml".into(),
+        declared: vec![],
+    };
+    let problems = conformance::check(&|| Box::new(Claims) as Box<dyn Adapter>, &fixture)
+        .expect_err("a precise update without package selection or a lockfile conforms");
+    assert!(
+        problems.iter().any(|p| p.contains("precise update")),
+        "{problems:?}"
+    );
 }
 
 #[test]

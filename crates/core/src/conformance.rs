@@ -7,7 +7,7 @@
 use crate::{
     adapter::{Adapter, AdapterSpec, Support},
     constraints::Edit,
-    ecosystem, working_tree, Engine, Error, UpdateOptions,
+    ecosystem, working_tree, Engine, Error, PreciseUpdate, UpdateOptions,
 };
 use std::{collections::BTreeSet, fs, path::Path};
 
@@ -72,6 +72,14 @@ fn check_spec(spec: &AdapterSpec, problems: &mut Vec<String>) {
     }
     if spec.patterns.is_empty() {
         problems.push("spec declares no discovery patterns".into());
+    }
+    // A precise update names a package and moves it within a lock; where it
+    // is missing, the engine falls back to updating the package by name.
+    let caps = &spec.capabilities;
+    if caps.precise_update == Support::Supported
+        && (caps.package_selection != Support::Supported || caps.lockfile != Support::Supported)
+    {
+        problems.push("precise update requires package selection and a lockfile".into());
     }
     let mut names = BTreeSet::new();
     for tool in &spec.tools {
@@ -372,6 +380,39 @@ fn check_capability_enforcement(
             Ok(_) => problems.push(format!(
                 "{name} is {support:?} but preparing was not rejected before the adapter ran"
             )),
+        }
+    }
+    // A missing precise update falls back to updating the package by name,
+    // with a note, unless there is no package selection to fall back on.
+    if let Support::Unsupported(_) = caps.precise_update {
+        let options = UpdateOptions {
+            precise: vec![PreciseUpdate {
+                package,
+                version: "0.0.1".into(),
+            }],
+            ..base
+        };
+        let engine = Engine::new(vec![make()]);
+        let prepared = engine.prepare(root, std::slice::from_ref(&fixture.target), options);
+        match (caps.package_selection == Support::Supported, prepared) {
+            (true, Ok(proposal))
+                if proposal
+                    .validation
+                    .iter()
+                    .any(|v| v.contains("has no precise update")) => {}
+            (true, Ok(_)) => problems.push("precise update fell back without a note".into()),
+            (true, Err(error)) => problems.push(format!(
+                "precise update: rejected instead of falling back: {error}"
+            )),
+            (false, Err(Error::Invalid(message))) if message.contains("precise update") => {}
+            (false, Err(error)) => problems.push(format!(
+                "precise update: rejected with an unexpected error: {error}"
+            )),
+            (false, Ok(_)) => problems.push(
+                "precise update is unsupported without package selection but preparing was \
+                 not rejected before the adapter ran"
+                    .into(),
+            ),
         }
     }
 }

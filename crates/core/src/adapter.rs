@@ -133,6 +133,10 @@ pub struct Capabilities {
     pub lockfile: Support,
     /// Resolving for every configured platform.
     pub platforms: Support,
+    /// Moving one package, direct or transitive, to a chosen exact release
+    /// without changing any constraint (`UpdateOptions::precise`). Without
+    /// it the package moves to the newest release its constraints allow.
+    pub precise_update: Support,
 }
 
 impl Capabilities {
@@ -147,7 +151,8 @@ impl Capabilities {
             cooldown: no.clone(),
             install_validation: no.clone(),
             lockfile: no.clone(),
-            platforms: no,
+            platforms: no.clone(),
+            precise_update: no,
         }
     }
 }

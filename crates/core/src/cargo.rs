@@ -482,6 +482,8 @@ impl Adapter for Cargo {
                 lockfile: Support::Supported,
                 // Cargo.lock covers every platform.
                 platforms: Support::Supported,
+                // `cargo update -p NAME --precise VERSION`.
+                precise_update: Support::Supported,
             },
         }
     }
@@ -603,7 +605,7 @@ impl Adapter for Cargo {
         )?;
         // The report is parsed, so never colour it (CARGO_TERM_COLOR may
         // say otherwise).
-        let mut args: Vec<String> = vec![
+        let update: Vec<String> = vec![
             "update".into(),
             "--verbose".into(),
             "--color".into(),
@@ -611,6 +613,7 @@ impl Adapter for Cargo {
             "--manifest-path".into(),
             manifest_arg.clone(),
         ];
+        let mut args = update.clone();
         for package in &options.packages {
             args.extend(["-p".into(), package.clone()]);
         }
@@ -639,7 +642,22 @@ impl Adapter for Cargo {
                 .filter(|(key, _)| !(pinned_toolchain && key == "RUSTUP_TOOLCHAIN"))
                 .cloned(),
         );
-        let (_, report) = run_env_output(&cargo, &args, stage, timeout, &msrv)?;
+        // Precise updates move only their crates: no whole update unless
+        // packages were also selected.
+        let mut report = String::new();
+        if options.precise.is_empty() || !options.packages.is_empty() {
+            report = run_env_output(&cargo, &args, stage, timeout, &msrv)?.1;
+        }
+        for request in &options.precise {
+            let mut precise = update.clone();
+            precise.extend([
+                "-p".into(),
+                request.package.clone(),
+                "--precise".into(),
+                request.version.clone(),
+            ]);
+            report.push_str(&run_env_output(&cargo, &precise, stage, timeout, &msrv)?.1);
+        }
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env_output(
             &cargo,

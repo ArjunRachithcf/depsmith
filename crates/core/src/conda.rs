@@ -593,6 +593,9 @@ impl Adapter for Conda {
                 install_validation: Support::NotApplicable,
                 lockfile: Support::Supported,
                 platforms: Support::Supported,
+                precise_update: Support::Unsupported(
+                    "conda-lock moves a package to the newest release its constraints allow".into(),
+                ),
             },
         }
     }

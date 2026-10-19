@@ -24,6 +24,9 @@ requirement; `uv.lock` covers every platform.
   (`--upgrade-package`) instead.
 - `--package NAME` (repeatable) upgrades only the named direct dependencies.
   Names match by PEP 503 normalisation.
+- A **precise update** (the `precise` option) moves each named package,
+  direct or transitive, to its exact release with
+  `--upgrade-package NAME==VERSION`, and nothing else is upgraded.
 - The candidate is checked with `uv lock --locked`, and the manifests must not
   change.
 - `--upgrade`, `--cooldown-days` and `--install` are not supported. Change a

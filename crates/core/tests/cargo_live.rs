@@ -1,6 +1,7 @@
-//! Opt-in acceptance test with the real cargo against crates.io: a pinned
+//! Opt-in acceptance tests with the real cargo against crates.io: a pinned
 //! crate is suggested with index evidence, accepted, applied and rechecked,
-//! and a crate held back by `rust-version` is reported.
+//! a crate held back by `rust-version` is reported, and a nested crate moves
+//! to the exact release a precise update names.
 use depsmith_core::{apply, Engine, UpdateOptions};
 use std::{collections::BTreeMap, fs};
 
@@ -10,6 +11,68 @@ fn options(accept: &[&str]) -> UpdateOptions {
         accept: accept.iter().map(|a| a.to_string()).collect(),
         ..Default::default()
     }
+}
+
+/// The version of `name` that `lock` (a `Cargo.lock`) records.
+fn locked<'a>(lock: &'a str, name: &str) -> &'a str {
+    let entry = format!("name = \"{name}\"\nversion = \"");
+    let start = lock
+        .find(&entry)
+        .unwrap_or_else(|| panic!("{name} unlocked"))
+        + entry.len();
+    &lock[start..start + lock[start..].find('"').unwrap()]
+}
+
+#[test]
+#[ignore = "queries crates.io"]
+fn live_precise_update_moves_a_nested_crate_to_the_exact_release() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "").unwrap();
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"live\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\nserde_json = \"1\"\n",
+    )
+    .unwrap();
+    // itoa is serde_json's dependency, never declared here: lock an old one.
+    let cargo = std::env::var("CARGO").unwrap();
+    for args in [
+        &["generate-lockfile"][..],
+        &["update", "-p", "itoa", "--precise", "1.0.5"],
+    ] {
+        let status = std::process::Command::new(&cargo)
+            .args(args)
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "cargo {args:?}");
+    }
+    let baseline = fs::read_to_string(root.path().join("Cargo.lock")).unwrap();
+    assert_eq!(locked(&baseline, "itoa"), "1.0.5");
+
+    let options = UpdateOptions {
+        precise: vec![depsmith_core::PreciseUpdate {
+            package: "itoa".into(),
+            version: "1.0.9".into(),
+        }],
+        ..options(&[])
+    };
+    let proposal = Engine::default()
+        .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+        .unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    let lock = proposal
+        .changes
+        .iter()
+        .find(|c| c.path.as_os_str() == "Cargo.lock")
+        .unwrap_or_else(|| panic!("Cargo.lock unchanged: {:?}", proposal.changes));
+    assert_eq!(locked(&lock.after, "itoa"), "1.0.9");
+    // Only the requested crate moved.
+    assert_eq!(
+        locked(&lock.after, "serde_json"),
+        locked(&baseline, "serde_json")
+    );
 }
 
 #[test]

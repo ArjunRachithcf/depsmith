@@ -139,6 +139,25 @@ class ApiTests(unittest.TestCase):
             with self.assertRaisesRegex(updater.ConfigurationError, "ruf"):
                 updater.prepare(directory, targets=["pixi:pixi.toml"], options=options)
 
+    def test_precise_update_falls_back_with_a_note_where_unsupported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pathlib.Path(directory, "pixi.toml").write_text(
+                '[workspace]\nname="demo"\n'
+            )
+            # openssl is not declared: precise updates may name nested packages.
+            options = updater.UpdateOptions(
+                pixi="missing-pixi-binary",
+                precise=[updater.PreciseUpdate(package="openssl", version="3.0.15")],
+            )
+            proposal = updater.prepare(
+                directory, targets=["pixi:pixi.toml"], options=options
+            )
+            self.assertIn(
+                "pixi:pixi.toml: pixi has no precise update; openssl moves to the "
+                "newest release its constraints allow, not 3.0.15",
+                proposal.validation,
+            )
+
     def test_malformed_accept_raises_configuration_error(self):
         with tempfile.TemporaryDirectory() as directory:
             pathlib.Path(directory, "pixi.toml").write_text(

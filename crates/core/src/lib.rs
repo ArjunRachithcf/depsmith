@@ -125,6 +125,7 @@ impl Engine {
         let mut notes = vec![];
         for target in targets {
             let capabilities = self.spec(target).capabilities.clone();
+            let selectable = capabilities.package_selection == Support::Supported;
             let requested = [
                 (
                     options.cooldown_days.is_some(),
@@ -185,8 +186,51 @@ impl Engine {
                     }
                 }
             }
+            // Without a precise update, each package moves as far as its
+            // constraints allow (see `precise_fallback`), which needs package
+            // selection; without either it would move everything.
+            match &capabilities.precise_update {
+                _ if options.precise.is_empty() => {}
+                Support::Supported => {}
+                Support::Unsupported(hint) if !selectable => {
+                    return Err(Error::Invalid(format!(
+                        "{}: precise update is not supported by the {} adapter: {hint}",
+                        target.id, target.manager
+                    )))
+                }
+                Support::Unsupported(_) => notes.extend(options.precise.iter().map(|p| {
+                    format!(
+                        "{}: {} has no precise update; {} moves to the newest release its \
+                         constraints allow, not {}",
+                        target.id, target.manager, p.package, p.version
+                    )
+                })),
+                Support::NotApplicable => notes.push(format!(
+                    "{}: precise update not applicable to {}",
+                    target.id, target.manager
+                )),
+            }
         }
         Ok(notes)
+    }
+    /// The options `target` resolves with when it cannot honour `precise`:
+    /// without a precise update its packages are updated by name, bypassing
+    /// selection since they may be transitive; where it is not applicable
+    /// they are dropped. Declarations are never edited to make up for it.
+    fn precise_fallback(&self, target: &Target, mut options: UpdateOptions) -> UpdateOptions {
+        use adapter::Support;
+        match self.spec(target).capabilities.precise_update {
+            Support::Supported => {}
+            Support::Unsupported(_) => {
+                for request in std::mem::take(&mut options.precise) {
+                    if !options.packages.contains(&request.package) {
+                        options.packages.push(request.package);
+                    }
+                }
+            }
+            Support::NotApplicable => options.precise.clear(),
+        }
+        options
     }
     fn adapter(&self, target: &Target) -> &dyn Adapter {
         self.adapters
@@ -257,7 +301,10 @@ impl Engine {
     ///
     /// Options are validated and checked against each adapter's capabilities, and
     /// `--package`/`--accept` names against the declared direct dependencies,
-    /// before any package manager runs. Each target is then resolved in its own
+    /// before any package manager runs. Precise updates may name transitive
+    /// packages, so they are not checked against declarations; where an
+    /// adapter has no precise update, the proposal notes how far each package
+    /// moves instead. Each target is then resolved in its own
     /// stage; the repository is not modified. A target that cannot be prepared is
     /// recorded in [`Proposal::failures`] instead of failing the whole call.
     ///
@@ -381,26 +428,34 @@ impl Engine {
             layout,
         };
         proposal.validation.extend(notes);
+        let precise_requested = !options.precise.is_empty();
         for ((target, selection), accept) in targets.into_iter().zip(selections).zip(accepted) {
             let adapter = self.adapter(&target);
-            let options = UpdateOptions {
-                accept,
-                ..options.clone()
-            };
-            let options = match selection {
-                Some(packages) if packages.is_empty() => {
-                    proposal.validation.push(format!(
-                        "{}: skipped; none of the selected packages are declared here",
-                        target.id
-                    ));
-                    continue;
-                }
-                Some(packages) => UpdateOptions {
-                    packages,
+            let selected = selection.is_some();
+            let options = self.precise_fallback(
+                &target,
+                UpdateOptions {
+                    accept,
+                    packages: selection.unwrap_or_default(),
                     ..options.clone()
                 },
-                None => options.clone(),
-            };
+            );
+            // Moving nothing must not become moving everything.
+            if options.packages.is_empty()
+                && options.precise.is_empty()
+                && (selected || precise_requested)
+            {
+                proposal.validation.push(format!(
+                    "{}: skipped; {}",
+                    target.id,
+                    if selected {
+                        "none of the selected packages are declared here"
+                    } else {
+                        "only a precise update was requested"
+                    }
+                ));
+                continue;
+            }
             let stage = tempfile::tempdir()?;
             working_tree::stage(&root, stage.path(), &proposal.inputs, &proposal.layout)?;
             let mut conflict = false;

@@ -587,6 +587,33 @@ mod stand_in {
     }
 
     #[test]
+    fn precise_updates_alone_move_to_their_exact_release() {
+        let run = prepare(
+            Some(&lock("3.0", "aaaa")),
+            &lock("3.7", "aaaa"),
+            UpdateOptions {
+                precise: vec![depsmith_core::PreciseUpdate {
+                    package: "idna".into(),
+                    version: "3.7".into(),
+                }],
+                ..Default::default()
+            },
+        );
+        assert!(
+            run.proposal.failures.is_empty(),
+            "{:?}",
+            run.proposal.failures
+        );
+        let first = lock_calls(&run)[0];
+        // Neither a whole upgrade nor the other packages a Git pin would
+        // otherwise make depsmith name.
+        assert!(
+            first.ends_with(" --upgrade-package idna==3.7") && !first.contains("six"),
+            "{first}"
+        );
+    }
+
+    #[test]
     fn moving_git_pins_needs_refresh_git() {
         let moved = prepare(
             Some(&lock("3.0", "aaaa")),

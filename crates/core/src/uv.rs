@@ -389,6 +389,8 @@ impl Adapter for Uv {
                 lockfile: Support::Supported,
                 // uv.lock is universal: it covers every platform.
                 platforms: Support::Supported,
+                // `uv lock --upgrade-package NAME==VERSION`.
+                precise_update: Support::Supported,
             },
         }
     }
@@ -527,8 +529,19 @@ impl Adapter for Uv {
             args.extend(extra.iter().map(|a| a.to_string()));
             args
         };
-        let upgrades: Vec<&str> = if !options.packages.is_empty() {
-            options.packages.iter().map(String::as_str).collect()
+        // A precise update pins its package with `NAME==VERSION`.
+        let precise: Vec<String> = options
+            .precise
+            .iter()
+            .map(|p| format!("{}=={}", p.package, p.version))
+            .collect();
+        let upgrades: Vec<&str> = if !options.packages.is_empty() || !precise.is_empty() {
+            options
+                .packages
+                .iter()
+                .chain(&precise)
+                .map(String::as_str)
+                .collect()
         } else if !options.refresh_git && check.has_git_pins() {
             // `--upgrade` would move Git pins: upgrade every other package.
             let names: BTreeSet<&str> = check

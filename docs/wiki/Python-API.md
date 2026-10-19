@@ -207,6 +207,15 @@ One resolved package in an inventory.
 - `artifact`: The exact artifact or reference resolved.
 - `platform`: Platform resolved for, such as `linux-64`.
 
+### `PreciseUpdate(package: str, version: str)`
+
+A request to move one package to an exact release without changing constraints.
+
+**Attributes**
+
+- `package`: Package name as the lock spells it; it need not be declared.
+- `version`: The exact release to move to.
+
 ### `Proposal`
 
 The reviewable outcome of preparing one or more targets.
@@ -334,7 +343,7 @@ A reference left unchanged because it could not be resolved.
 - `reference`: The reference as written, such as `org/repo@main`.
 - `reason`: Why no release could be matched.
 
-### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None, min_severity: str | None, security_target: str | None)`
+### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None, min_severity: str | None, security_target: str | None, precise: Sequence[PreciseUpdate] | None)`
 
 Options for preparing, scanning and applying updates.
 
@@ -360,6 +369,7 @@ explicit values override them.
 - `suppressions`: Scoped, documented suppressions.
 - `min_severity`: Lowest severity a security update acts on; every severity when unset.
 - `security_target`: Fixed release a security update aims at: `lowest`, `patch` or `newest`.
+- `precise`: Packages, direct or transitive, to move to an exact release; only they (and `packages`) move. Where the package manager has no precise update, each moves to the newest release its constraints allow, and the proposal says so.
 
 ## Exceptions
 

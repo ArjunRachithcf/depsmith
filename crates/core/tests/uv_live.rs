@@ -1,5 +1,6 @@
-//! Opt-in acceptance test with the real uv against PyPI: a pinned package is
-//! suggested with index evidence, accepted, applied and rechecked.
+//! Opt-in acceptance tests with the real uv against PyPI: a pinned package is
+//! suggested with index evidence, accepted, applied and rechecked, and a
+//! nested package moves to the exact release a precise update names.
 use depsmith_core::{apply, Engine, UpdateOptions};
 use std::{collections::BTreeMap, fs};
 
@@ -9,6 +10,66 @@ fn options(accept: &[&str]) -> UpdateOptions {
         accept: accept.iter().map(|a| a.to_string()).collect(),
         ..Default::default()
     }
+}
+
+/// The version of `name` that `lock` (a `uv.lock`) records.
+fn locked<'a>(lock: &'a str, name: &str) -> &'a str {
+    let entry = format!("name = \"{name}\"\nversion = \"");
+    let start = lock
+        .find(&entry)
+        .unwrap_or_else(|| panic!("{name} unlocked"))
+        + entry.len();
+    &lock[start..start + lock[start..].find('"').unwrap()]
+}
+
+#[test]
+#[ignore = "queries PyPI"]
+fn live_precise_update_moves_a_nested_package_to_the_exact_release() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("pyproject.toml"),
+        "[project]\nname = \"live\"\nversion = \"0.1.0\"\nrequires-python = \">=3.10\"\n\
+         dependencies = [\"requests\"]\n\n[tool.uv]\n",
+    )
+    .unwrap();
+    // urllib3 is a dependency of requests, never declared here: lock an old one.
+    let uv = std::env::var("UV").unwrap();
+    for args in [
+        &["lock"][..],
+        &["lock", "--upgrade-package", "urllib3==2.0.7"],
+    ] {
+        let status = std::process::Command::new(&uv)
+            .args(args)
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "uv {args:?}");
+    }
+    let baseline = fs::read_to_string(root.path().join("uv.lock")).unwrap();
+    assert_eq!(locked(&baseline, "urllib3"), "2.0.7");
+
+    let options = UpdateOptions {
+        precise: vec![depsmith_core::PreciseUpdate {
+            package: "urllib3".into(),
+            version: "2.2.1".into(),
+        }],
+        ..options(&[])
+    };
+    let proposal = Engine::default()
+        .prepare(root.path(), &["uv:pyproject.toml".into()], options)
+        .unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    let lock = proposal
+        .changes
+        .iter()
+        .find(|c| c.path.as_os_str() == "uv.lock")
+        .unwrap_or_else(|| panic!("uv.lock unchanged: {:?}", proposal.changes));
+    assert_eq!(locked(&lock.after, "urllib3"), "2.2.1");
+    // Only the requested package moved.
+    assert_eq!(
+        locked(&lock.after, "requests"),
+        locked(&baseline, "requests")
+    );
 }
 
 #[test]

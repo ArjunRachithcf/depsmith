@@ -50,6 +50,12 @@ pub struct Target {
 pub struct UpdateOptions {
     /// Direct dependencies to update; empty means the whole target.
     pub packages: Vec<String>,
+    /// Packages, direct or transitive, to move to an exact release without
+    /// changing constraints. When any are given, only they (and any
+    /// `packages`) move. Where the package manager has no precise update,
+    /// each moves to the newest release its constraints allow instead, and
+    /// the proposal says so.
+    pub precise: Vec<PreciseUpdate>,
     /// `NAME` or `NAME=REQUIREMENT`: accept a constraint suggestion.
     pub accept: Vec<String>,
     /// Allow the selected packages' declared constraints to change (an
@@ -109,6 +115,7 @@ impl Default for UpdateOptions {
     fn default() -> Self {
         Self {
             packages: vec![],
+            precise: vec![],
             accept: vec![],
             upgrade: false,
             refresh_git: false,
@@ -128,6 +135,16 @@ impl Default for UpdateOptions {
             security_target: SecurityTarget::Lowest,
         }
     }
+}
+
+/// A request to move one package to an exact release without changing any
+/// constraint: a precise update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreciseUpdate {
+    /// Package name as the lock spells it; it need not be declared.
+    pub package: String,
+    /// The exact release to move to.
+    pub version: String,
 }
 
 /// An evidence-backed report that a declared constraint excludes a newer
@@ -326,9 +343,9 @@ impl UpdateOptions {
     }
 
     /// Check the options for consistency before any work starts: a positive
-    /// timeout, well-formed acceptances and suppressions, a known `fail_on`
-    /// severity used together with scanning, `only_new` only with
-    /// `fail_on`, and a known `min_severity`.
+    /// timeout, well-formed precise updates, acceptances and suppressions, a
+    /// known `fail_on` severity used together with scanning, `only_new` only
+    /// with `fail_on`, and a known `min_severity`.
     ///
     /// # Errors
     ///
@@ -344,6 +361,16 @@ impl UpdateOptions {
         {
             return Err(Error::Invalid(format!(
                 "tool {name:?} needs a non-empty name and path"
+            )));
+        }
+        if let Some(request) = self
+            .precise
+            .iter()
+            .find(|p| p.package.trim().is_empty() || p.version.trim().is_empty())
+        {
+            return Err(Error::Invalid(format!(
+                "precise update {:?}={:?} needs a non-empty package and version",
+                request.package, request.version
             )));
         }
         for accept in &self.accept {

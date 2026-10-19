@@ -85,6 +85,19 @@ class IdentityMapping:
 
 
 @dataclass(frozen=True)
+class PreciseUpdate:
+    """A request to move one package to an exact release without changing constraints.
+
+    Attributes:
+        package: Package name as the lock spells it; it need not be declared.
+        version: The exact release to move to.
+    """
+
+    package: str
+    version: str
+
+
+@dataclass(frozen=True)
 class UpdateOptions:
     """Options for preparing, scanning and applying updates.
 
@@ -112,6 +125,10 @@ class UpdateOptions:
             severity when unset.
         security_target: Fixed release a security update aims at:
             ``lowest``, ``patch`` or ``newest``.
+        precise: Packages, direct or transitive, to move to an exact release;
+            only they (and ``packages``) move. Where the package manager has no
+            precise update, each moves to the newest release its constraints
+            allow, and the proposal says so.
     """
 
     packages: Sequence[str] | None = None
@@ -132,6 +149,7 @@ class UpdateOptions:
     suppressions: Sequence[Suppression] | None = None
     min_severity: str | None = None
     security_target: str | None = None
+    precise: Sequence[PreciseUpdate] | None = None
 
     def _json(self) -> str:
         return json.dumps(

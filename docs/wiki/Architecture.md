@@ -17,7 +17,10 @@ The CLI and Python API are thin layers; all behaviour lives in the core.
    are its **targets**.
 2. **Validate before work:** options, adapter **capabilities**, and
    `--package`/`--accept` names against declared direct dependencies are
-   checked before any package manager runs.
+   checked before any package manager runs. A **precise update** may name a
+   transitive package, so it is not checked against declarations; where the
+   adapter lacks the capability (npm, Pixi, conda-lock), the package moves to
+   the newest release its constraints allow and the proposal says so.
 3. **Stage:** copy the repository's inputs (and Git data, for SCM versions)
    into a disposable **stage** and fingerprint them.
 4. **Prepare:** the adapter resolves the target in the stage with its native
@@ -81,7 +84,9 @@ that ecosystem.
    the weekly Latest tools run tracks its releases.
 4. Test it with `depsmith_core::conformance::check`, which runs the contract
    offline: spec round-trip and shape, discovery, managed files, selection,
-   capability enforcement, and declarations round-tripping through `rewrite`.
+   capability enforcement (a precise update needs package selection and a
+   lockfile, and falls back with a note where missing), and declarations
+   round-tripping through `rewrite`.
    Add a native live test (ignored by default) for a preview → accept → apply
    → recheck round trip.
 

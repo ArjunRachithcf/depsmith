@@ -420,6 +420,45 @@ mod stand_in {
     }
 
     #[test]
+    fn precise_updates_alone_move_to_their_exact_release() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        write(root.path(), &[("Cargo.toml", &package("a", ""))]);
+        let inner = cargo(tools.path(), "1.98.1");
+        let (script, log) = (tools.path().join("logging"), tools.path().join("log"));
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\nexec '{inner}' \"$@\"\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let options = UpdateOptions {
+            tools: BTreeMap::from([("cargo".into(), script.to_string_lossy().into_owned())]),
+            precise: vec![depsmith_core::PreciseUpdate {
+                package: "once_cell".into(),
+                version: "1.17.0".into(),
+            }],
+            ..Default::default()
+        };
+        let proposal = Engine::new(vec![Box::new(Cargo::default())])
+            .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let log = fs::read_to_string(log).unwrap();
+        let updates: Vec<&str> = log.lines().filter(|l| l.starts_with("update")).collect();
+        assert_eq!(updates.len(), 2, "{updates:?}");
+        assert!(
+            updates[0].ends_with(" -p once_cell --precise 1.17.0"),
+            "{}",
+            updates[0]
+        );
+        assert!(updates[1].contains("--locked"), "{}", updates[1]);
+    }
+
+    #[test]
     fn cargo_older_than_1_84_is_unsupported() {
         let proposal = prepare("1.0", &[], "1.80.0");
         assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);

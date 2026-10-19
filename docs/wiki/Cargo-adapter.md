@@ -23,6 +23,9 @@ exit 2.
 - `--package NAME` (repeatable) updates only the named direct dependencies
   (`cargo update -p`). Names match case-insensitively with `-` and `_`
   equivalent, and a renamed dependency matches by its key or by its crate.
+- A **precise update** (the `precise` option) moves each named crate, direct
+  or transitive, to its exact release with
+  `cargo update -p NAME --precise VERSION`, and nothing else moves on purpose.
 - **Git dependencies** stay at their locked commit unless `--refresh-git` is
   given.
 - The candidate lock is checked with `cargo update --workspace --locked`, and

@@ -562,6 +562,9 @@ impl Adapter for Actions {
                 install_validation: Support::NotApplicable,
                 lockfile: Support::NotApplicable,
                 platforms: Support::NotApplicable,
+                // A reference is its own constraint, with nothing resolved
+                // within it.
+                precise_update: Support::NotApplicable,
             },
         }
     }

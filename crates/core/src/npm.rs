@@ -718,6 +718,9 @@ impl Adapter for Npm {
                 lockfile: Support::Supported,
                 // package-lock.json records every platform's optional packages.
                 platforms: Support::Supported,
+                precise_update: Support::Unsupported(
+                    "npm update moves a package to the newest release its constraints allow".into(),
+                ),
             },
         }
     }
