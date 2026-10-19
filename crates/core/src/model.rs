@@ -327,8 +327,8 @@ impl UpdateOptions {
 
     /// Check the options for consistency before any work starts: a positive
     /// timeout, well-formed acceptances and suppressions, a known `fail_on`
-    /// severity used together with scanning, and `only_new` only with
-    /// `fail_on`.
+    /// severity used together with scanning, `only_new` only with
+    /// `fail_on`, and a known `min_severity`.
     ///
     /// # Errors
     ///
