@@ -19,6 +19,52 @@ class ApiTests(unittest.TestCase):
                 updater.fix(root, targets=["pixi:pixi.toml"], options=options)
             self.assertIn("never changes constraints", str(raised.exception))
 
+    def test_a_transitive_fix_carries_its_dependency_paths(self):
+        report = {
+            "schema_version": 1,
+            "root": ".",
+            "targets": [],
+            "changes": [],
+            "suggestions": [],
+            "unresolved": [],
+            "failures": [],
+            "validation": [],
+            "scans": [],
+            "dependencies": [],
+            "security": [
+                {
+                    "target": "npm:package.json",
+                    "advisory": "GHSA-ms",
+                    "severity": "High",
+                    "ecosystem": "npm",
+                    "package": "ms",
+                    "version": "2.0.0",
+                    "fix_version": "2.0.1",
+                    "outcome": "blocked",
+                    "reason": "debug requires ms 2.0.0, which excludes 2.0.1",
+                    "paths": [["debug", "ms"]],
+                },
+                {
+                    "target": "npm:package.json",
+                    "advisory": "GHSA-debug",
+                    "severity": "Low",
+                    "ecosystem": "npm",
+                    "package": "debug",
+                    "version": "3.2.7",
+                    "fix_version": "3.2.8",
+                    "outcome": "fixed",
+                },
+            ],
+        }
+
+        class Native:
+            def report(self):
+                return json.dumps(report)
+
+        transitive, direct = updater.Proposal(Native()).security
+        self.assertEqual(transitive.paths, (("debug", "ms"),))
+        self.assertEqual(direct.paths, ())
+
     @unittest.skipUnless(
         os.environ.get("PIXI"), "set PIXI to run the native integration"
     )

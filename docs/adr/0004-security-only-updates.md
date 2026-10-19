@@ -23,8 +23,8 @@ Some teams accept dependency changes only when they fix a vulnerability, so a **
   - When the blocker is a declared constraint, the suggestion names it, and it is accepted with `--accept NAME=REQUIREMENT` as today.
   - npm `overrides` and parent requirements need a new kind of acceptance. Until one exists, those suggestions describe the change without applying it.
 - **Dependency paths come from each target's lock graph** (ADR 0005), read from `Cargo.lock`, `uv.lock`, `package-lock.json`, `pixi.lock` or conda-lock.
-  - The native tree command (`cargo tree`, `uv tree`, `npm ls`, `pixi tree`) is used only where a lock records none.
-  - Without either, the path is reported as unknown, and a vulnerable direct dependency is still updated.
+  - The native tree command is for adapters whose lock records no graph. Every built-in adapter with transitive packages reads one, so none uses a tree command.
+  - Without either, the path is reported as unknown, and the vulnerable package, direct or transitive, is still updated.
 - **Unfixable findings** are reported with their advisory and change nothing; policy gates and expiring suppressions still apply.
 - **Unassessed packages** are counted and reported, never as clean, and fail the run only if a policy says so.
 

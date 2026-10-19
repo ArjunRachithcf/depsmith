@@ -20,6 +20,11 @@ environment's `platforms:` list, or conda-lock's defaults. Without
 `--package` every package is re-solved; `--package NAME` (repeatable) passes
 `--update NAME` so only those packages move.
 
+A security update moves a package to the newest release its constraints
+allow (conda-lock has no precise update), and reports a finding in a
+transitive package as a blocked fix until a live test shows conda-lock moving
+one.
+
 The candidate lock must hold every declared package on every locked platform,
 and the environment file must not change. `--upgrade` is not supported:
 change a requirement with `--accept`.

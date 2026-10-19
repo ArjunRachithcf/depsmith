@@ -464,7 +464,13 @@ impl Engine {
             }
             let mut security = None;
             if options.security_only {
-                match security::select(adapter, &root, &target, &options) {
+                match security::select(
+                    adapter,
+                    &self.spec(&target).capabilities,
+                    &root,
+                    &target,
+                    &options,
+                ) {
                     Ok(mut chosen) => {
                         proposal.security.append(&mut chosen.reported);
                         proposal.suggestions.append(&mut chosen.suggestions);
@@ -571,7 +577,14 @@ impl Engine {
                         if let Some(chosen) = &security {
                             let verified = adapter.declarations(stage.path(), &target).and_then(
                                 |declarations| {
-                                    chosen.verify(&target, &report, &candidate.after, &declarations)
+                                    let graph = adapter.lock_graph(stage.path(), &target)?;
+                                    chosen.verify(
+                                        &target,
+                                        &report,
+                                        &candidate.after,
+                                        &declarations,
+                                        graph.as_ref(),
+                                    )
                                 },
                             );
                             let (fixes, suggestions) = match verified {

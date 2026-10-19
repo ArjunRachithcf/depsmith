@@ -39,8 +39,8 @@ made.
   `--accept`.
 - npm has no **precise update**: a package named by a security update moves
   to the newest release its ranges allow, by `npm update NAME`, and the
-  proposal says so. The live tests show that this moves a nested package
-  too, not only a declared one.
+  proposal says so. The live tests show that this moves a transitive
+  package too, not only a declared one, including in a security update.
 
 Your npm configuration (user and project `.npmrc`: registry, scopes, auth)
 applies as it would for a plain `npm update`.

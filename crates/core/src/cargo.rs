@@ -484,6 +484,7 @@ impl Adapter for Cargo {
                 platforms: Support::Supported,
                 // `cargo update -p NAME --precise VERSION`.
                 precise_update: Support::Supported,
+                transitive_updates: Support::Supported,
             },
         }
     }

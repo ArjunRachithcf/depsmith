@@ -1,9 +1,14 @@
 //! Opt-in acceptance tests with the real cargo against crates.io: a pinned
 //! crate is suggested with index evidence, accepted, applied and rechecked,
 //! a crate held back by `rust-version` is reported, and a nested crate moves
-//! to the exact release a precise update names.
+//! to the exact release a precise update names. A security update moves a
+//! transitive crate precisely or by name.
 use depsmith_core::{apply, Engine, UpdateOptions};
+#[cfg(unix)]
+use depsmith_core::{FixOutcome, SecurityTarget};
 use std::{collections::BTreeMap, fs};
+
+mod support;
 
 fn options(accept: &[&str]) -> UpdateOptions {
     UpdateOptions {
@@ -73,6 +78,74 @@ fn live_precise_update_moves_a_nested_crate_to_the_exact_release() {
         locked(&lock.after, "serde_json"),
         locked(&baseline, "serde_json")
     );
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "queries crates.io"]
+fn live_security_update_moves_a_transitive_crate_precisely_or_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "").unwrap();
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"live\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\nserde_json = \"1\"\n",
+    )
+    .unwrap();
+    let tool = std::env::var("CARGO").unwrap();
+    for args in [
+        &["generate-lockfile"][..],
+        &["update", "-p", "itoa", "--precise", "1.0.5"],
+    ] {
+        let status = std::process::Command::new(&tool)
+            .args(args)
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "cargo {args:?}");
+    }
+    let grype = support::grype(
+        tools.path(),
+        "GHSA-live",
+        "github:language:rust",
+        "pkg:cargo/itoa@1.0.5",
+        "1.0.9",
+    );
+    for target in [SecurityTarget::Lowest, SecurityTarget::Newest] {
+        let mut options = options(&[]);
+        options.tools.insert("grype".into(), grype.clone());
+        let options = UpdateOptions {
+            security_only: true,
+            security_target: target,
+            ..options
+        };
+        let proposal = Engine::default()
+            .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let fix = &proposal.security[0];
+        assert_eq!(fix.outcome, FixOutcome::Fixed, "{target:?}: {}", fix.reason);
+        assert_eq!(
+            fix.paths,
+            [vec!["serde_json".to_owned(), "itoa".to_owned()]]
+        );
+        let lock = proposal
+            .changes
+            .iter()
+            .find(|c| c.path.as_os_str() == "Cargo.lock")
+            .unwrap_or_else(|| panic!("Cargo.lock unchanged: {:?}", proposal.changes));
+        let moved = locked(&lock.after, "itoa");
+        if target == SecurityTarget::Lowest {
+            assert_eq!(moved, "1.0.9");
+        } else {
+            assert_ne!(
+                moved, "1.0.5",
+                "newest moves by name past the locked release"
+            );
+        }
+    }
 }
 
 #[test]

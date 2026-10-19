@@ -1,6 +1,12 @@
 //! Opt-in acceptance tests requiring Pixi and access to conda-forge/PyPI.
+//! Among them, a transitive package moves when a precise update or a
+//! security update names it.
 use depsmith_core::{apply, Engine, PreciseUpdate, UpdateOptions};
+#[cfg(unix)]
+use depsmith_core::{scan::IdentityMapping, FixOutcome, SecurityTarget};
 use std::fs;
+
+mod support;
 
 #[test]
 #[ignore = "downloads Python/build dependencies and runs native Pixi"]
@@ -441,6 +447,46 @@ six = "*"
     }
 }
 
+/// A workspace whose only dependency besides Python, requests, accepts any
+/// idna 3.
+const REQUESTS: &str = r#"[workspace]
+name = "nested-fixture"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+[dependencies]
+python = "3.12.*"
+requests = "*"
+"#;
+
+/// Write [`REQUESTS`] to `root`, locked with idna at 3.6: lock it with a pin,
+/// then drop the pin, and the lock stays valid.
+fn lock_older_idna(root: &std::path::Path, options: &UpdateOptions) {
+    let targets = ["pixi:pixi.toml".into()];
+    fs::write(
+        root.join("pixi.toml"),
+        format!("{REQUESTS}idna = \"==3.6\"\n"),
+    )
+    .unwrap();
+    let locked = Engine::default()
+        .prepare(root, &targets, options.clone())
+        .unwrap();
+    assert!(locked.failures.is_empty(), "{:?}", locked.failures);
+    apply(&locked, false).unwrap();
+    fs::write(root.join("pixi.toml"), REQUESTS).unwrap();
+    assert_eq!(locked_idna(root), ["3.6"]);
+}
+
+/// Every version of idna that `root`'s `pixi.lock` records.
+fn locked_idna(root: &std::path::Path) -> Vec<String> {
+    let lock = fs::read_to_string(root.join("pixi.lock")).unwrap();
+    depsmith_core::inventory::pixi_inventory(&lock)
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.name == "idna")
+        .map(|p| p.version)
+        .collect()
+}
+
 /// Pixi has no precise update, so a precise request falls back to `pixi
 /// update NAME`. ADR 0004 asks each adapter to show that its tool moves a
 /// nested package named this way: requests accepts any idna 3, which is locked
@@ -449,43 +495,15 @@ six = "*"
 #[ignore = "runs native Pixi and downloads conda-forge metadata"]
 fn precise_update_of_a_nested_package_moves_it_by_name() {
     let root = tempfile::tempdir().unwrap();
-    let manifest = r#"[workspace]
-name = "nested-fixture"
-channels = ["conda-forge"]
-platforms = ["linux-64"]
-[dependencies]
-python = "3.12.*"
-requests = "*"
-"#;
+    let manifest = REQUESTS;
     let options = UpdateOptions {
         pixi: std::env::var("PIXI").unwrap_or_else(|_| "pixi".into()),
         ..Default::default()
     };
     let engine = Engine::default();
     let targets = ["pixi:pixi.toml".into()];
-    // Lock the older nested release with a pin, then drop the pin: the lock
-    // stays valid, since idna 3.6 is within requests' range.
-    fs::write(
-        root.path().join("pixi.toml"),
-        format!("{manifest}idna = \"==3.6\"\n"),
-    )
-    .unwrap();
-    let locked = engine
-        .prepare(root.path(), &targets, options.clone())
-        .unwrap();
-    assert!(locked.failures.is_empty(), "{:?}", locked.failures);
-    apply(&locked, false).unwrap();
-    fs::write(root.path().join("pixi.toml"), manifest).unwrap();
-    let idna = || -> Vec<String> {
-        let lock = fs::read_to_string(root.path().join("pixi.lock")).unwrap();
-        depsmith_core::inventory::pixi_inventory(&lock)
-            .unwrap()
-            .into_iter()
-            .filter(|p| p.name == "idna")
-            .map(|p| p.version)
-            .collect()
-    };
-    assert_eq!(idna(), ["3.6"]);
+    lock_older_idna(root.path(), &options);
+    let idna = || locked_idna(root.path());
 
     let precise = UpdateOptions {
         precise: vec![PreciseUpdate {
@@ -530,4 +548,57 @@ requests = "*"
         fs::read_to_string(root.path().join("pixi.toml")).unwrap(),
         manifest
     );
+}
+
+/// Pixi moves a transitive package a security update names, whatever the
+/// security target, by `pixi update NAME` (it has no precise update).
+#[test]
+#[cfg(unix)]
+#[ignore = "runs native Pixi and downloads conda-forge metadata"]
+fn live_security_update_moves_a_transitive_package_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let options = UpdateOptions {
+        pixi: std::env::var("PIXI").unwrap_or_else(|_| "pixi".into()),
+        ..Default::default()
+    };
+    lock_older_idna(root.path(), &options);
+    let grype = support::grype(
+        tools.path(),
+        "GHSA-live",
+        "github:language:python",
+        "pkg:pypi/idna@3.6",
+        "3.7",
+    );
+    for target in [SecurityTarget::Lowest, SecurityTarget::Newest] {
+        let mut options = options.clone();
+        options.tools.insert("grype".into(), grype.clone());
+        let options = UpdateOptions {
+            security_only: true,
+            security_target: target,
+            // conda-forge's idna is PyPI's.
+            identity_mappings: vec![IdentityMapping {
+                ecosystem: "conda".into(),
+                name: "idna".into(),
+                purl: "pkg:pypi/idna".into(),
+                evidence: "https://github.com/conda-forge/idna-feedstock".into(),
+            }],
+            ..options
+        };
+        let proposal = Engine::default()
+            .prepare(root.path(), &["pixi:pixi.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let fix = &proposal.security[0];
+        assert_eq!(fix.outcome, FixOutcome::Fixed, "{target:?}: {}", fix.reason);
+        assert_eq!(fix.paths, [vec!["requests".to_owned(), "idna".to_owned()]]);
+        assert!(
+            proposal.dependencies.iter().any(|d| d
+                .after
+                .as_ref()
+                .is_some_and(|p| p.name == "idna" && p.version != "3.6")),
+            "{:?}",
+            proposal.dependencies
+        );
+    }
 }

@@ -84,11 +84,14 @@ that ecosystem.
    the weekly Latest tools run tracks its releases.
 4. Test it with `depsmith_core::conformance::check`, which runs the contract
    offline: spec round-trip and shape, discovery, managed files, selection,
-   capability enforcement (a precise update needs package selection and a
-   lockfile, and falls back with a note where missing), and declarations
+   capability enforcement (a precise update, and moving transitive packages,
+   need package selection and a lockfile; a missing precise update falls
+   back with a note), and declarations
    round-tripping through `rewrite`.
    Add a native live test (ignored by default) for a preview → accept → apply
-   → recheck round trip.
+   → recheck round trip. Declare `transitive_updates` only once a live test
+   shows the tool moving a transitive package; until then security updates
+   report those fixes as blocked.
 
 Every seam type is owned and serde-serialisable, so a later out-of-tree
 adapter can speak the same contract over a subprocess bridge of JSON lines

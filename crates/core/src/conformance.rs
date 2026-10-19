@@ -81,6 +81,12 @@ fn check_spec(spec: &AdapterSpec, problems: &mut Vec<String>) {
     {
         problems.push("precise update requires package selection and a lockfile".into());
     }
+    // A transitive package moves by a precise update or by name, within a lock.
+    if caps.transitive_updates == Support::Supported
+        && (caps.package_selection != Support::Supported || caps.lockfile != Support::Supported)
+    {
+        problems.push("transitive updates require package selection and a lockfile".into());
+    }
     let mut names = BTreeSet::new();
     for tool in &spec.tools {
         if tool.name.is_empty() || tool.default.is_empty() || !names.insert(&tool.name) {

@@ -296,7 +296,7 @@ treated as clean.
 - `expired_suppressions`: Suppressions that had expired and were ignored.
 - `policy_passed`: Whether the configured policy accepted the findings.
 
-### `SecurityFix(target: str, advisory: str, severity: str, ecosystem: str, package: str, version: str, fix_version: str | None, outcome: str, reason: str)`
+### `SecurityFix(target: str, advisory: str, severity: str, ecosystem: str, package: str, version: str, fix_version: str | None, outcome: str, reason: str, paths: tuple[tuple[str, ...], ...])`
 
 What a security update did about one finding.
 
@@ -311,6 +311,7 @@ What a security update did about one finding.
 - `fix_version`: The release the update aimed at; `None` when unfixable.
 - `outcome`: `fixed`, `blocked` or `unfixable`.
 - `reason`: Why, for a blocked or unfixable finding.
+- `paths`: For a transitive package, the dependency paths from each declared dependency that reaches it, read from the lock graph; empty for a declared package or when no lock graph records them.
 
 ### `Suggestion(target: str, package: str, requirement: str, reason: str, evidence: tuple[str, ...])`
 

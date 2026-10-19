@@ -1,8 +1,9 @@
 //! Security updates (ADR 0004): the packages a target's actionable findings
 //! move, each toward its fix version, and whether the candidate fixed them.
 use crate::{
-    adapter::{pypi_key, Adapter},
+    adapter::{pypi_key, Adapter, Capabilities, Support},
     constraints::Declaration,
+    graph::LockGraph,
     scan::{self, Finding, FixState, ScanReport},
     DependencyChange, Error, FixOutcome, Package, PreciseUpdate, Result, SecurityFix,
     SecurityTarget, Suggestion, Target, UpdateOptions,
@@ -19,6 +20,12 @@ struct Move {
     fix_version: String,
     /// The actionable findings it fixes.
     findings: Vec<Finding>,
+    /// Whether the target does not declare it.
+    transitive: bool,
+    /// For a transitive package, the dependency paths from each declared
+    /// dependency that reaches it; empty for a declared one, or when no
+    /// path is known.
+    paths: Vec<Vec<String>>,
 }
 
 /// What a security update of one target moves, from its baseline scan.
@@ -109,6 +116,7 @@ fn record(
     reason: String,
 ) -> SecurityFix {
     SecurityFix {
+        paths: vec![],
         target: target.id.clone(),
         advisory: finding.id.clone(),
         severity: finding.severity.clone(),
@@ -118,6 +126,150 @@ fn record(
         fix_version,
         outcome,
         reason,
+    }
+}
+
+/// A requirement on a transitive package's dependency path that excludes
+/// its fix version.
+struct Blocker {
+    /// The package one step up the path.
+    parent: String,
+    /// Its recorded requirement on the transitive package.
+    spec: String,
+}
+
+impl Blocker {
+    /// How it holds back `name`.
+    fn requirement(&self, name: &str) -> String {
+        format!("{} requires {name} {}", self.parent, self.spec)
+    }
+
+    /// Why `name` cannot reach `fix_version`.
+    fn reason(&self, name: &str, fix_version: &str) -> String {
+        format!("{}, which excludes {fix_version}", self.requirement(name))
+    }
+}
+
+/// The distinct platforms of `findings`.
+fn platforms<'a>(findings: &[&'a Finding]) -> Vec<&'a str> {
+    let mut platforms: Vec<&str> = vec![];
+    for finding in findings {
+        let platform = platform_of(finding);
+        if !platforms.contains(&platform) {
+            platforms.push(platform);
+        }
+    }
+    platforms
+}
+
+/// The dependency paths from `roots` to the `ecosystem` package `name` on
+/// any of `platforms`, without repeats.
+fn paths_on(
+    graph: &LockGraph,
+    platforms: &[&str],
+    roots: &[(String, String)],
+    ecosystem: &str,
+    name: &str,
+) -> Vec<Vec<String>> {
+    let mut paths: Vec<Vec<String>> = vec![];
+    for platform in platforms {
+        for path in graph.paths_to(platform, roots, ecosystem, name) {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+/// The requirement at the end of `path`, on the `ecosystem` package it
+/// reaches, that excludes `fix_version`: only when every requirement the
+/// parent records on it, at every locked version and on every one of
+/// `platforms`, does. `None` when one admits the fix, or the lock records
+/// none (then only the tool can tell).
+fn path_blocker(
+    graph: &LockGraph,
+    platforms: &[&str],
+    path: &[String],
+    ecosystem: &str,
+    fix_version: &str,
+) -> Option<Blocker> {
+    let scheme = crate::ecosystem::scheme(ecosystem)?;
+    let [.., parent, name] = path else {
+        return None;
+    };
+    let specs = graph
+        .nodes
+        .iter()
+        .filter(|n| {
+            platforms.contains(&n.platform.as_str()) && same_name(&n.ecosystem, &n.name, parent)
+        })
+        .flat_map(|n| &n.requires)
+        .filter(|r| same_name(ecosystem, &r.name, name))
+        .map(|r| r.spec.as_deref())
+        .collect::<Option<Vec<&str>>>()?;
+    let first = specs.first()?;
+    specs
+        .iter()
+        .all(|spec| scheme.admits(spec, fix_version) == Some(false))
+        .then(|| Blocker {
+            parent: parent.clone(),
+            spec: (*first).to_owned(),
+        })
+}
+
+impl Move {
+    /// The blocker of each of its paths in `graph`, on the platforms of
+    /// `findings`.
+    fn blockers(&self, graph: Option<&LockGraph>, findings: &[&Finding]) -> Vec<Option<Blocker>> {
+        let platforms = platforms(findings);
+        self.paths
+            .iter()
+            .map(|path| path_blocker(graph?, &platforms, path, &self.ecosystem, &self.fix_version))
+            .collect()
+    }
+
+    /// A suggestion describing, without applying it, how to reach the fix
+    /// of this transitive package that `blocker` excludes, or that the tool
+    /// left at `now`: a newer release of the declared dependency its path
+    /// starts from, or an override. `None` when no path names one of
+    /// `declarations`.
+    fn parent_suggestion(
+        &self,
+        target: &Target,
+        declarations: &[Declaration],
+        findings: &[&Finding],
+        blocker: Option<&Blocker>,
+        now: &str,
+    ) -> Option<Suggestion> {
+        let (name, fix_version) = (&self.declared, &self.fix_version);
+        let path = self
+            .paths
+            .iter()
+            .find(|p| p.len() >= 2 && blocker.is_none_or(|b| p[p.len() - 2] == b.parent))?;
+        let introducer = path.first()?;
+        let declaration = declarations.iter().find(|d| &d.package == introducer)?;
+        let advisories: Vec<&str> = findings.iter().map(|f| f.id.as_str()).collect();
+        let held = match blocker {
+            Some(blocker) => blocker.requirement(name),
+            None => format!("{name} stays at {now}"),
+        };
+        Some(Suggestion {
+            target: target.id.clone(),
+            package: declaration.package.clone(),
+            requirement: declaration.requirement.clone(),
+            reason: format!(
+                "{} {} fixed in {name} {fix_version}, but {held} (through {}); a release of {} whose dependencies admit {fix_version}, or an override, is needed, which depsmith does not apply",
+                advisories.join(", "),
+                if advisories.len() == 1 { "is" } else { "are" },
+                path.join(" > "),
+                declaration.package
+            ),
+            evidence: findings
+                .iter()
+                .map(|f| format!("{} ({})", f.id, f.namespace))
+                .collect(),
+        })
     }
 }
 
@@ -150,12 +302,15 @@ fn blocked(
 }
 
 /// Scan the current lock of `target` under `root` and choose what a
-/// security update moves: each direct dependency with actionable findings,
-/// toward a fix version that fixes all of them. A fix its declaration
-/// excludes is blocked and suggested instead; unfixable findings, and
-/// findings in packages the target does not declare, are reported.
+/// security update moves: each package with actionable findings, toward a
+/// fix version that fixes all of them. A transitive package moves only
+/// where the adapter's `capabilities` show its tool moving one. A fix that a
+/// declaration, or a requirement on every one of the package's dependency
+/// paths, excludes is blocked and suggested instead; unfixable findings are
+/// reported.
 pub(crate) fn select(
     adapter: &dyn Adapter,
+    capabilities: &Capabilities,
     root: &std::path::Path,
     target: &Target,
     options: &UpdateOptions,
@@ -208,6 +363,15 @@ pub(crate) fn select(
         }
     }
     let declarations = adapter.declarations(root, target)?;
+    let graph = adapter.lock_graph(root, target)?;
+    let mut roots: Vec<(String, String)> = vec![];
+    for declaration in &declarations {
+        let root = (declaration.ecosystem.clone(), declaration.package.clone());
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    let moves_transitive = &capabilities.transitive_updates;
     for (ecosystem, name, findings) in packages {
         let Some(fix_version) = aim_for(&findings, options.security_target) else {
             for finding in findings {
@@ -226,16 +390,67 @@ pub(crate) fn select(
             .into_values()
             .next();
         let Some(declared) = declared else {
-            for finding in findings {
-                selection.reported.push(record(
+            let m = Move {
+                paths: graph.as_ref().map_or_else(Vec::new, |g| {
+                    paths_on(g, &platforms(&findings), &roots, &ecosystem, &name)
+                }),
+                ecosystem,
+                declared: name,
+                fix_version,
+                findings: findings.iter().copied().cloned().collect(),
+                transitive: true,
+            };
+            // The tool must be shown to move it, and no requirement on every
+            // path may exclude the fix; a path that admits it is left to the
+            // tool, and the candidate scan tells.
+            let blockers = m.blockers(graph.as_ref(), &findings);
+            let blocker = if blockers.is_empty() || blockers.iter().any(Option::is_none) {
+                None
+            } else {
+                blockers.into_iter().flatten().next()
+            };
+            let reason = match (moves_transitive, &blocker) {
+                (Support::Unsupported(hint), _) => Some(format!(
+                    "{} is a transitive dependency, and {hint}",
+                    m.declared
+                )),
+                (Support::NotApplicable, _) => Some(format!(
+                    "{} is a transitive dependency, which this adapter does not move",
+                    m.declared
+                )),
+                (Support::Supported, Some(blocker)) => {
+                    Some(blocker.reason(&m.declared, &m.fix_version))
+                }
+                (Support::Supported, None) => None,
+            };
+            let Some(reason) = reason else {
+                if m.paths.is_empty() {
+                    selection.notes.push(format!(
+                        "{}: {} is a transitive dependency whose dependency path is unknown",
+                        target.id, m.declared
+                    ));
+                }
+                selection.moves.push(m);
+                continue;
+            };
+            for finding in &findings {
+                let mut fix = record(
                     target,
                     finding,
-                    Some(fix_version.clone()),
+                    Some(m.fix_version.clone()),
                     FixOutcome::Blocked,
-                    format!(
-                        "{name} is not a direct dependency of {}; transitive security updates are not supported yet",
-                        target.id
-                    ),
+                    reason.clone(),
+                );
+                fix.paths = m.paths.clone();
+                selection.reported.push(fix);
+            }
+            if let Some(blocker) = &blocker {
+                selection.suggestions.extend(m.parent_suggestion(
+                    target,
+                    &declarations,
+                    &findings,
+                    Some(blocker),
+                    &findings[0].version,
                 ));
             }
             continue;
@@ -279,6 +494,8 @@ pub(crate) fn select(
             continue;
         }
         selection.moves.push(Move {
+            transitive: false,
+            paths: vec![],
             ecosystem,
             declared,
             fix_version,
@@ -347,14 +564,18 @@ impl Selection {
 
     /// Classify each targeted finding against the candidate's `report`: fixed
     /// when the candidate no longer has it, else blocked, with a suggestion
-    /// naming the declaration from `declarations` (read from the stage).
-    /// An unsuppressed finding the candidate introduces fails the update.
+    /// naming the declaration from `declarations`, or for a transitive
+    /// package the one its dependency path starts from, citing the
+    /// requirement in `graph` that holds it back. Both are read from the
+    /// stage. An unsuppressed finding the candidate introduces fails the
+    /// update.
     pub(crate) fn verify(
         &self,
         target: &Target,
         report: &ScanReport,
         after: &[Package],
         declarations: &[Declaration],
+        graph: Option<&LockGraph>,
     ) -> Result<(Vec<SecurityFix>, Vec<Suggestion>)> {
         let introduced: Vec<String> = report
             .introduced
@@ -389,9 +610,11 @@ impl Selection {
                     })
                 })
                 .map_or("unknown", |p| p.version.as_str());
+            // Any path's requirement explains a package that stayed.
+            let blocker = m.blockers(graph, &still).into_iter().flatten().next();
             for finding in &m.findings {
                 let blocked = remains(finding);
-                fixes.push(record(
+                let mut fix = record(
                     target,
                     finding,
                     Some(m.fix_version.clone()),
@@ -400,17 +623,33 @@ impl Selection {
                     } else {
                         FixOutcome::Fixed
                     },
-                    if blocked {
-                        format!(
+                    match (blocked, &blocker) {
+                        (false, _) => String::new(),
+                        (true, Some(blocker)) => blocker.reason(&m.declared, &m.fix_version),
+                        (true, None) if m.transitive && m.paths.is_empty() => format!(
+                            "{} stays at {now}, below the fix version {}, and its dependency path is unknown",
+                            m.declared, m.fix_version
+                        ),
+                        (true, None) => format!(
                             "{} stays at {now}, below the fix version {}",
                             m.declared, m.fix_version
-                        )
-                    } else {
-                        String::new()
+                        ),
                     },
-                ));
+                );
+                fix.paths = m.paths.clone();
+                fixes.push(fix);
             }
             if still.is_empty() {
+                continue;
+            }
+            if m.transitive {
+                suggestions.extend(m.parent_suggestion(
+                    target,
+                    declarations,
+                    &still,
+                    blocker.as_ref(),
+                    now,
+                ));
                 continue;
             }
             if let Some(declaration) = declarations.iter().find(|d| {

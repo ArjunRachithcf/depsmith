@@ -64,6 +64,10 @@ _Avoid_: Lock (reserved for package locks), manifest
 A package named in a target's own declarations, as opposed to one resolved only because another package needs it.
 _Avoid_: Top-level package
 
+**Transitive dependency**:
+A package a target resolves only because another package needs it; it has no declaration of its own, so a security update can only ask the package manager to move it.
+_Avoid_: Nested dependency, indirect dependency, sub-dependency
+
 ## Preparing an update
 
 **Update**:
@@ -220,6 +224,10 @@ _Avoid_: Patched version, safe version, fixed release (one of the advisory's can
 **Unfixable**:
 A finding whose advisory names no release that resolves it, reported and left to policy and suppressions.
 _Avoid_: Unpatched, won't fix
+
+**Blocked fix**:
+A finding whose fix version a security update cannot reach without changing a requirement: a declared constraint, or a requirement along the package's dependency path. It is reported as a suggestion naming the declaration to change, and nothing is changed until it is accepted.
+_Avoid_: Failed fix, held-back update
 
 **Unassessed**:
 A package the scanner could not evaluate, reported as unknown and never as clean.

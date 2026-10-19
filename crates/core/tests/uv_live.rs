@@ -1,8 +1,13 @@
 //! Opt-in acceptance tests with the real uv against PyPI: a pinned package is
 //! suggested with index evidence, accepted, applied and rechecked, and a
-//! nested package moves to the exact release a precise update names.
+//! transitive package moves to the exact release a precise update names. A
+//! security update moves a transitive package precisely or by name.
 use depsmith_core::{apply, Engine, UpdateOptions};
+#[cfg(unix)]
+use depsmith_core::{FixOutcome, SecurityTarget};
 use std::{collections::BTreeMap, fs};
+
+mod support;
 
 fn options(accept: &[&str]) -> UpdateOptions {
     UpdateOptions {
@@ -70,6 +75,72 @@ fn live_precise_update_moves_a_nested_package_to_the_exact_release() {
         locked(&lock.after, "requests"),
         locked(&baseline, "requests")
     );
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "queries PyPI"]
+fn live_security_update_moves_a_transitive_package_precisely_or_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("pyproject.toml"),
+        "[project]\nname = \"live\"\nversion = \"0.1.0\"\nrequires-python = \">=3.10\"\n\
+         dependencies = [\"requests\"]\n\n[tool.uv]\n",
+    )
+    .unwrap();
+    let tool = std::env::var("UV").unwrap();
+    for args in [
+        &["lock"][..],
+        &["lock", "--upgrade-package", "urllib3==2.0.7"],
+    ] {
+        let status = std::process::Command::new(&tool)
+            .args(args)
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "uv {args:?}");
+    }
+    let grype = support::grype(
+        tools.path(),
+        "GHSA-live",
+        "github:language:python",
+        "pkg:pypi/urllib3@2.0.7",
+        "2.2.1",
+    );
+    for target in [SecurityTarget::Lowest, SecurityTarget::Newest] {
+        let mut options = options(&[]);
+        options.tools.insert("grype".into(), grype.clone());
+        let options = UpdateOptions {
+            security_only: true,
+            security_target: target,
+            ..options
+        };
+        let proposal = Engine::default()
+            .prepare(root.path(), &["uv:pyproject.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let fix = &proposal.security[0];
+        assert_eq!(fix.outcome, FixOutcome::Fixed, "{target:?}: {}", fix.reason);
+        assert_eq!(
+            fix.paths,
+            [vec!["requests".to_owned(), "urllib3".to_owned()]]
+        );
+        let lock = proposal
+            .changes
+            .iter()
+            .find(|c| c.path.as_os_str() == "uv.lock")
+            .unwrap_or_else(|| panic!("uv.lock unchanged: {:?}", proposal.changes));
+        let moved = locked(&lock.after, "urllib3");
+        if target == SecurityTarget::Lowest {
+            assert_eq!(moved, "2.2.1");
+        } else {
+            assert_ne!(
+                moved, "2.0.7",
+                "newest moves by name past the locked release"
+            );
+        }
+    }
 }
 
 #[test]

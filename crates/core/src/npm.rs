@@ -847,6 +847,7 @@ impl Adapter for Npm {
                 precise_update: Support::Unsupported(
                     "npm update moves a package to the newest release its constraints allow".into(),
                 ),
+                transitive_updates: Support::Supported,
             },
         }
     }

@@ -26,8 +26,8 @@ that target's proposal.
   current host; it does not install every platform.
 - Pixi has no **precise update**: a package named by a security update moves
   to the newest release its constraints allow, by `pixi update NAME`, and the
-  proposal says so. The live tests show that this moves a nested package
-  too, not only a declared one.
+  proposal says so. The live tests show that this moves a transitive
+  package too, not only a declared one, including in a security update.
 
 Resolution can create temporary solve and build environments inside the stage,
 even without `--install`; some PyPI source packages need this. Pixi builds

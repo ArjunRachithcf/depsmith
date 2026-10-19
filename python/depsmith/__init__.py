@@ -379,6 +379,9 @@ class SecurityFix:
         fix_version: The release the update aimed at; ``None`` when unfixable.
         outcome: ``fixed``, ``blocked`` or ``unfixable``.
         reason: Why, for a blocked or unfixable finding.
+        paths: For a transitive package, the dependency paths from each
+            declared dependency that reaches it, read from the lock graph;
+            empty for a declared package or when no lock graph records them.
     """
 
     target: str
@@ -390,6 +393,7 @@ class SecurityFix:
     fix_version: str | None
     outcome: str
     reason: str = ""
+    paths: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -444,7 +448,12 @@ class Proposal:
         self.failures = tuple(Failure(**row) for row in data["failures"])
         self.validation: tuple[str, ...] = tuple(data["validation"])
         self.scans = tuple(ScanReport._from_dict(row) for row in data["scans"])
-        self.security = tuple(SecurityFix(**row) for row in data.get("security", ()))
+        self.security = tuple(
+            SecurityFix(
+                **{**row, "paths": tuple(tuple(path) for path in row.get("paths", ()))}
+            )
+            for row in data.get("security", ())
+        )
         self.dependencies = tuple(
             DependencyChange(
                 Package(**row["before"]) if row["before"] else None,

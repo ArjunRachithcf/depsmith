@@ -27,6 +27,8 @@ requirement; `uv.lock` covers every platform.
 - A **precise update** (the `precise` option) moves each named package,
   direct or transitive, to its exact release with
   `--upgrade-package NAME==VERSION`, and nothing else is upgraded.
+- A security update moves a transitive package with a finding the same way
+  (or by name with `--security-target newest`); the live tests show both.
 - The candidate is checked with `uv lock --locked`, and the manifests must not
   change.
 - `--upgrade`, `--cooldown-days` and `--install` are not supported. Change a

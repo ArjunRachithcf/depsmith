@@ -26,6 +26,8 @@ exit 2.
 - A **precise update** (the `precise` option) moves each named crate, direct
   or transitive, to its exact release with
   `cargo update -p NAME --precise VERSION`, and nothing else moves on purpose.
+- A security update moves a transitive crate with a finding the same way
+  (or by name with `--security-target newest`); the live tests show both.
 - **Git dependencies** stay at their locked commit unless `--refresh-git` is
   given.
 - The candidate lock is checked with `cargo update --workspace --locked`, and

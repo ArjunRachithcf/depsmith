@@ -365,3 +365,61 @@ fn doctor_reports_capabilities_and_unavailable_tools() {
             .is_some_and(|v| !v.is_empty()));
     }
 }
+
+#[test]
+fn transitive_updates_are_declared_only_where_live_tests_show_them() {
+    let specs = Engine::default().specs();
+    let transitive = |manager: &str| {
+        specs
+            .iter()
+            .find(|s| s.manager == manager)
+            .unwrap_or_else(|| panic!("no {manager} adapter"))
+            .capabilities
+            .transitive_updates
+            .clone()
+    };
+    // Each has a live test moving a transitive package (`*_live.rs`).
+    for manager in ["cargo", "uv", "npm", "pixi"] {
+        assert_eq!(transitive(manager), Support::Supported, "{manager}");
+    }
+    assert!(
+        matches!(&transitive("conda"), Support::Unsupported(hint) if !hint.is_empty()),
+        "{:?}",
+        transitive("conda")
+    );
+    assert_eq!(transitive("github-actions"), Support::NotApplicable);
+}
+
+#[test]
+fn conformance_requires_transitive_updates_to_select_packages_and_lock() {
+    /// Claims transitive updates with nothing else to support them.
+    struct Claims;
+    impl Adapter for Claims {
+        fn spec(&self) -> AdapterSpec {
+            AdapterSpec {
+                capabilities: Capabilities {
+                    transitive_updates: Support::Supported,
+                    ..Capabilities::undeclared()
+                },
+                ..AdapterSpec::new("fixture", &["project.toml"])
+            }
+        }
+        fn detects(&self, path: &Path, _: &str) -> bool {
+            path == Path::new("project.toml")
+        }
+        fn prepare(&self, _: &Path, _: &Target, _: &UpdateOptions) -> Result<Candidate> {
+            Ok(Candidate::default())
+        }
+    }
+    let fixture = conformance::Fixture {
+        files: vec![("project.toml".into(), String::new())],
+        target: "fixture:project.toml".into(),
+        declared: vec![],
+    };
+    let problems = conformance::check(&|| Box::new(Claims) as Box<dyn Adapter>, &fixture)
+        .expect_err("transitive updates without package selection or a lockfile conform");
+    assert!(
+        problems.iter().any(|p| p.contains("transitive updates")),
+        "{problems:?}"
+    );
+}

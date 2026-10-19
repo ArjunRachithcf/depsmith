@@ -657,6 +657,9 @@ impl Adapter for Conda {
                 precise_update: Support::Unsupported(
                     "conda-lock moves a package to the newest release its constraints allow".into(),
                 ),
+                transitive_updates: Support::Unsupported(
+                    "no live test shows conda-lock moving a transitive package yet".into(),
+                ),
             },
         }
     }

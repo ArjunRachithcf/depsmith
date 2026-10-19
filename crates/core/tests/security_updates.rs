@@ -14,16 +14,16 @@ const PYPROJECT: &str = "[project]\nname = \"p\"\nversion = \"0.1.0\"\ndependenc
 /// A uv.lock with the given versions; `urllib3` is only a dependency of idna
 /// here, so it is transitive.
 fn lock(six: &str, idna: &str, urllib3: &str) -> String {
-    let package = |name: &str, version: &str| {
+    let package = |name: &str, version: &str, dependencies: &str| {
         format!(
-            "[[package]]\nname = \"{name}\"\nversion = \"{version}\"\nsource = {{ registry = \"https://pypi.org/simple\" }}\nsdist = {{ url = \"https://files.pythonhosted.org/{name}-{version}.tar.gz\" }}\n\n"
+            "[[package]]\nname = \"{name}\"\nversion = \"{version}\"\nsource = {{ registry = \"https://pypi.org/simple\" }}\n{dependencies}sdist = {{ url = \"https://files.pythonhosted.org/{name}-{version}.tar.gz\" }}\n\n"
         )
     };
     format!(
-        "version = 1\nrevision = 3\n\n[[package]]\nname = \"p\"\nversion = \"0.1.0\"\nsource = {{ virtual = \".\" }}\n\n{}{}{}",
-        package("six", six),
-        package("idna", idna),
-        package("urllib3", urllib3)
+        "version = 1\nrevision = 3\n\n[[package]]\nname = \"p\"\nversion = \"0.1.0\"\nsource = {{ virtual = \".\" }}\ndependencies = [{{ name = \"idna\" }}, {{ name = \"six\" }}]\n\n{}{}{}",
+        package("six", six, ""),
+        package("idna", idna, "dependencies = [{ name = \"urllib3\" }]\n"),
+        package("urllib3", urllib3, "")
     )
 }
 
@@ -186,30 +186,136 @@ fn a_constraint_below_the_fix_is_a_blocked_fix_naming_its_declaration() {
 }
 
 #[test]
-fn unfixable_and_transitive_findings_are_reported_without_moving_anything() {
+fn unfixable_findings_are_reported_without_moving_anything() {
     let run = prepare(
         &lock("1.15.0", "3.7", "2.0.0"),
         &lock("1.15.0", "3.7", "2.0.0"),
-        &[
-            advisory("GHSA-open", "idna", "3.7", "High", &[]),
-            advisory("GHSA-nested", "urllib3", "2.0.0", "High", &["2.0.7"]),
-        ],
+        &[advisory("GHSA-open", "idna", "3.7", "High", &[])],
         UpdateOptions::default(),
     );
     let proposal = run.result.unwrap();
     assert!(run.locks.is_empty(), "nothing to move: {:?}", run.locks);
     assert!(proposal.changes.is_empty());
     assert_eq!(fix(&proposal, "GHSA-open").outcome, FixOutcome::Unfixable);
-    let nested = fix(&proposal, "GHSA-nested");
-    assert_eq!(nested.outcome, FixOutcome::Blocked);
-    assert!(
-        nested.reason.contains("not a direct dependency"),
-        "{}",
-        nested.reason
-    );
     // The baseline scan is still reported.
     assert_eq!(proposal.scans.len(), 1);
     assert_eq!(proposal.exit_code(true), 0);
+}
+
+#[test]
+fn a_transitive_package_moves_to_its_fix_and_the_fix_names_its_path() {
+    let run = prepare(
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.7"),
+        &[advisory(
+            "GHSA-transitive",
+            "urllib3",
+            "2.0.0",
+            "High",
+            &["2.0.7"],
+        )],
+        UpdateOptions::default(),
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    let first = &run.locks[0];
+    assert!(
+        first.contains("--upgrade-package urllib3==2.0.7"),
+        "{first}"
+    );
+    assert!(!first.contains("idna"), "{first}");
+    let transitive = fix(&proposal, "GHSA-transitive");
+    assert_eq!(transitive.outcome, FixOutcome::Fixed);
+    assert_eq!(
+        transitive.paths,
+        [vec!["idna".to_owned(), "urllib3".to_owned()]]
+    );
+}
+
+#[test]
+fn a_transitive_package_left_below_its_fix_is_a_suggestion_naming_its_path() {
+    let run = prepare(
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[advisory(
+            "GHSA-transitive",
+            "urllib3",
+            "2.0.0",
+            "High",
+            &["2.0.7"],
+        )],
+        UpdateOptions::default(),
+    );
+    let proposal = run.result.unwrap();
+    assert!(run.locks[0].contains("--upgrade-package urllib3==2.0.7"));
+    let transitive = fix(&proposal, "GHSA-transitive");
+    assert_eq!(transitive.outcome, FixOutcome::Blocked);
+    assert_eq!(
+        transitive.paths,
+        [vec!["idna".to_owned(), "urllib3".to_owned()]]
+    );
+    // uv.lock records no requirements, so only the introducer is known.
+    let suggestion = proposal
+        .suggestions
+        .iter()
+        .find(|s| s.reason.contains("GHSA-transitive"))
+        .expect("a blocked-fix suggestion");
+    assert_eq!(suggestion.package, "idna");
+    assert!(
+        suggestion.reason.contains("idna > urllib3") && suggestion.reason.contains("2.0.7"),
+        "{}",
+        suggestion.reason
+    );
+    assert!(
+        !suggestion.reason.contains("--accept"),
+        "{}",
+        suggestion.reason
+    );
+    assert!(proposal
+        .changes
+        .iter()
+        .all(|c| !c.path.ends_with("pyproject.toml")));
+}
+
+/// `lock` without the edge from idna to urllib3, so no declared dependency
+/// is known to reach it.
+fn unreached(lock: String) -> String {
+    lock.replace("dependencies = [{ name = \"urllib3\" }]\n", "")
+}
+
+#[test]
+fn a_transitive_package_with_an_unknown_path_still_moves_and_says_so() {
+    let run = prepare(
+        &unreached(lock("1.15.0", "3.7", "2.0.0")),
+        &unreached(lock("1.15.0", "3.7", "2.0.0")),
+        &[advisory(
+            "GHSA-transitive",
+            "urllib3",
+            "2.0.0",
+            "High",
+            &["2.0.7"],
+        )],
+        UpdateOptions::default(),
+    );
+    let proposal = run.result.unwrap();
+    assert!(run.locks[0].contains("--upgrade-package urllib3==2.0.7"));
+    assert!(
+        proposal
+            .validation
+            .iter()
+            .any(|n| n.contains("urllib3") && n.contains("dependency path is unknown")),
+        "{:?}",
+        proposal.validation
+    );
+    let transitive = fix(&proposal, "GHSA-transitive");
+    assert_eq!(transitive.outcome, FixOutcome::Blocked);
+    assert!(transitive.paths.is_empty());
+    assert!(
+        transitive.reason.contains("stays at 2.0.0")
+            && transitive.reason.contains("path is unknown"),
+        "{}",
+        transitive.reason
+    );
 }
 
 #[test]

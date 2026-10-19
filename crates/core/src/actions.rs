@@ -565,6 +565,7 @@ impl Adapter for Actions {
                 // A reference is its own constraint, with nothing resolved
                 // within it.
                 precise_update: Support::NotApplicable,
+                transitive_updates: Support::NotApplicable,
             },
         }
     }

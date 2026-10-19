@@ -391,6 +391,7 @@ impl Adapter for Uv {
                 platforms: Support::Supported,
                 // `uv lock --upgrade-package NAME==VERSION`.
                 precise_update: Support::Supported,
+                transitive_updates: Support::Supported,
             },
         }
     }

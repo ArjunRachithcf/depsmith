@@ -300,6 +300,11 @@ pub struct SecurityFix {
     /// Why, for a blocked or unfixable finding.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
+    /// For a transitive package, the dependency paths from each declared
+    /// dependency that reaches it, read from the lock graph; empty for a
+    /// declared package or when no lock graph records them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<Vec<String>>,
 }
 
 /// The outcome of a security update for one finding.

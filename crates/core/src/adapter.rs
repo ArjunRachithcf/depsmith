@@ -137,6 +137,10 @@ pub struct Capabilities {
     /// without changing any constraint (`UpdateOptions::precise`). Without
     /// it the package moves to the newest release its constraints allow.
     pub precise_update: Support,
+    /// Moving a transitive package a security update names, by a precise
+    /// update or by name; declared only once the adapter's live tests show
+    /// its tool doing so (ADR 0004).
+    pub transitive_updates: Support,
 }
 
 impl Capabilities {
@@ -152,7 +156,8 @@ impl Capabilities {
             install_validation: no.clone(),
             lockfile: no.clone(),
             platforms: no.clone(),
-            precise_update: no,
+            precise_update: no.clone(),
+            transitive_updates: no,
         }
     }
 }

@@ -56,6 +56,7 @@ impl Adapter for Pixi {
                     "pixi update moves a package to the newest release its constraints allow"
                         .into(),
                 ),
+                transitive_updates: Support::Supported,
             },
         }
     }

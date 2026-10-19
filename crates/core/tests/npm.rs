@@ -13,6 +13,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod support;
+
 fn write(root: &Path, files: &[(&str, &str)]) {
     for (path, content) in files {
         let path = root.join(path);
@@ -533,6 +535,178 @@ mod stand_in {
         assert!(run.proposal.failures[0]
             .message
             .contains("unexpectedly changed package.json"));
+    }
+
+    #[test]
+    fn a_fix_only_one_parent_excludes_is_left_to_npm_and_blocked_where_it_stays() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        // debug pins its own copy of ms; left-pad admits the fix.
+        let lock = |hoisted: &str| {
+            format!(
+                "{{\"lockfileVersion\": 3, \"packages\": {{\"\": {{\"name\": \"p\", \"dependencies\": {{\"debug\": \"^3.0.0\", \"left-pad\": \"^1.0.0\"}}}}, \
+                 \"node_modules/debug\": {{\"version\": \"3.2.7\", \"resolved\": \"https://registry.npmjs.org/debug/-/debug-3.2.7.tgz\", \"dependencies\": {{\"ms\": \"2.0.0\"}}}}, \
+                 \"node_modules/debug/node_modules/ms\": {{\"version\": \"2.0.0\", \"resolved\": \"https://registry.npmjs.org/ms/-/ms-2.0.0.tgz\"}}, \
+                 \"node_modules/left-pad\": {{\"version\": \"1.3.0\", \"resolved\": \"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\", \"dependencies\": {{\"ms\": \"^2.0.0\"}}}}, \
+                 \"node_modules/ms\": {{\"version\": \"{hoisted}\", \"resolved\": \"https://registry.npmjs.org/ms/-/ms-{hoisted}.tgz\"}}}}}}"
+            )
+        };
+        write(
+            root.path(),
+            &[
+                (
+                    "package.json",
+                    "{\"name\": \"p\", \"dependencies\": {\"debug\": \"^3.0.0\", \"left-pad\": \"^1.0.0\"}}",
+                ),
+                ("package-lock.json", &lock("2.0.0")),
+            ],
+        );
+        let next = tools.path().join("next.json");
+        fs::write(&next, lock("2.0.1")).unwrap();
+        let script = |name: &str, body: &str| {
+            let path = tools.path().join(name);
+            fs::write(&path, body).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let log = tools.path().join("log");
+        let npm = script(
+            "npm",
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n  --version) echo 11.19.0;;\n  update) cp '{next}' package-lock.json;;\n  install) cmp -s '{next}' package-lock.json || exit 1;;\n  *) exit 2;;\nesac\n",
+                log = log.display(),
+                next = next.display()
+            ),
+        );
+        let grype = support::grype(
+            tools.path(),
+            "GHSA-ms",
+            "github:language:javascript",
+            "pkg:npm/ms@2.0.0",
+            "2.0.1",
+        );
+        let engine = Engine::new(vec![Box::new(Npm {
+            registry: Some(RegistryConfig::Fixture {
+                releases: BTreeMap::new(),
+                failing: vec![],
+            }),
+        })]);
+        let proposal = engine
+            .prepare(
+                root.path(),
+                &["npm:package.json".into()],
+                UpdateOptions {
+                    tools: BTreeMap::from([("npm".into(), npm), ("grype".into(), grype)]),
+                    security_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let calls = fs::read_to_string(&log).unwrap_or_default();
+        assert!(calls.contains("update"), "npm is asked: {calls}");
+        // debug's own copy stays at 2.0.0, so the finding remains.
+        let fix = &proposal.security[0];
+        assert_eq!(fix.outcome, depsmith_core::FixOutcome::Blocked);
+        assert!(
+            fix.reason.contains("debug requires ms 2.0.0"),
+            "{}",
+            fix.reason
+        );
+        let suggestion = proposal
+            .suggestions
+            .iter()
+            .find(|s| s.reason.contains("GHSA-ms"))
+            .expect("a blocked-fix suggestion");
+        assert_eq!(suggestion.package, "debug");
+    }
+
+    #[test]
+    fn a_parent_requirement_excluding_a_transitive_fix_is_suggested_not_applied() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        // ms is only debug's dependency, which pins it below the fix.
+        write(
+            root.path(),
+            &[
+                (
+                    "package.json",
+                    "{\"name\": \"p\", \"dependencies\": {\"debug\": \"^3.0.0\"}}",
+                ),
+                (
+                    "package-lock.json",
+                    "{\"lockfileVersion\": 3, \"packages\": {\"\": {\"name\": \"p\", \"dependencies\": {\"debug\": \"^3.0.0\"}}, \
+                     \"node_modules/debug\": {\"version\": \"3.2.7\", \"resolved\": \"https://registry.npmjs.org/debug/-/debug-3.2.7.tgz\", \"dependencies\": {\"ms\": \"2.0.0\"}}, \
+                     \"node_modules/ms\": {\"version\": \"2.0.0\", \"resolved\": \"https://registry.npmjs.org/ms/-/ms-2.0.0.tgz\"}}}",
+                ),
+            ],
+        );
+        let script = |name: &str, body: &str| {
+            let path = tools.path().join(name);
+            fs::write(&path, body).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let log = tools.path().join("log");
+        let npm = script(
+            "npm",
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$1\" = --version ] && echo 11.19.0\n",
+                log.display()
+            ),
+        );
+        let grype = support::grype(
+            tools.path(),
+            "GHSA-ms",
+            "github:language:javascript",
+            "pkg:npm/ms@2.0.0",
+            "2.0.1",
+        );
+        let engine = Engine::new(vec![Box::new(Npm {
+            registry: Some(RegistryConfig::Fixture {
+                releases: BTreeMap::new(),
+                failing: vec![],
+            }),
+        })]);
+        let proposal = engine
+            .prepare(
+                root.path(),
+                &["npm:package.json".into()],
+                UpdateOptions {
+                    tools: BTreeMap::from([("npm".into(), npm), ("grype".into(), grype)]),
+                    security_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let calls = fs::read_to_string(&log).unwrap_or_default();
+        assert!(!calls.contains("update"), "npm must not run: {calls}");
+        assert!(proposal.changes.is_empty(), "{:?}", proposal.changes);
+        let fix = &proposal.security[0];
+        assert_eq!(fix.outcome, depsmith_core::FixOutcome::Blocked);
+        assert_eq!(fix.paths, [vec!["debug".to_owned(), "ms".to_owned()]]);
+        assert!(
+            fix.reason.contains("debug requires ms 2.0.0"),
+            "{}",
+            fix.reason
+        );
+        let suggestion = proposal
+            .suggestions
+            .iter()
+            .find(|s| s.reason.contains("GHSA-ms"))
+            .expect("a blocked-fix suggestion");
+        assert_eq!(
+            (suggestion.package.as_str(), suggestion.requirement.as_str()),
+            ("debug", "^3.0.0")
+        );
+        assert!(
+            suggestion.reason.contains("debug > ms")
+                && suggestion.reason.contains("2.0.1")
+                && !suggestion.reason.contains("--accept"),
+            "{}",
+            suggestion.reason
+        );
     }
 }
 
