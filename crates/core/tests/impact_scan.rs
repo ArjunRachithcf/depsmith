@@ -1,6 +1,6 @@
 //! The import scanners: every module a source file imports, with its line
 //! and how it is imported, read with tree-sitter.
-use depsmith_core::impact::{python_imports, Import, ImportKind};
+use depsmith_core::impact::{js_imports, python_imports, Dialect, Import, ImportKind};
 
 fn import(module: &str, names: &[&str], level: usize, line: usize, kind: ImportKind) -> Import {
     Import {
@@ -83,4 +83,139 @@ fn python_syntax_the_parser_does_not_know_keeps_the_imports_around_it() {
     let modules: Vec<_> = scan.imports.iter().map(|i| i.module.as_str()).collect();
     assert_eq!(modules, ["idna", "yaml"]);
     assert_eq!(scan.unparsed, [3]);
+}
+
+#[test]
+fn js_statements_name_specifiers_with_their_bindings() {
+    let source = r#"import React, { useState as state, useEffect } from "react";
+import * as path from 'node:path';
+import "./polyfills";
+import type { Config } from "@scope/config/types";
+export { helper, default as main } from "./helpers.js";
+export * from "../shared";
+const fs = require("fs-extra");
+const where = require.resolve(`lodash/fp`);
+"#;
+    let scan = js_imports(source, Dialect::TypeScript);
+    assert_eq!(
+        scan.imports,
+        [
+            import(
+                "react",
+                &["default", "useState", "useEffect"],
+                0,
+                1,
+                ImportKind::Import
+            ),
+            import("node:path", &["*"], 0, 2, ImportKind::Import),
+            import("./polyfills", &[], 0, 3, ImportKind::Import),
+            import("@scope/config/types", &["Config"], 0, 4, ImportKind::Import),
+            import(
+                "./helpers.js",
+                &["helper", "default"],
+                0,
+                5,
+                ImportKind::Export
+            ),
+            import("../shared", &["*"], 0, 6, ImportKind::Export),
+            import("fs-extra", &[], 0, 7, ImportKind::Require),
+            import("lodash/fp", &[], 0, 8, ImportKind::Require),
+        ]
+    );
+    assert!(scan.unparsed.is_empty());
+}
+
+#[test]
+fn js_dynamic_imports_mocks_and_references_name_modules_by_string() {
+    let source = r#"/// <reference types="vite/client" />
+/// <reference path="globals.d.ts" />
+import { vi } from "vitest";
+
+vi.mock("./db", () => ({}));
+jest.mock("axios");
+jest.doMock("../cache");
+const real = jest.requireActual("lodash");
+const actual = await vi.importActual("./clock");
+const lazy = await import("./routes/admin");
+const computed = await import(name);
+const templated = require(`./locales/${lang}`);
+"#;
+    let scan = js_imports(source, Dialect::TypeScript);
+    assert_eq!(
+        scan.imports,
+        [
+            import("vite/client", &[], 0, 1, ImportKind::Reference),
+            import("./globals.d.ts", &[], 0, 2, ImportKind::Reference),
+            import("vitest", &["vi"], 0, 3, ImportKind::Import),
+            import("./db", &[], 0, 5, ImportKind::Mock),
+            import("axios", &[], 0, 6, ImportKind::Mock),
+            import("../cache", &[], 0, 7, ImportKind::Mock),
+            import("lodash", &[], 0, 8, ImportKind::Mock),
+            import("./clock", &[], 0, 9, ImportKind::Mock),
+            import("./routes/admin", &[], 0, 10, ImportKind::Dynamic),
+        ],
+        "a computed specifier is not a usage site; a reference path is relative"
+    );
+}
+
+#[test]
+fn jsx_and_tsx_parse_and_unknown_syntax_keeps_the_imports_around_it() {
+    let jsx = "import Button from './Button';\nexport const App = () => <Button label=\"x\" />;\n";
+    let scan = js_imports(jsx, Dialect::JavaScript);
+    assert_eq!(
+        scan.imports,
+        [import("./Button", &["default"], 0, 1, ImportKind::Import)]
+    );
+    assert!(scan.unparsed.is_empty());
+    let tsx = "import type { FC } from 'react';\nconst A: FC = () => <div>{1 as number}</div>;\n";
+    let scan = js_imports(tsx, Dialect::Tsx);
+    assert_eq!(
+        scan.imports,
+        [import("react", &["FC"], 0, 1, ImportKind::Import)]
+    );
+    assert!(scan.unparsed.is_empty(), "{:?}", scan.unparsed);
+    let broken = "import a from 'a';\nconst x = ;\nimport b from 'b';\n";
+    let scan = js_imports(broken, Dialect::JavaScript);
+    let modules: Vec<_> = scan.imports.iter().map(|i| i.module.as_str()).collect();
+    assert_eq!(modules, ["a", "b"]);
+    assert_eq!(scan.unparsed, [2]);
+}
+
+#[test]
+fn js_imports_inside_and_after_broken_syntax_still_count_with_one_warning_each() {
+    let scan = js_imports(
+        "import { a from 'x';\nimport b from 'y';\n",
+        Dialect::TypeScript,
+    );
+    let modules: Vec<_> = scan.imports.iter().map(|i| i.module.as_str()).collect();
+    assert_eq!(modules, ["y"], "{scan:?}");
+    assert_eq!(scan.unparsed, [1]);
+    let scan = js_imports("const x = (\nimport a from 'a';\n", Dialect::JavaScript);
+    assert_eq!(
+        scan.unparsed,
+        [2],
+        "an import inside an open expression is lost, with one warning"
+    );
+    let scan = js_imports(
+        "import x = require('legacy');\nvi.doMock('./flags');\n",
+        Dialect::TypeScript,
+    );
+    assert_eq!(
+        scan.imports,
+        [
+            import("legacy", &["*"], 0, 1, ImportKind::Import),
+            import("./flags", &[], 0, 2, ImportKind::Mock),
+        ]
+    );
+    let escaped = js_imports(
+        "require('\\x2e/a');\nimport '\\u0040scope/pkg';\n",
+        Dialect::JavaScript,
+    );
+    let modules: Vec<_> = escaped.imports.iter().map(|i| i.module.as_str()).collect();
+    assert_eq!(modules, ["./a", "@scope/pkg"], "escapes are decoded");
+    let spaced = js_imports("/// <reference types = \"jest\" />\n", Dialect::TypeScript);
+    assert_eq!(
+        spaced.imports,
+        [import("jest", &[], 0, 1, ImportKind::Reference)]
+    );
 }

@@ -3,8 +3,10 @@
 use super::{
     change::Affected,
     imports::{Import, ImportKind, Scan},
+    js::{js_imports, Dialect},
     names::ImportNames,
     python::python_imports,
+    specifiers::{typed_package, Resolved, Resolver},
 };
 use crate::{Error, Result, Target};
 use serde::{Deserialize, Serialize};
@@ -24,6 +26,8 @@ const SKIPPED_DIRS: &[&str] = &[
     "__pycache__",
     "dist",
     "build",
+    ".next",
+    "coverage",
 ];
 
 /// A first-party import of an affected package.
@@ -74,22 +78,34 @@ pub struct Usages {
     pub warnings: Vec<String>,
 }
 
-/// Where the first-party Python code of `target` under `root` uses the
-/// packages in `affected`, and which first-party files reach those uses.
+/// Where the first-party code of `target` under `root` uses the packages in
+/// `affected`, and which first-party files reach those uses.
 ///
-/// Every `.py` file in the target's directory is scanned, honouring ignore
-/// files and skipping hidden directories, environments (`.venv`, `venv`,
-/// `.pixi`), installed packages and build output (`dist`, `build`). For a
-/// side read from git, call [`Sides::sources`](super::Sides::sources) first.
-/// A module resolves to first-party code under the deepest root it is in:
-/// the target's directory, any directory below it with a `pyproject.toml`
-/// (such as a workspace member), or the `src/` directory of either.
-/// Importing a module also loads the `__init__.py` of each package above it,
-/// and a directory of modules without one is a namespace package. An import
-/// that resolves nowhere there is matched against the modules the affected
-/// packages provide, as `names` has them, and the standard-library modules
-/// built on them: it matches a module it names or one below it, and for
-/// `from a import b` also `a.b`. The warnings of `names` come first.
+/// The `.py` files in the target's directory are scanned when a Python or
+/// conda package is affected, and its JavaScript and TypeScript files when
+/// an npm package is, honouring ignore files and skipping hidden
+/// directories, environments (`.venv`, `venv`, `.pixi`), installed packages
+/// and build and coverage output (`dist`, `build`, `coverage`). For a side
+/// read from git, call [`Sides::sources`](super::Sides::sources) first.
+///
+/// A Python module resolves to first-party code under the deepest root it
+/// is in: the target's directory, any directory below it with a
+/// `pyproject.toml` (such as a workspace member), or the `src/` directory of
+/// either. Importing a module also loads the `__init__.py` of each package
+/// above it, and a directory of modules without one is a namespace package.
+/// An import that resolves nowhere there is matched against the modules the
+/// affected packages provide, as `names` has them, and the standard-library
+/// modules built on them: it matches a module it names or one below it, and
+/// for `from a import b` also `a.b`. The warnings of `names` come first.
+///
+/// A JavaScript or TypeScript specifier resolves to a first-party file by
+/// relative path (`.js` naming its `.ts` source, a directory its `index`),
+/// by the `paths` and `baseUrl` of the nearest `tsconfig.json` (else
+/// `jsconfig.json`), through its
+/// relative `extends`, or by the name of an npm workspace package, whose
+/// unbuilt entry in `dist/` names its source in `src/`. Any other specifier
+/// names a package, matched against the affected npm packages, with
+/// `@types/x` matching `x`; `node:` built-ins never match.
 ///
 /// # Errors
 ///
@@ -102,30 +118,67 @@ pub fn usages(
     names: &ImportNames,
 ) -> Result<Usages> {
     let dir = target.manifest.parent().unwrap_or(Path::new(""));
-    let (sources, projects) = python_files(root, dir)?;
+    let has = |ecosystems: &[&str]| {
+        affected
+            .packages
+            .iter()
+            .any(|p| ecosystems.contains(&p.ecosystem.as_str()))
+    };
+    let (python, javascript) = (has(&["pypi", "conda"]), has(&["npm"]));
+    let walked = walk(root, dir)?;
     let mut warnings = names.warnings().to_vec();
-    let scans: Vec<Scan> = sources
-        .iter()
-        .map(|file| match std::fs::read_to_string(root.join(file)) {
-            Ok(text) => {
-                let scan = python_imports(&text);
-                for line in &scan.unparsed {
-                    warnings.push(format!(
-                        "{}:{line}: the parser could not read this, so its imports are skipped",
-                        slashed(file)
-                    ));
-                }
-                scan
-            }
-            Err(e) => {
-                warnings.push(format!("{}: cannot read: {e}", slashed(file)));
-                Scan::default()
+    if javascript && walked.unscanned > 0 {
+        let dir = slashed(dir);
+        warnings.push(format!(
+            "{} .vue, .svelte or .astro files in {} are not scanned",
+            walked.unscanned,
+            if dir.is_empty() { "." } else { &dir }
+        ));
+    }
+    // Each source with its dialect, `None` for Python.
+    let (sources, dialects): (Vec<PathBuf>, Vec<Option<Dialect>>) = walked
+        .sources
+        .into_iter()
+        .map(|source| {
+            let dialect = Dialect::of(&source);
+            (source, dialect)
+        })
+        .filter(|(_, dialect)| {
+            if dialect.is_some() {
+                javascript
+            } else {
+                python
             }
         })
+        .unzip();
+    let scans: Vec<Scan> = sources
+        .iter()
+        .zip(&dialects)
+        .map(
+            |(file, dialect)| match std::fs::read_to_string(root.join(file)) {
+                Ok(text) => {
+                    let scan = match *dialect {
+                        Some(dialect) => js_imports(&text, dialect),
+                        None => python_imports(&text),
+                    };
+                    for line in &scan.unparsed {
+                        warnings.push(format!(
+                            "{}:{line}: the parser could not read this, so its imports are skipped",
+                            slashed(file)
+                        ));
+                    }
+                    scan
+                }
+                Err(e) => {
+                    warnings.push(format!("{}: cannot read: {e}", slashed(file)));
+                    Scan::default()
+                }
+            },
+        )
         .collect();
 
     let mut roots = vec![dir.to_owned()];
-    roots.extend(projects);
+    roots.extend(walked.projects);
     for project in roots.clone() {
         if root.join(&project).join("src").is_dir() {
             roots.push(project.join("src"));
@@ -133,18 +186,42 @@ pub fn usages(
     }
     let modules = Modules::new(&sources, &roots);
     let provided = provided_modules(affected, names);
+    let resolver = Resolver::new(root, target, &sources, &mut warnings);
+    let npm = npm_packages(affected);
 
     let mut sites = vec![];
     let mut importers: Vec<Vec<Edge>> = vec![vec![]; sources.len()];
     for (index, scan) in scans.iter().enumerate() {
         for import in &scan.imports {
+            let edge = Edge {
+                importer: index,
+                line: import.line,
+            };
+            if dialects[index].is_some() {
+                match resolver.resolve(&sources[index], &import.module, &mut warnings) {
+                    Resolved::Files(files) => {
+                        for imported in files {
+                            importers[imported].push(edge);
+                        }
+                    }
+                    Resolved::Package(name) => {
+                        for package in npm.get(name.as_str()).into_iter().flatten() {
+                            sites.push(Site {
+                                file: index,
+                                line: import.line,
+                                module: import.module.clone(),
+                                package: (*package).to_owned(),
+                            });
+                        }
+                    }
+                    Resolved::Nothing => {}
+                }
+                continue;
+            }
             let resolved = modules.resolve(index, import);
             if !resolved.is_empty() {
                 for imported in resolved {
-                    importers[imported].push(Edge {
-                        importer: index,
-                        line: import.line,
-                    });
+                    importers[imported].push(edge);
                 }
                 continue;
             }
@@ -287,9 +364,20 @@ fn affected_files(
     files
 }
 
-/// The `.py` files under `dir`, sorted, and the directories among them that
-/// hold a `pyproject.toml`, all relative to `root`.
-fn python_files(root: &Path, dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+/// The source files of a target's directory.
+struct Walked {
+    /// The Python, JavaScript and TypeScript files, sorted, relative to the
+    /// root.
+    sources: Vec<PathBuf>,
+    /// The directories below the target's that hold a `pyproject.toml`.
+    projects: Vec<PathBuf>,
+    /// How many `.vue`, `.svelte` and `.astro` files there are, which hold
+    /// imports the scanners do not read.
+    unscanned: usize,
+}
+
+/// The source files under `dir`, relative to `root`.
+fn walk(root: &Path, dir: &Path) -> Result<Walked> {
     let walker = ignore::WalkBuilder::new(root.join(dir))
         .require_git(false)
         .filter_entry(|e| {
@@ -299,8 +387,11 @@ fn python_files(root: &Path, dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)>
                     .is_some_and(|n| SKIPPED_DIRS.contains(&n)))
         })
         .build();
-    let mut sources = vec![];
-    let mut projects = vec![];
+    let mut walked = Walked {
+        sources: vec![],
+        projects: vec![],
+        unscanned: 0,
+    };
     for entry in walker {
         let entry = entry.map_err(|e| Error::Operation(e.to_string()))?;
         if !entry.file_type().is_some_and(|t| t.is_file()) {
@@ -309,19 +400,25 @@ fn python_files(root: &Path, dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)>
         let Ok(relative) = entry.path().strip_prefix(root) else {
             continue;
         };
-        if relative.extension().is_some_and(|e| e == "py") {
-            sources.push(relative.to_owned());
+        let extension = relative.extension().and_then(|e| e.to_str());
+        if extension == Some("py") || Dialect::of(relative).is_some() {
+            walked.sources.push(relative.to_owned());
+        } else if matches!(extension, Some("vue" | "svelte" | "astro")) {
+            walked.unscanned += 1;
         } else if entry.depth() > 1 && entry.file_name() == "pyproject.toml" {
-            projects.push(relative.parent().unwrap_or(dir).to_owned());
+            walked
+                .projects
+                .push(relative.parent().unwrap_or(dir).to_owned());
         }
     }
-    sources.sort();
-    projects.sort();
-    Ok((sources, projects))
+    walked.sources.sort();
+    walked.projects.sort();
+    Ok(walked)
 }
 
-/// The first-party modules: the dotted name of each source file under the
-/// deepest root it is in.
+/// The first-party Python modules: the dotted name of each `.py` source
+/// file under the deepest root it is in. Other source files, such as
+/// JavaScript or TypeScript, are ignored.
 struct Modules {
     /// Module name to the files that define it.
     files: BTreeMap<String, Vec<usize>>,
@@ -346,6 +443,9 @@ impl Modules {
         let mut packages = BTreeSet::new();
         let mut names = vec![None; sources.len()];
         for (index, source) in sources.iter().enumerate() {
+            if source.extension().is_none_or(|e| e != "py") {
+                continue;
+            }
             let name = roots
                 .iter()
                 .filter_map(|root| Some((root, source.strip_prefix(root).ok()?)))
@@ -468,8 +568,22 @@ fn provided_modules(affected: &Affected, names: &ImportNames) -> BTreeSet<(Strin
     provided
 }
 
+/// The affected npm packages by the package name imports use: each by its
+/// own, and `@types/x` also by `x`.
+fn npm_packages(affected: &Affected) -> BTreeMap<String, Vec<&str>> {
+    let mut packages: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for package in affected.packages.iter().filter(|p| p.ecosystem == "npm") {
+        let name = package.name.as_str();
+        packages.entry(name.to_owned()).or_default().push(name);
+        if let Some(typed) = typed_package(name) {
+            packages.entry(typed).or_default().push(name);
+        }
+    }
+    packages
+}
+
 /// `path` with `/` between its components on every platform.
-fn slashed(path: &Path) -> String {
+pub(super) fn slashed(path: &Path) -> String {
     path.components()
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()

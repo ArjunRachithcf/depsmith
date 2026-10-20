@@ -16,19 +16,30 @@ pub enum ImportKind {
     Plugin,
     /// `pytest.importorskip("a")`: tests that skip without the module.
     ImportOrSkip,
+    /// `require("a")` or `require.resolve("a")`.
+    Require,
+    /// `export … from "a"`.
+    Export,
+    /// A test runner's mock of a module, such as `vi.mock("a")`.
+    Mock,
+    /// A triple-slash `/// <reference types="a" />` or `path` directive.
+    Reference,
 }
 
 /// A module one source file imports.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Import {
-    /// The module as written, without leading dots: `a.b` for `import a.b`,
-    /// empty for `from . import b`.
+    /// The module as written. For Python, without leading dots: `a.b` for
+    /// `import a.b`, empty for `from . import b`, with `level` counting
+    /// them. For JavaScript or TypeScript, the specifier exactly as
+    /// written, such as `./util.js` or `@scope/pkg`.
     pub module: String,
     /// The names imported from it (`b` and `c` in `from a import b, c`),
     /// which can be submodules.
     pub names: Vec<String>,
-    /// How many packages up a relative import starts: 1 for `from .`, 0 for
-    /// an absolute import.
+    /// For Python, how many packages up a relative import starts: 1 for
+    /// `from .`, 0 for an absolute import. Always `0` for JavaScript or
+    /// TypeScript.
     pub level: usize,
     /// The 1-based line the import is on.
     pub line: usize,
@@ -37,7 +48,7 @@ pub struct Import {
 }
 
 impl Import {
-    /// An absolute import of `module` alone, on `line`.
+    /// An import of `module` alone, on `line`: empty names and level `0`.
     pub(crate) fn of(module: String, line: usize, kind: ImportKind) -> Self {
         Self {
             module,

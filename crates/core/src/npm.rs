@@ -46,7 +46,8 @@ fn parse(text: &str, path: &Path) -> Result<Value> {
         .map_err(|e| Error::Invalid(format!("invalid manifest {}: {e}", path.display())))
 }
 
-fn read(root: &Path, relative: &Path) -> Result<Value> {
+/// The parsed `package.json` at `relative`, under `root`.
+pub(crate) fn read(root: &Path, relative: &Path) -> Result<Value> {
     parse(&fs::read_to_string(root.join(relative))?, relative)
 }
 
@@ -86,7 +87,7 @@ fn members(root: &Path, dir: &Path, manifest: &Value) -> Vec<PathBuf> {
 }
 
 /// The manifests of `target`: its own, then its workspace members.
-fn manifests(root: &Path, target: &Target) -> Result<Vec<PathBuf>> {
+pub(crate) fn manifests(root: &Path, target: &Target) -> Result<Vec<PathBuf>> {
     let parsed = read(root, &target.manifest)?;
     let dir = target.manifest.parent().unwrap_or(Path::new(""));
     let mut output = vec![target.manifest.clone()];

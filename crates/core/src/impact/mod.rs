@@ -34,8 +34,10 @@
 mod change;
 mod compare;
 mod imports;
+mod js;
 mod names;
 mod python;
+mod specifiers;
 mod tables;
 mod usage;
 
@@ -45,6 +47,7 @@ pub use change::{
 };
 pub use compare::{sides, Comparison, Sides};
 pub use imports::{Import, ImportKind, Scan};
+pub use js::{js_imports, Dialect};
 pub use names::ImportNames;
 pub use python::python_imports;
 pub use tables::{
