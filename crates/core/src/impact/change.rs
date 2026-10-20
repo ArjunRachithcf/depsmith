@@ -5,7 +5,7 @@ use crate::{
     adapter::Adapter,
     constraints::Declaration,
     graph::{identity, Id, LockGraph},
-    Package, Result, Target,
+    LockPlatform, Package, Result, Target,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -228,6 +228,9 @@ pub struct Lock {
     /// What each resolved package requires; empty when the adapter reads no
     /// lock graph.
     pub graph: LockGraph,
+    /// The platforms the lock names, where it names them (Pixi lock v7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub platforms: Vec<LockPlatform>,
 }
 
 impl Lock {
@@ -247,7 +250,75 @@ impl Lock {
         Ok(Self {
             inventory: adapter.inventory(root, target)?,
             graph: adapter.lock_graph(root, target)?.unwrap_or_default(),
+            platforms: adapter.lock_platforms(root, target)?,
         })
+    }
+
+    /// This lock with its platforms renamed to those of `after` that are the
+    /// same platform under another name. A name both sides give the same
+    /// platform stays; the others pair by subdir and virtual packages, then
+    /// by subdir alone, where each side has only one such platform left.
+    fn renamed_to(&self, after: &Lock) -> Lock {
+        let kept = |p: &LockPlatform, other: &Lock| other.platforms.contains(p);
+        let mut before_left: Vec<&LockPlatform> =
+            self.platforms.iter().filter(|p| !kept(p, after)).collect();
+        let mut after_left: Vec<&LockPlatform> =
+            after.platforms.iter().filter(|p| !kept(p, self)).collect();
+        let mut renames: BTreeMap<String, String> = BTreeMap::new();
+        for with_virtual_packages in [true, false] {
+            let key = |p: &LockPlatform| {
+                let virtual_packages = if with_virtual_packages {
+                    p.virtual_packages.clone()
+                } else {
+                    vec![]
+                };
+                (p.subdir.clone(), virtual_packages)
+            };
+            let pairs: Vec<(&LockPlatform, &LockPlatform)> = before_left
+                .iter()
+                .filter_map(|old| {
+                    let k = key(old);
+                    let mut olds = before_left.iter().filter(|p| key(p) == k);
+                    let mut news = after_left.iter().filter(|p| key(p) == k);
+                    match (olds.next(), olds.next(), news.next(), news.next()) {
+                        (Some(_), None, Some(new), None) => Some((*old, *new)),
+                        _ => None,
+                    }
+                })
+                .collect();
+            for (old, new) in pairs {
+                before_left.retain(|p| *p != old);
+                after_left.retain(|p| *p != new);
+                renames.insert(old.name.clone(), new.name.clone());
+            }
+        }
+        // A platform left unpaired whose name another now takes compares as
+        // a platform of its own.
+        for old in before_left {
+            if renames.values().any(|new| *new == old.name) {
+                renames.insert(old.name.clone(), format!("{} (before)", old.name));
+            }
+        }
+        let mut renamed = self.clone();
+        let rename = |platform: &mut String| {
+            if let Some(new) = renames.get(platform.as_str()) {
+                platform.clone_from(new);
+            }
+        };
+        renamed
+            .inventory
+            .iter_mut()
+            .for_each(|p| rename(&mut p.platform));
+        renamed
+            .graph
+            .nodes
+            .iter_mut()
+            .for_each(|n| rename(&mut n.platform));
+        renamed
+            .platforms
+            .iter_mut()
+            .for_each(|p| rename(&mut p.name));
+        renamed
     }
 }
 
@@ -328,6 +399,10 @@ pub struct Affected {
 /// per platform ("after" side, or "before" for a removal). `declarations`
 /// come from the "after" side.
 ///
+/// A platform the "before" lock names differently is compared under its
+/// "after" name: one with the same subdir and virtual packages, else the only
+/// platform of its subdir left unpaired on each side.
+///
 /// The walk never passes a conda package named in `barriers`, such as
 /// [`RUNTIME_BARRIERS`](super::RUNTIME_BARRIERS) for Pixi, nor a conda
 /// interpreter ([`INTERPRETERS`](super::INTERPRETERS)), so a change below
@@ -341,6 +416,7 @@ pub fn affected(
     declarations: &[Declaration],
     barriers: &[&str],
 ) -> Affected {
+    let before = &before.renamed_to(after);
     let changes = lock_changes(&before.inventory, &after.inventory, declarations);
     let barriers: Vec<(&str, &str)> = barriers
         .iter()

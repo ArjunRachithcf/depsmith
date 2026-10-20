@@ -1,7 +1,7 @@
 //! Reading resolved packages and lock graphs from lockfiles.
 use crate::{
     graph::{LockGraph, Node, Requirement},
-    Error, Package, Result,
+    Error, LockPlatform, Package, Result,
 };
 use serde_yaml::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -155,6 +155,45 @@ pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
         }
     }
     Ok(result)
+}
+
+/// The named platforms of a `pixi.lock` (schema 7), each with its subdir
+/// and sorted virtual packages; none for older schemas, which lock packages
+/// under the subdir itself.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Operation`] when the lock cannot be parsed.
+pub fn pixi_platforms(text: &str) -> Result<Vec<LockPlatform>> {
+    let value = parse(text)?;
+    let platforms = value
+        .get("platforms")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(|platform| {
+            let name = platform.get("name")?.as_str()?;
+            let subdir = platform
+                .get("subdir")
+                .and_then(Value::as_str)
+                .unwrap_or(name);
+            let mut virtual_packages: Vec<String> = platform
+                .get("virtual-packages")
+                .and_then(Value::as_sequence)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            virtual_packages.sort();
+            Some(LockPlatform {
+                name: name.into(),
+                subdir: subdir.into(),
+                virtual_packages,
+            })
+        })
+        .collect();
+    Ok(platforms)
 }
 
 /// The lock graph of a `pixi.lock`: each package on each platform with what

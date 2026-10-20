@@ -10,6 +10,7 @@ use depsmith_core::{
         affected, lock_changes, sides, ChangeKind, Comparison, FullRun, Lock, LockChange,
         PYTHON_STDLIB_MAP, RUNTIME_BARRIERS,
     },
+    pixi::Pixi,
     uv::Uv,
     Package, Target,
 };
@@ -271,6 +272,7 @@ fn lock(packages: &[Package], graph: LockGraph) -> Lock {
     Lock {
         inventory: packages.to_vec(),
         graph,
+        ..Lock::default()
     }
 }
 
@@ -787,4 +789,114 @@ fn the_default_comparison_follows_ci() {
         Comparison::default_for_env(),
         Comparison::default_for(std::env::var_os("CI").is_some())
     );
+}
+
+/// A Pixi v7 lock whose two named platforms are `linux` (linux-64 with
+/// `cuda`) and `windows` (win-64 with `cuda`), locking `zlib` at
+/// `zlib_version` and `pillow` 11, which requires it.
+fn named_platform_lock(linux: (&str, &str), windows: (&str, &str), zlib_version: &str) -> String {
+    let platform = |(name, cuda): (&str, &str), subdir: &str| {
+        format!("- name: {name}\n  subdir: {subdir}\n  virtual-packages:\n  - __cuda={cuda}\n  - __glibc=2.28\n")
+    };
+    let zlib = |subdir: &str| {
+        format!("https://conda.anaconda.org/conda-forge/{subdir}/zlib-{zlib_version}-h0_0.conda")
+    };
+    let pillow = |subdir: &str| {
+        format!("https://conda.anaconda.org/conda-forge/{subdir}/pillow-11.0.0-h0_0.conda")
+    };
+    format!(
+        "version: 7\nplatforms:\n{}{}environments:\n  default:\n    packages:\n      {}:\n      - conda: {}\n      - conda: {}\n      {}:\n      - conda: {}\n      - conda: {}\npackages:\n- conda: {}\n- conda: {}\n  depends:\n  - zlib\n- conda: {}\n- conda: {}\n  depends:\n  - zlib\n",
+        platform(linux, "linux-64"),
+        platform(windows, "win-64"),
+        linux.0,
+        zlib("linux-64"),
+        pillow("linux-64"),
+        windows.0,
+        zlib("win-64"),
+        pillow("win-64"),
+        zlib("linux-64"),
+        pillow("linux-64"),
+        zlib("win-64"),
+        pillow("win-64"),
+    )
+}
+
+fn pixi_side(lock: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("pixi.toml"),
+        "[workspace]\nname = \"svc\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("pixi.lock"), lock).unwrap();
+    dir
+}
+
+#[test]
+fn renamed_pixi_platforms_pair_by_what_they_are_not_their_names() {
+    let target = Target {
+        id: "pixi:pixi.toml".into(),
+        manager: "pixi".into(),
+        manifest: "pixi.toml".into(),
+    };
+    let read = |lock: &str| {
+        let dir = pixi_side(lock);
+        Lock::read(&Pixi, dir.path(), &target).unwrap()
+    };
+    // Renamed, with zlib bumped: the same subdir and virtual packages.
+    let before = read(&named_platform_lock(("a", "12"), ("b", "12"), "1.3.0"));
+    let after = read(&named_platform_lock(("c", "12"), ("d", "12"), "1.3.1"));
+    let result = affected(&before, &after, &[], &barriers());
+    let changes: Vec<_> = result
+        .changes
+        .iter()
+        .map(|c| (c.name.as_str(), c.platform.as_str()))
+        .collect();
+    assert_eq!(
+        changes,
+        [("zlib", "c"), ("zlib", "d")],
+        "named by the after side"
+    );
+    assert!(result.full_run.is_empty(), "{:?}", result.full_run);
+    let pillow: Vec<_> = result
+        .packages
+        .iter()
+        .filter(|p| p.name == "pillow")
+        .map(|p| p.platform.as_str())
+        .collect();
+    assert_eq!(pillow, ["c", "d"], "the graph is renamed too");
+
+    // Renamed along with a CUDA bump: the only platform of its subdir.
+    let bumped = read(&named_platform_lock(("c", "13"), ("d", "13"), "1.3.0"));
+    let result = affected(&before, &bumped, &[], &barriers());
+    assert!(result.changes.is_empty(), "{:?}", result.changes);
+    assert!(result.full_run.is_empty(), "{:?}", result.full_run);
+}
+
+#[test]
+fn swapped_and_chained_platform_names_still_pair_by_what_they_are() {
+    let target = Target {
+        id: "pixi:pixi.toml".into(),
+        manager: "pixi".into(),
+        manifest: "pixi.toml".into(),
+    };
+    let read = |lock: &str| {
+        let dir = pixi_side(lock);
+        Lock::read(&Pixi, dir.path(), &target).unwrap()
+    };
+    let before = read(&named_platform_lock(("a", "12"), ("b", "12"), "1.3.0"));
+    // `a` and `b` swap places.
+    let swapped = read(&named_platform_lock(("b", "12"), ("a", "12"), "1.3.0"));
+    let result = affected(&before, &swapped, &[], &barriers());
+    assert!(result.changes.is_empty(), "{:?}", result.changes);
+    // linux-64 moves from `a` to `b` while win-64 moves from `b` to `c`.
+    let chained = read(&named_platform_lock(("b", "12"), ("c", "12"), "1.3.1"));
+    let result = affected(&before, &chained, &[], &barriers());
+    let changes: Vec<_> = result
+        .changes
+        .iter()
+        .map(|c| (c.name.as_str(), c.platform.as_str()))
+        .collect();
+    assert_eq!(changes, [("zlib", "b"), ("zlib", "c")]);
+    assert!(result.full_run.is_empty(), "{:?}", result.full_run);
 }

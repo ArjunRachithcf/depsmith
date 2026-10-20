@@ -202,6 +202,19 @@ impl Package {
     }
 }
 
+/// A platform a lock names, where a lock lets platforms be named (Pixi
+/// lock v7): what it is, by its conda subdir and virtual packages.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockPlatform {
+    /// The name packages are locked under, such as `linux-cuda`.
+    pub name: String,
+    /// The conda subdir it resolves for, such as `linux-64`.
+    pub subdir: String,
+    /// The virtual packages it assumes, such as `__cuda=12`, sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub virtual_packages: Vec<String>,
+}
+
 /// A package that differs between the baseline and the candidate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyChange {

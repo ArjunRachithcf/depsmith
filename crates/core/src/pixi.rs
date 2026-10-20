@@ -118,6 +118,16 @@ impl Adapter for Pixi {
             .map(|text| crate::inventory::pixi_graph(&text))
             .transpose()
     }
+    fn lock_platforms(&self, root: &Path, target: &Target) -> Result<Vec<crate::LockPlatform>> {
+        let lock = root
+            .join(target.manifest.parent().unwrap())
+            .join("pixi.lock");
+        match fs::read_to_string(lock) {
+            Ok(text) => crate::inventory::pixi_platforms(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+            Err(e) => Err(e.into()),
+        }
+    }
     /// The projects in `path` entries of PyPI dependency tables (including
     /// features and platform targets) that have a `pyproject.toml`, other
     /// than the target's own manifest.

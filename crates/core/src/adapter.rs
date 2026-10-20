@@ -253,6 +253,12 @@ pub trait Adapter: Send + Sync {
     ) -> Result<Option<crate::graph::LockGraph>> {
         Ok(None)
     }
+    /// The platforms the target's lock in `root` names, where its packages
+    /// are locked under names rather than the platforms themselves; empty
+    /// when the adapter reads none or there is no lock.
+    fn lock_platforms(&self, _root: &Path, _target: &Target) -> Result<Vec<crate::LockPlatform>> {
+        Ok(vec![])
+    }
     /// The `pyproject.toml` files, relative to `root`, of other local
     /// projects the target installs from a path, whose own dependencies are
     /// resolved with the target. The default installs none.
