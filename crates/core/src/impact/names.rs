@@ -167,7 +167,8 @@ impl ImportNames {
     }
 
     /// Each `*.dist-info` in `site`, by its `RECORD`, else its
-    /// `top_level.txt`, and each `*.egg-info` by its `top_level.txt`.
+    /// `top_level.txt`, and each `*.egg-info` by its `top_level.txt`; also
+    /// records the console and GUI scripts of its `entry_points.txt`.
     fn read_site_packages(&mut self, site: &Path) {
         for path in self.entries(site) {
             let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -214,7 +215,8 @@ impl ImportNames {
     }
 
     /// Each conda package in `conda_meta`, by the files it installs in
-    /// `site-packages`.
+    /// `site-packages`, and the executables it installs in `bin/` (or
+    /// `Scripts/`/`Library/bin/` on Windows).
     fn read_conda_meta(&mut self, conda_meta: &Path) {
         for path in self.entries(conda_meta) {
             if path.extension().is_none_or(|e| e != "json") {
