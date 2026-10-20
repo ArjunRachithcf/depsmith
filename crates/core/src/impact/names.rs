@@ -17,6 +17,9 @@ use std::{
 pub struct ImportNames {
     /// Normalized package name to the modules it provides.
     installed: BTreeMap<String, BTreeSet<String>>,
+    /// Executable name to the packages, by name as installed, that install
+    /// it.
+    executables: BTreeMap<String, BTreeSet<String>>,
     warnings: Vec<String>,
 }
 
@@ -73,6 +76,17 @@ impl ImportNames {
             .entry(normalize(package))
             .or_default()
             .extend(modules);
+    }
+
+    /// The installed packages, by name as installed, that install the
+    /// executable `name`: a console script, or a conda package's `bin/` file.
+    pub fn executable(&self, name: &str) -> Vec<String> {
+        self.executables
+            .get(name)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
     }
 
     /// The modules `package` provides, sorted: as installed, else as the
@@ -153,7 +167,8 @@ impl ImportNames {
     }
 
     /// Each `*.dist-info` in `site`, by its `RECORD`, else its
-    /// `top_level.txt`, and each `*.egg-info` by its `top_level.txt`.
+    /// `top_level.txt`, and each `*.egg-info` by its `top_level.txt`; also
+    /// records the console and GUI scripts of its `entry_points.txt`.
     fn read_site_packages(&mut self, site: &Path) {
         for path in self.entries(site) {
             let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -169,6 +184,14 @@ impl ImportNames {
             } else {
                 continue;
             };
+            if let Ok(entry_points) = fs::read_to_string(path.join("entry_points.txt")) {
+                for script in console_scripts(&entry_points) {
+                    self.executables
+                        .entry(script.to_owned())
+                        .or_default()
+                        .insert(package.to_owned());
+                }
+            }
             let record = path.join("RECORD");
             let modules = if record.is_file() {
                 match fs::read_to_string(&record) {
@@ -192,7 +215,8 @@ impl ImportNames {
     }
 
     /// Each conda package in `conda_meta`, by the files it installs in
-    /// `site-packages`.
+    /// `site-packages`, and the executables it installs in `bin/` (or
+    /// `Scripts/`/`Library/bin/` on Windows).
     fn read_conda_meta(&mut self, conda_meta: &Path) {
         for path in self.entries(conda_meta) {
             if path.extension().is_none_or(|e| e != "json") {
@@ -211,21 +235,60 @@ impl ImportNames {
             let Some(name) = record.get("name").and_then(|n| n.as_str()) else {
                 continue;
             };
-            // `lib/pythonX.Y/site-packages/…`, `Lib/site-packages/…`, or
-            // `site-packages/…` for a noarch package.
             let files = record
                 .get("files")
                 .and_then(|f| f.as_array())
                 .into_iter()
                 .flatten()
-                .filter_map(|f| f.as_str())
-                .filter_map(|f| {
-                    f.strip_prefix("site-packages/")
-                        .or_else(|| f.split_once("/site-packages/").map(|(_, rest)| rest))
-                });
+                .filter_map(|f| f.as_str());
+            // `bin/x` on Unix; `Scripts/x.exe` or `Library/bin/x.bat` on
+            // Windows, whose other files there (`x-script.py`, DLLs) are
+            // not executables.
+            for file in files.clone() {
+                let executable = if let Some(name) = file.strip_prefix("bin/") {
+                    Some(name)
+                } else {
+                    file.strip_prefix("Scripts/")
+                        .or_else(|| file.strip_prefix("Library/bin/"))
+                        .and_then(|name| {
+                            [".exe", ".bat", ".cmd"]
+                                .iter()
+                                .find_map(|extension| name.strip_suffix(extension))
+                        })
+                }
+                .filter(|name| !name.contains('/'));
+                if let Some(executable) = executable {
+                    self.executables
+                        .entry(executable.to_owned())
+                        .or_default()
+                        .insert(name.to_owned());
+                }
+            }
+            // `lib/pythonX.Y/site-packages/…`, `Lib/site-packages/…`, or
+            // `site-packages/…` for a noarch package.
+            let files = files.filter_map(|f| {
+                f.strip_prefix("site-packages/")
+                    .or_else(|| f.split_once("/site-packages/").map(|(_, rest)| rest))
+            });
             self.insert(name, modules_of(files));
         }
     }
+}
+
+/// The console and GUI scripts an `entry_points.txt` declares.
+fn console_scripts(entry_points: &str) -> impl Iterator<Item = &str> {
+    let mut section = "";
+    entry_points.lines().filter_map(move |line| {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name;
+            return None;
+        }
+        if !matches!(section, "console_scripts" | "gui_scripts") {
+            return None;
+        }
+        Some(line.split_once('=')?.0.trim()).filter(|name| !name.is_empty())
+    })
 }
 
 /// The path of a `RECORD` line, its first CSV field.

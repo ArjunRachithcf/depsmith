@@ -263,6 +263,10 @@ _Avoid_: Top-level name (namespace packages share one), distribution
 The string a JavaScript or TypeScript import names its module by, such as `./util.js`, `@/store` or `lodash/fp`; it resolves to a first-party file (relative, a tsconfig alias, a workspace package) or else names a package.
 _Avoid_: Module path, import path
 
+**By-name reference**:
+A package a first-party file names without importing it: in a source string or command, a Pixi task or package script, a build requirement, or a config; its kind decides whether it reaches like a usage site, forces a full run or is tooling only.
+_Avoid_: String usage, implicit dependency
+
 **Affected file**:
 A first-party file that holds a usage site or imports one through the import graph, with the chain of imports that connects them.
 _Avoid_: Impacted file, dependent file
