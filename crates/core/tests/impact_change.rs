@@ -870,7 +870,24 @@ fn renamed_pixi_platforms_pair_by_what_they_are_not_their_names() {
     let bumped = read(&named_platform_lock(("c", "13"), ("d", "13"), "1.3.0"));
     let result = affected(&before, &bumped, &[], &barriers());
     assert!(result.changes.is_empty(), "{:?}", result.changes);
-    assert!(result.full_run.is_empty(), "{:?}", result.full_run);
+    let virtual_packages = |platform: &str, cuda: &str| FullRun::VirtualPackages {
+        platform: platform.into(),
+        before: vec!["__cuda=12".into(), "__glibc=2.28".into()],
+        after: vec![format!("__cuda={cuda}"), "__glibc=2.28".into()],
+    };
+    assert_eq!(
+        result.full_run,
+        [virtual_packages("c", "13"), virtual_packages("d", "13")],
+        "a changed requirement of the platform is a full run"
+    );
+    // The same names, with only the CUDA requirement raised.
+    let raised = read(&named_platform_lock(("a", "13"), ("b", "13"), "1.3.0"));
+    let result = affected(&before, &raised, &[], &barriers());
+    assert!(result.changes.is_empty(), "{:?}", result.changes);
+    assert_eq!(
+        result.full_run,
+        [virtual_packages("a", "13"), virtual_packages("b", "13")]
+    );
 }
 
 #[test]
@@ -889,6 +906,7 @@ fn swapped_and_chained_platform_names_still_pair_by_what_they_are() {
     let swapped = read(&named_platform_lock(("b", "12"), ("a", "12"), "1.3.0"));
     let result = affected(&before, &swapped, &[], &barriers());
     assert!(result.changes.is_empty(), "{:?}", result.changes);
+    assert!(result.full_run.is_empty(), "{:?}", result.full_run);
     // linux-64 moves from `a` to `b` while win-64 moves from `b` to `c`.
     let chained = read(&named_platform_lock(("b", "12"), ("c", "12"), "1.3.1"));
     let result = affected(&before, &chained, &[], &barriers());

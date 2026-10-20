@@ -379,6 +379,16 @@ pub enum FullRun {
         /// Platform it changed on.
         platform: String,
     },
+    /// A platform's virtual packages changed, such as the CUDA version or
+    /// the glibc it assumes, which no package change shows.
+    VirtualPackages {
+        /// The platform, by its "after" name.
+        platform: String,
+        /// Its virtual packages before, sorted.
+        before: Vec<String>,
+        /// Its virtual packages after, sorted.
+        after: Vec<String>,
+    },
 }
 
 /// The impact of a lock change on the packages of a target.
@@ -408,7 +418,8 @@ pub struct Affected {
 /// interpreter ([`INTERPRETERS`](super::INTERPRETERS)), so a change below
 /// `python` does not reach everything that requires `python`. A change to an
 /// interpreter is a full run instead, as is a change to a compiler or a build
-/// tool of native extensions, and a change to one of the interpreter's native
+/// tool of native extensions or to a platform's virtual packages (such as the
+/// CUDA version it assumes), and a change to one of the interpreter's native
 /// libraries names the standard-library modules built on it.
 pub fn affected(
     before: &Lock,
@@ -483,6 +494,17 @@ pub fn affected(
                 change: change.name.clone(),
                 path: dependent.path,
             });
+        }
+    }
+    for old in &before.platforms {
+        if let Some(new) = after.platforms.iter().find(|new| new.name == old.name) {
+            if new.virtual_packages != old.virtual_packages {
+                full_run.push(FullRun::VirtualPackages {
+                    platform: new.name.clone(),
+                    before: old.virtual_packages.clone(),
+                    after: new.virtual_packages.clone(),
+                });
+            }
         }
     }
     Affected {
