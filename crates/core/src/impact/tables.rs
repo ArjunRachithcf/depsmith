@@ -1,8 +1,9 @@
 //! Built-in tables of impact analysis: the packages that stop the reverse
 //! walk, the compilers and build tools whose changes are full runs, the
-//! standard-library modules built on the interpreter's native libraries, and
-//! the import names of well-known distributions whose modules differ from
-//! their name.
+//! standard-library modules built on the interpreter's native libraries, the
+//! import names of well-known distributions whose modules differ from their
+//! name, and the namespaces whose distributions are named after their
+//! modules.
 
 /// Pixi's default runtime barriers: the C/C++ runtimes nearly every native
 /// package requires, whose changes would otherwise affect everything.
@@ -89,15 +90,22 @@ pub const PYTHON_STDLIB_MAP: &[(&str, &[&str])] = &[
 /// in normalized form; a namespace package names the module below it, such
 /// as `google.protobuf`.
 pub const PYTHON_IMPORT_NAMES: &[(&str, &[&str])] = &[
+    ("ansible-core", &["ansible"]),
     ("attrs", &["attr", "attrs"]),
     ("azure-storage-blob", &["azure.storage.blob"]),
+    ("azure-storage-file-share", &["azure.storage.fileshare"]),
     ("beautifulsoup4", &["bs4"]),
     ("dnspython", &["dns"]),
     ("faiss-cpu", &["faiss"]),
     ("google-api-python-client", &["googleapiclient"]),
+    (
+        "google-cloud-secret-manager",
+        &["google.cloud.secretmanager"],
+    ),
     ("google-cloud-storage", &["google.cloud.storage"]),
     ("grpcio", &["grpc"]),
     ("grpcio-tools", &["grpc_tools"]),
+    ("hydra-core", &["hydra"]),
     ("ipython", &["IPython"]),
     ("matplotlib-base", &["matplotlib", "mpl_toolkits"]),
     ("msgpack-python", &["msgpack"]),
@@ -105,6 +113,27 @@ pub const PYTHON_IMPORT_NAMES: &[(&str, &[&str])] = &[
     ("opencv-contrib-python", &["cv2"]),
     ("opencv-python", &["cv2"]),
     ("opencv-python-headless", &["cv2"]),
+    (
+        "opentelemetry-api",
+        &[
+            "opentelemetry._events",
+            "opentelemetry._logs",
+            "opentelemetry.attributes",
+            "opentelemetry.baggage",
+            "opentelemetry.context",
+            "opentelemetry.environment_variables",
+            "opentelemetry.metrics",
+            "opentelemetry.propagate",
+            "opentelemetry.propagators",
+            "opentelemetry.trace",
+            "opentelemetry.util",
+            "opentelemetry.version",
+        ],
+    ),
+    (
+        "opentelemetry-semantic-conventions",
+        &["opentelemetry.semconv"],
+    ),
     ("pillow", &["PIL"]),
     ("protobuf", &["google.protobuf"]),
     ("psycopg-binary", &["psycopg_binary"]),
@@ -142,4 +171,17 @@ pub const PYTHON_IMPORT_NAMES: &[(&str, &[&str])] = &[
     ("tensorflow-cpu", &["tensorflow"]),
     ("websocket-client", &["websocket"]),
     ("zope-interface", &["zope.interface"]),
+];
+
+/// Namespaces whose distributions are named after the module they provide
+/// below the namespace, a `-` for each `.`: `opentelemetry-sdk` provides
+/// `opentelemetry.sdk`.
+pub const PYTHON_NAMESPACES: &[&str] = &[
+    "azure",
+    "backports",
+    "google-cloud",
+    "jaraco",
+    "opentelemetry",
+    "sphinxcontrib",
+    "zope",
 ];

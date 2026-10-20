@@ -603,3 +603,69 @@ fn js_workspace_packages_resolve_to_their_sources_not_their_build_output() {
         found.warnings
     );
 }
+
+#[test]
+fn a_workspace_member_that_is_itself_a_package_is_imported_by_its_directory_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        &[
+            (
+                "svc/pyproject.toml",
+                "[project]\nname = \"svc\"\n[tool.uv.workspace]\nmembers = [\"core\", \"api\"]\n",
+            ),
+            ("svc/core/pyproject.toml", "[project]\nname = \"core\"\n"),
+            ("svc/core/__init__.py", ""),
+            ("svc/core/storage/__init__.py", ""),
+            ("svc/core/storage/client.py", "import idna\n"),
+            ("svc/api/pyproject.toml", "[project]\nname = \"api\"\n"),
+            ("svc/api/__init__.py", ""),
+            (
+                "svc/api/main.py",
+                "from core.storage.client import connect\nfrom api import deps\n",
+            ),
+            ("svc/api/deps.py", "from util.text import slug\n"),
+            (
+                "svc/packages/util/pyproject.toml",
+                "[project]\nname = \"util\"\n",
+            ),
+            ("svc/packages/util/__init__.py", ""),
+            ("svc/packages/util/text.py", "import idna\n"),
+        ],
+    );
+    let found = usages(
+        root,
+        &target(),
+        &affected(vec![
+            package("pypi", "idna", &[]),
+            package("pypi", "core", &[]),
+            package("pypi", "api", &[]),
+        ]),
+        &ImportNames::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        found.sites,
+        [
+            site("svc/core/storage/client.py", 1, "idna", "idna"),
+            site("svc/packages/util/text.py", 1, "idna", "idna"),
+        ],
+        "imports of the members are first-party"
+    );
+    assert_eq!(
+        file(&found.files, "svc/api/deps.py").unwrap().chain,
+        [
+            hop("svc/api/deps.py", 1),
+            hop("svc/packages/util/text.py", 1)
+        ],
+        "a member below its parent's root is rooted at that parent"
+    );
+    assert_eq!(
+        file(&found.files, "svc/api/main.py").unwrap().chain,
+        [
+            hop("svc/api/main.py", 1),
+            hop("svc/core/storage/client.py", 1)
+        ]
+    );
+}

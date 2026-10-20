@@ -1,5 +1,6 @@
 //! Import names: the modules each distribution provides, read from the
-//! target's installed environments, else a built-in table, else its
+//! target's installed environments, else a built-in table, then for a
+//! namespace distribution the module below its namespace, else its
 //! normalized name.
 use depsmith_core::{impact::ImportNames, Target};
 use std::{fs, path::Path};
@@ -286,4 +287,59 @@ fn noarch_conda_packages_and_unreadable_records_are_read_or_warned() {
         "{:?}",
         names.warnings()
     );
+}
+
+#[test]
+fn namespace_distributions_name_the_module_below_their_namespace() {
+    let names = ImportNames::default();
+    assert_eq!(names.modules("opentelemetry-sdk"), ["opentelemetry.sdk"]);
+    assert!(
+        names
+            .modules("opentelemetry-api")
+            .contains(&"opentelemetry.trace".to_owned()),
+        "the API is the namespace's own modules, not the namespace"
+    );
+    assert_eq!(names.modules("azure-storage-blob"), ["azure.storage.blob"]);
+    assert_eq!(
+        names.modules("google-cloud-pubsub"),
+        ["google.cloud.pubsub"]
+    );
+    for (package, module) in [
+        (
+            "opentelemetry-exporter-otlp-proto-http",
+            "opentelemetry.exporter.otlp.proto.http",
+        ),
+        ("azure-storage-file-datalake", "azure.storage.filedatalake"),
+        (
+            "google-cloud-bigquery-storage",
+            "google.cloud.bigquery_storage",
+        ),
+        (
+            "backports-functools-lru-cache",
+            "backports.functools_lru_cache",
+        ),
+    ] {
+        assert!(
+            names.modules(package).contains(&module.to_owned()),
+            "{package}: {:?}",
+            names.modules(package)
+        );
+    }
+    assert_eq!(names.modules("hydra-core"), ["hydra"]);
+    assert_eq!(names.modules("ansible-core"), ["ansible"]);
+}
+
+#[test]
+fn a_target_without_python_has_no_environment_to_miss() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), &[("web/package.json", "{}")]);
+    let names = ImportNames::read(
+        dir.path(),
+        &Target {
+            id: "npm:web/package.json".into(),
+            manager: "npm".into(),
+            manifest: "web/package.json".into(),
+        },
+    );
+    assert!(names.warnings().is_empty(), "{:?}", names.warnings());
 }

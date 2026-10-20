@@ -300,11 +300,7 @@ impl Resolver {
 /// The packages of `target`'s npm workspace, its own included, that have a
 /// name; none when its manifest is not a `package.json`.
 fn workspace(root: &Path, target: &Target, warnings: &mut Vec<String>) -> Vec<WorkspacePackage> {
-    if target
-        .manifest
-        .file_name()
-        .is_none_or(|name| name != "package.json")
-    {
+    if !crate::npm::is_package(target) {
         return vec![];
     }
     let manifests = match crate::npm::manifests(root, target) {

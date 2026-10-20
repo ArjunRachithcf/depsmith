@@ -51,7 +51,7 @@ pub use js::{js_imports, Dialect};
 pub use names::ImportNames;
 pub use python::python_imports;
 pub use tables::{
-    BUILD_TOOLS, COMPILER_PREFIXES, INTERPRETERS, PYTHON_IMPORT_NAMES, PYTHON_STDLIB_MAP,
-    RUNTIME_BARRIERS,
+    BUILD_TOOLS, COMPILER_PREFIXES, INTERPRETERS, PYTHON_IMPORT_NAMES, PYTHON_NAMESPACES,
+    PYTHON_STDLIB_MAP, RUNTIME_BARRIERS,
 };
 pub use usage::{usages, AffectedFile, Hop, UsageSite, Usages};

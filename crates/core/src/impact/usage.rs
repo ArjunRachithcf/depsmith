@@ -90,9 +90,10 @@ pub struct Usages {
 ///
 /// A Python module resolves to first-party code under the deepest root it
 /// is in: the target's directory, any directory below it with a
-/// `pyproject.toml` (such as a workspace member), or the `src/` directory of
-/// either. Importing a module also loads the `__init__.py` of each package
-/// above it, and a directory of modules without one is a namespace package.
+/// `pyproject.toml` (such as a workspace member) unless that directory is
+/// itself a package, or the `src/` directory of either. Importing a module
+/// also loads the `__init__.py` of each package above it, and a directory of
+/// modules without one is a namespace package.
 /// An import that resolves nowhere there is matched against the modules the
 /// affected packages provide, as `names` has them, and the standard-library
 /// modules built on them: it matches a module it names or one below it, and
@@ -177,13 +178,22 @@ pub fn usages(
         )
         .collect();
 
-    let mut roots = vec![dir.to_owned()];
-    roots.extend(walked.projects);
-    for project in roots.clone() {
+    let mut roots = vec![];
+    for project in std::iter::once(dir.to_owned()).chain(walked.projects) {
         if root.join(&project).join("src").is_dir() {
             roots.push(project.join("src"));
         }
+        // A project whose directory is itself a package, holding an
+        // `__init__.py`, is imported by its directory's name from the
+        // directory above it.
+        if project != dir && root.join(&project).join("__init__.py").is_file() {
+            roots.push(project.parent().unwrap_or(dir).to_owned());
+        } else {
+            roots.push(project);
+        }
     }
+    roots.sort();
+    roots.dedup();
     let modules = Modules::new(&sources, &roots);
     let provided = provided_modules(affected, names);
     let resolver = Resolver::new(root, target, &sources, &mut warnings);

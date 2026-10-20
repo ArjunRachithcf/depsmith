@@ -86,6 +86,14 @@ fn members(root: &Path, dir: &Path, manifest: &Value) -> Vec<PathBuf> {
     output
 }
 
+/// Whether `target` is an npm package: its manifest is a `package.json`.
+pub(crate) fn is_package(target: &Target) -> bool {
+    target
+        .manifest
+        .file_name()
+        .is_some_and(|name| name == "package.json")
+}
+
 /// The manifests of `target`: its own, then its workspace members.
 pub(crate) fn manifests(root: &Path, target: &Target) -> Result<Vec<PathBuf>> {
     let parsed = read(root, &target.manifest)?;

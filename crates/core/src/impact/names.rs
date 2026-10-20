@@ -1,5 +1,5 @@
 //! Import names: the modules each Python or conda package provides.
-use super::tables::PYTHON_IMPORT_NAMES;
+use super::tables::{PYTHON_IMPORT_NAMES, PYTHON_NAMESPACES};
 use crate::{adapter::pypi_key as normalize, Target};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -9,8 +9,10 @@ use std::{
 
 /// The modules each Python or conda package provides, read from a target's
 /// installed environments; packages they do not hold fall back to
-/// [`PYTHON_IMPORT_NAMES`](super::PYTHON_IMPORT_NAMES), then to their
-/// normalized name.
+/// [`PYTHON_IMPORT_NAMES`](super::PYTHON_IMPORT_NAMES), then for a
+/// distribution of one of the
+/// [`PYTHON_NAMESPACES`](super::PYTHON_NAMESPACES) to the module its name
+/// spells, then to their normalized name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportNames {
     /// Normalized package name to the modules it provides.
@@ -24,10 +26,14 @@ impl ImportNames {
     /// directory above it), and every Pixi environment in its directory, with
     /// both their conda packages and their PyPI packages. Without any of
     /// them, every name falls back. [`ImportNames::warnings`] says so, and
-    /// names each environment file that cannot be read.
+    /// names each environment file that cannot be read. An npm target has no
+    /// Python environment to read, and no warning.
     pub fn read(root: &Path, target: &Target) -> Self {
         let dir = target.manifest.parent().unwrap_or(Path::new(""));
         let mut names = Self::default();
+        if crate::npm::is_package(target) {
+            return names;
+        }
         let mut environments = vec![];
         if let Some(venv) = std::iter::successors(Some(dir), |d| d.parent())
             .map(|d| root.join(d).join(".venv"))
@@ -70,8 +76,10 @@ impl ImportNames {
     }
 
     /// The modules `package` provides, sorted: as installed, else as the
-    /// built-in table has them, else its name in lowercase with `-` and `.`
-    /// as `_`. A stub package (`types-X`, `X-stubs`) provides the modules of
+    /// built-in table has them, else for a distribution of one of the
+    /// [`PYTHON_NAMESPACES`](super::PYTHON_NAMESPACES) the modules its name
+    /// can spell below the namespace, else its name in lowercase with `-` and
+    /// `.` as `_`. A stub package (`types-X`, `X-stubs`) provides the modules of
     /// the package it types.
     pub fn modules(&self, package: &str) -> Vec<String> {
         let mut name = normalize(package);
@@ -88,6 +96,11 @@ impl ImportNames {
             let mut modules: Vec<String> = modules.iter().map(|m| (*m).to_owned()).collect();
             modules.sort();
             return modules;
+        }
+        if let Some((namespace, rest)) = PYTHON_NAMESPACES.iter().find_map(|namespace| {
+            Some((*namespace, name.strip_prefix(namespace)?.strip_prefix('-')?))
+        }) {
+            return namespace_modules(namespace, rest);
         }
         vec![name.replace('-', "_")]
     }
@@ -290,4 +303,26 @@ fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
         && chars.all(|c| c == '_' || c.is_alphanumeric())
+}
+
+/// The modules a distribution of `namespace` may provide, by the `rest` of
+/// its name: each split of `rest` into dotted packages above a leaf module
+/// whose words are joined by `_` or by nothing, so
+/// `azure-storage-file-datalake` names `azure.storage.filedatalake`, among
+/// others that no import matches.
+fn namespace_modules(namespace: &str, rest: &str) -> Vec<String> {
+    let namespace = namespace.replace('-', ".");
+    let words: Vec<&str> = rest.split('-').collect();
+    let mut modules = BTreeSet::new();
+    for split in 0..words.len() {
+        let packages = &words[..split];
+        for separator in ["_", ""] {
+            let leaf = words[split..].join(separator);
+            let mut module = vec![namespace.as_str()];
+            module.extend(packages);
+            module.push(&leaf);
+            modules.insert(module.join("."));
+        }
+    }
+    modules.into_iter().collect()
 }
