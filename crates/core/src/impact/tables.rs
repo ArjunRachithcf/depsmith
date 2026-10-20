@@ -1,6 +1,8 @@
 //! Built-in tables of impact analysis: the packages that stop the reverse
-//! walk, the compilers and build tools whose changes are full runs, and the
-//! standard-library modules built on the interpreter's native libraries.
+//! walk, the compilers and build tools whose changes are full runs, the
+//! standard-library modules built on the interpreter's native libraries, and
+//! the import names of well-known distributions whose modules differ from
+//! their name.
 
 /// Pixi's default runtime barriers: the C/C++ runtimes nearly every native
 /// package requires, whose changes would otherwise affect everything.
@@ -80,4 +82,64 @@ pub const PYTHON_STDLIB_MAP: &[(&str, &[&str])] = &[
     ("ncurses", &["curses"]),
     ("libexpat", &["xml.parsers.expat", "pyexpat"]),
     ("libuuid", &["uuid"]),
+];
+
+/// Well-known distributions whose modules differ from their name, PyPI and
+/// conda names alike, each with the modules it provides. Names are matched
+/// in normalized form; a namespace package names the module below it, such
+/// as `google.protobuf`.
+pub const PYTHON_IMPORT_NAMES: &[(&str, &[&str])] = &[
+    ("attrs", &["attr", "attrs"]),
+    ("azure-storage-blob", &["azure.storage.blob"]),
+    ("beautifulsoup4", &["bs4"]),
+    ("dnspython", &["dns"]),
+    ("faiss-cpu", &["faiss"]),
+    ("google-api-python-client", &["googleapiclient"]),
+    ("google-cloud-storage", &["google.cloud.storage"]),
+    ("grpcio", &["grpc"]),
+    ("grpcio-tools", &["grpc_tools"]),
+    ("ipython", &["IPython"]),
+    ("matplotlib-base", &["matplotlib", "mpl_toolkits"]),
+    ("msgpack-python", &["msgpack"]),
+    ("mysqlclient", &["MySQLdb"]),
+    ("opencv-contrib-python", &["cv2"]),
+    ("opencv-python", &["cv2"]),
+    ("opencv-python-headless", &["cv2"]),
+    ("pillow", &["PIL"]),
+    ("protobuf", &["google.protobuf"]),
+    ("psycopg-binary", &["psycopg_binary"]),
+    ("psycopg2-binary", &["psycopg2"]),
+    ("py-opencv", &["cv2"]),
+    ("py-xgboost", &["xgboost"]),
+    ("pycryptodome", &["Crypto"]),
+    ("pycryptodomex", &["Cryptodome"]),
+    ("pygobject", &["gi"]),
+    ("pyjwt", &["jwt"]),
+    ("pymupdf", &["fitz", "pymupdf"]),
+    ("pyopenssl", &["OpenSSL"]),
+    ("pyqt5", &["PyQt5"]),
+    ("pyserial", &["serial"]),
+    ("pyside6", &["PySide6"]),
+    ("python-dateutil", &["dateutil"]),
+    ("python-dotenv", &["dotenv"]),
+    ("python-jose", &["jose"]),
+    ("python-magic", &["magic"]),
+    ("python-multipart", &["multipart", "python_multipart"]),
+    ("pytorch", &["torch"]),
+    (
+        "pywin32",
+        &["win32api", "win32con", "pywintypes", "win32com"],
+    ),
+    ("pyyaml", &["yaml"]),
+    ("pyzmq", &["zmq"]),
+    ("ruamel-yaml", &["ruamel.yaml"]),
+    ("scikit-image", &["skimage"]),
+    ("scikit-learn", &["sklearn"]),
+    (
+        "setuptools",
+        &["setuptools", "pkg_resources", "_distutils_hack"],
+    ),
+    ("tensorflow-cpu", &["tensorflow"]),
+    ("websocket-client", &["websocket"]),
+    ("zope-interface", &["zope.interface"]),
 ];

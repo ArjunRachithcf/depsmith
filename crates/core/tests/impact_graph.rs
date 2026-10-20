@@ -1,7 +1,7 @@
 //! Usage sites of the affected packages in first-party code, and the files
 //! that reach them through the first-party import graph.
 use depsmith_core::{
-    impact::{usages, Affected, AffectedFile, AffectedPackage, Hop, UsageSite},
+    impact::{usages, Affected, AffectedFile, AffectedPackage, Hop, ImportNames, UsageSite},
     Target,
 };
 use std::{fs, path::Path};
@@ -101,6 +101,7 @@ fn usage_sites_are_the_imports_of_affected_packages_in_the_target_directory() {
             package("pypi", "idna", &[]),
             package("conda", "openssl", &["ssl", "hashlib"]),
         ]),
+        &ImportNames::default(),
     )
     .unwrap();
     assert_eq!(
@@ -125,6 +126,7 @@ fn affected_files_reach_a_usage_site_through_first_party_imports() {
             package("pypi", "idna", &[]),
             package("conda", "openssl", &["ssl"]),
         ]),
+        &ImportNames::default(),
     )
     .unwrap();
     let test = file(&result.files, "svc/tests/test_api.py").expect("the test reaches idna");
@@ -164,6 +166,7 @@ fn a_first_party_module_shadows_a_package_of_the_same_name() {
         root,
         &target(),
         &affected(vec![package("pypi", "idna", &[])]),
+        &ImportNames::default(),
     )
     .unwrap();
     assert!(result.sites.is_empty(), "{:?}", result.sites);
@@ -184,6 +187,7 @@ fn distribution_names_match_their_normalized_import_name() {
         root,
         &target(),
         &affected(vec![package("pypi", "Typing.Extensions", &[])]),
+        &ImportNames::default(),
     )
     .unwrap();
     assert_eq!(
@@ -212,6 +216,7 @@ fn unparsed_syntax_is_a_warning_and_the_imports_around_it_still_count() {
         root,
         &target(),
         &affected(vec![package("pypi", "idna", &[])]),
+        &ImportNames::default(),
     )
     .unwrap();
     assert_eq!(result.sites, [site("svc/main.py", 1, "idna", "idna")]);
@@ -241,6 +246,7 @@ fn importing_a_submodule_runs_the_package_init_files_above_it() {
         root,
         &target(),
         &affected(vec![package("pypi", "idna", &[])]),
+        &ImportNames::default(),
     )
     .unwrap();
     let main = file(&result.files, "svc/main.py").expect("svc/__init__.py runs first");
@@ -266,7 +272,78 @@ fn a_namespace_package_is_first_party() {
         root,
         &target(),
         &affected(vec![package("pypi", "plugins", &[])]),
+        &ImportNames::default(),
     )
     .unwrap();
     assert!(result.sites.is_empty(), "{:?}", result.sites);
+}
+
+#[test]
+fn an_installed_distribution_matches_the_modules_it_provides() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        &[
+            ("svc/pyproject.toml", "[project]\nname = \"svc\"\n"),
+            ("svc/main.py", "import yaml\nimport pyyaml_helpers\n"),
+        ],
+    );
+    let mut names = ImportNames::default();
+    names.insert("PyYAML", ["yaml".to_owned()]);
+    let result = usages(
+        root,
+        &target(),
+        &affected(vec![package("pypi", "pyyaml", &[])]),
+        &names,
+    )
+    .unwrap();
+    assert_eq!(result.sites, [site("svc/main.py", 1, "yaml", "pyyaml")]);
+}
+
+#[test]
+fn a_namespace_package_matches_only_imports_below_its_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        &[
+            ("svc/pyproject.toml", "[project]\nname = \"svc\"\n"),
+            (
+                "svc/main.py",
+                "from google.protobuf import message\n\
+                 from google import protobuf\n\
+                 import google.cloud.storage\n\
+                 import google\n\
+                 import google.protobuf_extras\n",
+            ),
+        ],
+    );
+    let result = usages(
+        root,
+        &target(),
+        &affected(vec![package("pypi", "protobuf", &[])]),
+        &ImportNames::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        result.sites,
+        [
+            site("svc/main.py", 1, "google.protobuf", "protobuf"),
+            site("svc/main.py", 2, "google.protobuf", "protobuf"),
+        ]
+    );
+}
+
+#[test]
+fn a_missing_environment_is_a_warning_of_the_usages() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        &[("svc/pyproject.toml", "[project]\nname = \"svc\"\n")],
+    );
+    let names = ImportNames::read(root, &target());
+    let result = usages(root, &target(), &affected(vec![]), &names).unwrap();
+    assert_eq!(result.warnings, names.warnings());
 }

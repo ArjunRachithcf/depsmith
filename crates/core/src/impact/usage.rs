@@ -3,6 +3,7 @@
 use super::{
     change::Affected,
     imports::{Import, ImportKind, Scan},
+    names::ImportNames,
     python::python_imports,
 };
 use crate::{Error, Result, Target};
@@ -67,7 +68,8 @@ pub struct Usages {
     pub sites: Vec<UsageSite>,
     /// Each affected file, by path.
     pub files: Vec<AffectedFile>,
-    /// What the scan could not read.
+    /// What the scan could not read, with the warnings of the import names
+    /// first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -84,18 +86,24 @@ pub struct Usages {
 /// (such as a workspace member), or the `src/` directory of either.
 /// Importing a module also loads the `__init__.py` of each package above it,
 /// and a directory of modules without one is a namespace package. An import
-/// that resolves nowhere there is matched against the affected packages'
-/// import names: for now each package's normalized name, and the
-/// standard-library modules built on it.
+/// that resolves nowhere there is matched against the modules the affected
+/// packages provide, as `names` has them, and the standard-library modules
+/// built on them: it matches a module it names or one below it, and for
+/// `from a import b` also `a.b`. The warnings of `names` come first.
 ///
 /// # Errors
 ///
 /// Returns [`crate::Error::Operation`] when the target's directory cannot be
 /// walked.
-pub fn usages(root: &Path, target: &Target, affected: &Affected) -> Result<Usages> {
+pub fn usages(
+    root: &Path,
+    target: &Target,
+    affected: &Affected,
+    names: &ImportNames,
+) -> Result<Usages> {
     let dir = target.manifest.parent().unwrap_or(Path::new(""));
     let (sources, projects) = python_files(root, dir)?;
-    let mut warnings = vec![];
+    let mut warnings = names.warnings().to_vec();
     let scans: Vec<Scan> = sources
         .iter()
         .map(|file| match std::fs::read_to_string(root.join(file)) {
@@ -124,7 +132,7 @@ pub fn usages(root: &Path, target: &Target, affected: &Affected) -> Result<Usage
         }
     }
     let modules = Modules::new(&sources, &roots);
-    let names = import_names(affected);
+    let provided = provided_modules(affected, names);
 
     let mut sites = vec![];
     let mut importers: Vec<Vec<Edge>> = vec![vec![]; sources.len()];
@@ -144,13 +152,29 @@ pub fn usages(root: &Path, target: &Target, affected: &Affected) -> Result<Usage
             if import.level > 0 || modules.is_first_party(top) {
                 continue;
             }
-            for package in names.get(top).into_iter().flatten() {
-                sites.push(Site {
-                    file: index,
-                    line: import.line,
-                    module: import.module.clone(),
-                    package: package.clone(),
+            let mut candidates = vec![import.module.clone()];
+            if import.kind == ImportKind::From {
+                candidates.extend(
+                    import
+                        .names
+                        .iter()
+                        .map(|n| format!("{}.{n}", import.module)),
+                );
+            }
+            for (prefix, package) in &provided {
+                let matched = candidates.iter().find(|candidate| {
+                    candidate
+                        .strip_prefix(prefix.as_str())
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
                 });
+                if let Some(module) = matched {
+                    sites.push(Site {
+                        file: index,
+                        line: import.line,
+                        module: module.clone(),
+                        package: package.clone(),
+                    });
+                }
             }
         }
     }
@@ -424,20 +448,24 @@ fn module_name(relative: &Path) -> Option<ModuleName> {
     })
 }
 
-/// Each import name of the affected Python and conda packages, to the
-/// packages it belongs to.
-fn import_names(affected: &Affected) -> BTreeMap<String, BTreeSet<String>> {
-    let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+/// The modules the affected Python and conda packages provide, each with
+/// its package: what `names` says each provides, and the standard-library
+/// modules built on it.
+fn provided_modules(affected: &Affected, names: &ImportNames) -> BTreeSet<(String, String)> {
+    let mut provided = BTreeSet::new();
     for package in &affected.packages {
         if !matches!(package.ecosystem.as_str(), "pypi" | "conda") {
             continue;
         }
-        let normalized = package.name.to_lowercase().replace(['-', '.'], "_");
-        for name in std::iter::once(normalized).chain(package.stdlib.iter().cloned()) {
-            names.entry(name).or_default().insert(package.name.clone());
+        for module in names
+            .modules(&package.name)
+            .into_iter()
+            .chain(package.stdlib.iter().cloned())
+        {
+            provided.insert((module, package.name.clone()));
         }
     }
-    names
+    provided
 }
 
 /// `path` with `/` between its components on every platform.

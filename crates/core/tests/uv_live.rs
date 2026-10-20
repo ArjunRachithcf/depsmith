@@ -1,7 +1,8 @@
 //! Opt-in acceptance tests with the real uv against PyPI: a pinned package is
 //! suggested with index evidence, accepted, applied and rechecked, and a
 //! transitive package moves to the exact release a precise update names. A
-//! security update moves a transitive package precisely or by name.
+//! security update moves a transitive package precisely or by name. A synced
+//! environment names the modules each distribution provides.
 use depsmith_core::{apply, Engine, UpdateOptions};
 #[cfg(unix)]
 use depsmith_core::{FixOutcome, SecurityTarget};
@@ -218,5 +219,37 @@ fn live_project_suggests_accepts_applies_and_rechecks() {
         !recheck.suggestions.iter().any(|s| s.package == "six"),
         "{:?}",
         recheck.suggestions
+    );
+}
+
+#[test]
+#[ignore = "queries PyPI"]
+fn live_synced_environment_names_the_modules_of_each_distribution() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("pyproject.toml"),
+        "[project]\nname = \"live\"\nversion = \"0.1.0\"\nrequires-python = \">=3.10\"\n\
+         dependencies = [\"pyyaml\", \"python-dateutil\"]\n\n[tool.uv]\npackage = false\n",
+    )
+    .unwrap();
+    let status = std::process::Command::new(std::env::var("UV").unwrap())
+        .args(["sync", "--quiet"])
+        .current_dir(root.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "uv sync");
+    let target = depsmith_core::Target {
+        id: "uv:pyproject.toml".into(),
+        manager: "uv".into(),
+        manifest: "pyproject.toml".into(),
+    };
+    let names = depsmith_core::impact::ImportNames::read(root.path(), &target);
+    assert!(names.warnings().is_empty(), "{:?}", names.warnings());
+    assert!(names.modules("PyYAML").contains(&"yaml".to_owned()));
+    assert_eq!(names.modules("python-dateutil"), ["dateutil"]);
+    assert_eq!(
+        names.modules("six"),
+        ["six"],
+        "a dependency of python-dateutil"
     );
 }

@@ -255,6 +255,10 @@ _Avoid_: Impacted dependency, blast radius
 One place in a first-party file, a file and a line, that imports an affected package or names it in source.
 _Avoid_: Call site (reach is per package, not per function)
 
+**Import name**:
+A module a Python or conda package provides, such as `yaml` for `pyyaml` or `google.protobuf` for `protobuf`, as the target's installed environment records it, else as a built-in table or the normalized name says; what a usage site matches.
+_Avoid_: Top-level name (namespace packages share one), distribution
+
 **Affected file**:
 A first-party file that holds a usage site or imports one through the import graph, with the chain of imports that connects them.
 _Avoid_: Impacted file, dependent file

@@ -25,7 +25,8 @@
 //! for package in result.packages.iter().filter(|p| p.declared) {
 //!     println!("{} is affected", package.name);
 //! }
-//! for site in impact::usages(sides.sources()?, &target, &result)?.sites {
+//! let names = impact::ImportNames::read(root, &target);
+//! for site in impact::usages(sides.sources()?, &target, &result, &names)?.sites {
 //!     println!("{}:{} imports {}", site.file.display(), site.line, site.module);
 //! }
 //! # Ok::<(), depsmith_core::Error>(())
@@ -33,6 +34,7 @@
 mod change;
 mod compare;
 mod imports;
+mod names;
 mod python;
 mod tables;
 mod usage;
@@ -43,8 +45,10 @@ pub use change::{
 };
 pub use compare::{sides, Comparison, Sides};
 pub use imports::{Import, ImportKind, Scan};
+pub use names::ImportNames;
 pub use python::python_imports;
 pub use tables::{
-    BUILD_TOOLS, COMPILER_PREFIXES, INTERPRETERS, PYTHON_STDLIB_MAP, RUNTIME_BARRIERS,
+    BUILD_TOOLS, COMPILER_PREFIXES, INTERPRETERS, PYTHON_IMPORT_NAMES, PYTHON_STDLIB_MAP,
+    RUNTIME_BARRIERS,
 };
 pub use usage::{usages, AffectedFile, Hop, UsageSite, Usages};
