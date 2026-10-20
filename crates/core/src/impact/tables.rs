@@ -2,8 +2,8 @@
 //! walk, the compilers and build tools whose changes are full runs, the
 //! standard-library modules built on the interpreter's native libraries, the
 //! import names of well-known distributions whose modules differ from their
-//! name, and the namespaces whose distributions are named after their
-//! modules.
+//! name, the namespaces whose distributions are named after their modules,
+//! and the executables and process-launching calls that name packages.
 
 /// Pixi's default runtime barriers: the C/C++ runtimes nearly every native
 /// package requires, whose changes would otherwise affect everything.
@@ -184,4 +184,64 @@ pub const PYTHON_NAMESPACES: &[&str] = &[
     "opentelemetry",
     "sphinxcontrib",
     "zope",
+];
+
+/// Executables whose package has another name, each with the packages that
+/// install it.
+pub const EXECUTABLES: &[(&str, &[&str])] = &[
+    ("babel", &["@babel/cli"]),
+    ("django-admin", &["django"]),
+    ("dmypy", &["mypy"]),
+    ("f2py", &["numpy"]),
+    ("jupyter-lab", &["jupyterlab"]),
+    ("nest", &["@nestjs/cli"]),
+    ("ng", &["@angular/cli"]),
+    ("playwright", &["@playwright/test", "playwright"]),
+    ("py.test", &["pytest"]),
+    ("sb", &["storybook"]),
+    ("sphinx-build", &["sphinx"]),
+    ("stubgen", &["mypy"]),
+    ("tsc", &["typescript"]),
+    ("tsserver", &["typescript"]),
+    ("vue-cli-service", &["@vue/cli-service"]),
+];
+
+/// The calls that start a process with their first argument: by their
+/// qualified name, such as `subprocess.run`, or, where the name alone says
+/// so, their bare name, such as `Popen`.
+pub(crate) const LAUNCHERS: &[&str] = &[
+    "Popen",
+    "asyncio.create_subprocess_exec",
+    "asyncio.create_subprocess_shell",
+    "check_call",
+    "check_output",
+    "child_process.exec",
+    "child_process.execFile",
+    "child_process.execFileSync",
+    "child_process.execSync",
+    "child_process.spawn",
+    "child_process.spawnSync",
+    "cp.exec",
+    "cp.execSync",
+    "cp.spawn",
+    "cp.spawnSync",
+    "create_subprocess_exec",
+    "create_subprocess_shell",
+    "execFile",
+    "execFileSync",
+    "execSync",
+    "execa",
+    "execaCommand",
+    "execaCommandSync",
+    "execaSync",
+    "os.popen",
+    "os.system",
+    "spawnSync",
+    "subprocess.Popen",
+    "subprocess.call",
+    "subprocess.check_call",
+    "subprocess.check_output",
+    "subprocess.getoutput",
+    "subprocess.getstatusoutput",
+    "subprocess.run",
 ];
