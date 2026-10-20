@@ -26,8 +26,9 @@ pub(super) enum Resolved {
     Files(Vec<usize>),
     /// The package it names, such as `@scope/pkg` for `@scope/pkg/sub`.
     Package(String),
-    /// Nothing to follow: a `node:` built-in, a URL, or a first-party file
-    /// that is not a source file or is missing.
+    /// Nothing to follow: a `node:` built-in, a URL, a subpath import
+    /// (`#x`), an absolute specifier, or a first-party file that is not a
+    /// source file or is missing.
     Nothing,
 }
 
