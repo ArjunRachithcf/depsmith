@@ -206,6 +206,17 @@ impl Snapshot {
             }
             let path = PathBuf::from(path);
             crate::working_tree::relative(&path)?;
+            if entry.starts_with("120000 ") {
+                // A tracked symlink: its directories must not be links, and
+                // the working tree checks where the link itself points.
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    crate::working_tree::output_path(root, parent)?;
+                }
+                if fs::symlink_metadata(root.join(&path)).is_ok() {
+                    paths.push(path);
+                }
+                continue;
+            }
             crate::working_tree::output_path(root, &path)?;
             if root.join(&path).try_exists()? {
                 paths.push(path);
