@@ -36,16 +36,28 @@ def index(checkout: str, out: str) -> None:
         if advisory.get("withdrawn"):
             continue
         built = max(built, advisory.get("modified", ""))
-        severity = (advisory.get("database_specific") or {}).get("severity") or "UNKNOWN"
+        severity = (advisory.get("database_specific") or {}).get(
+            "severity"
+        ) or "UNKNOWN"
         for affected in advisory.get("affected", []):
             package = affected.get("package", {})
             kind = ECOSYSTEMS.get(package.get("ecosystem"))
             if not kind:
                 continue
-            ranges = [r["events"] for r in affected.get("ranges", []) if r.get("type") in ("ECOSYSTEM", "SEMVER")]
-            entry = {"id": advisory["id"], "severity": severity.title(), "ranges": ranges,
-                     "versions": affected.get("versions", [])}
-            table.setdefault(f"{kind}:{normalize(kind, package['name'])}", []).append(entry)
+            ranges = [
+                r["events"]
+                for r in affected.get("ranges", [])
+                if r.get("type") in ("ECOSYSTEM", "SEMVER")
+            ]
+            entry = {
+                "id": advisory["id"],
+                "severity": severity.title(),
+                "ranges": ranges,
+                "versions": affected.get("versions", []),
+            }
+            table.setdefault(f"{kind}:{normalize(kind, package['name'])}", []).append(
+                entry
+            )
     Path(out).write_text(json.dumps({"built": built, "packages": table}))
     print(f"{len(table)} packages, built {built}")
 
@@ -54,20 +66,38 @@ def key(kind: str, version: str):
     """A sort key: numeric release parts, then pre-releases before the release."""
     version = version.strip().lstrip("vV").split("+")[0]
     if kind == "pypi":
-        m = re.match(r"^(?:\d+!)?([\d.]+)(?:[-_.]?(a|alpha|b|beta|c|rc|pre|preview)[-_.]?(\d*))?"
-                     r"(?:[-_.]?(post|rev|r)[-_.]?(\d*))?(?:[-_.]?dev[-_.]?(\d*))?", version.lower())
+        m = re.match(
+            r"^(?:\d+!)?([\d.]+)(?:[-_.]?(a|alpha|b|beta|c|rc|pre|preview)[-_.]?(\d*))?"
+            r"(?:[-_.]?(post|rev|r)[-_.]?(\d*))?(?:[-_.]?dev[-_.]?(\d*))?",
+            version.lower(),
+        )
         if not m:
             return ((0,), (9,))
         release = tuple(int(p) for p in m.group(1).strip(".").split(".") if p)
         while len(release) > 1 and release[-1] == 0:
             release = release[:-1]
-        pre = {"a": 0, "alpha": 0, "b": 1, "beta": 1}.get(m.group(2), 2) if m.group(2) else 3
-        return (release, (pre, int(m.group(3) or 0), int(m.group(5) or 0) if m.group(4) else -1,
-                          int(m.group(6) or 0) if m.group(6) is not None else 1 << 30))
+        pre = (
+            {"a": 0, "alpha": 0, "b": 1, "beta": 1}.get(m.group(2), 2)
+            if m.group(2)
+            else 3
+        )
+        return (
+            release,
+            (
+                pre,
+                int(m.group(3) or 0),
+                int(m.group(5) or 0) if m.group(4) else -1,
+                int(m.group(6) or 0) if m.group(6) is not None else 1 << 30,
+            ),
+        )
     core, _, pre = version.partition("-")
     release = tuple(int(p) if p.isdigit() else 0 for p in core.split("."))
     release += (0,) * (3 - len(release))
-    parts = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split(".")) if pre else ()
+    parts = (
+        tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split("."))
+        if pre
+        else ()
+    )
     return (release, (0, parts) if pre else (1, ()))
 
 
@@ -108,14 +138,27 @@ def scan(sbom_path: str) -> dict:
             fixes = affected(kind, version, entry)
             if fixes is None:
                 continue
-            matches.append({
-                "artifact": {"purl": purl, "name": name, "version": version},
-                "matchDetails": [{"type": "exact-direct-match", "matcher": "fake-grype",
-                                  "found": {"advisory": entry["id"]}}],
-                "vulnerability": {"id": entry["id"], "namespace": f"github:language:{LANGUAGES[kind]}",
-                                  "severity": entry["severity"],
-                                  "fix": {"versions": fixes, "state": "fixed" if fixes else "not-fixed"}},
-            })
+            matches.append(
+                {
+                    "artifact": {"purl": purl, "name": name, "version": version},
+                    "matchDetails": [
+                        {
+                            "type": "exact-direct-match",
+                            "matcher": "fake-grype",
+                            "found": {"advisory": entry["id"]},
+                        }
+                    ],
+                    "vulnerability": {
+                        "id": entry["id"],
+                        "namespace": f"github:language:{LANGUAGES[kind]}",
+                        "severity": entry["severity"],
+                        "fix": {
+                            "versions": fixes,
+                            "state": "fixed" if fixes else "not-fixed",
+                        },
+                    },
+                }
+            )
     return {"matches": matches}
 
 
@@ -127,11 +170,13 @@ def main() -> int:
     if args[:2] == ["db", "update"]:
         return 0
     if args[:2] == ["db", "status"]:
-        built = json.loads(Path(os.environ["CORPUS_ADVISORY_INDEX"]).read_text())["built"]
+        built = json.loads(Path(os.environ["CORPUS_ADVISORY_INDEX"]).read_text())[
+            "built"
+        ]
         print(json.dumps({"built": built, "schemaVersion": "github-advisory-database"}))
         return 0
     if args and args[0].startswith("sbom:"):
-        print(json.dumps(scan(args[0][len("sbom:"):])))
+        print(json.dumps(scan(args[0][len("sbom:") :])))
         return 0
     print(f"unsupported: {args}", file=sys.stderr)
     return 2

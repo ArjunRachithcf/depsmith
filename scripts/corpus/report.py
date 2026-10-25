@@ -14,8 +14,9 @@ import collections
 import csv
 import os
 import re
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 HERE = Path(__file__).resolve().parent
 WORK = Path(os.environ.get("CORPUS_WORK", HERE.parent.parent / "target" / "corpus"))
@@ -55,14 +56,20 @@ def main():
     print("| manager | " + " | ".join(classes) + " |")
     print("|---|" + "---|" * len(classes))
     for manager in sorted(table):
-        print(f"| {manager} | " + " | ".join(str(table[manager][c]) for c in classes) + " |")
+        print(
+            f"| {manager} | "
+            + " | ".join(str(table[manager][c]) for c in classes)
+            + " |"
+        )
     clusters = collections.defaultdict(list)
     for r in data:
         if r["class"] not in ("ok", "skip"):
             clusters[(r["class"], r["signature"])].append(r)
     print("\n## Clusters\n")
     order = {"bug": 0, "triage": 1, "design": 2, "repo": 3, "env": 4}
-    for (cls, sig), members in sorted(clusters.items(), key=lambda kv: (order.get(kv[0][0], 9), -len(kv[1]))):
+    for (cls, sig), members in sorted(
+        clusters.items(), key=lambda kv: (order.get(kv[0][0], 9), -len(kv[1]))
+    ):
         managers = collections.Counter(m["manager"] for m in members)
         print(f"- **{cls}** ×{len(members)} {dict(managers)} `{sig}`")
         if args.details or cls in ("bug", "triage"):
@@ -72,9 +79,13 @@ def main():
         _, old = rows(args.against)
         before = {(r["repo"], r["step"]): r["class"] for r in old}
         now = {(r["repo"], r["step"]): r["class"] for r in data}
-        fixed = [k for k, c in now.items() if c == "ok" and before.get(k) not in (None, "ok")]
+        fixed = [
+            k for k, c in now.items() if c == "ok" and before.get(k) not in (None, "ok")
+        ]
         broke = [k for k, c in now.items() if c != "ok" and before.get(k) == "ok"]
-        print(f"\n## Against pass {args.against}: {len(fixed)} fixed, {len(broke)} regressed")
+        print(
+            f"\n## Against pass {args.against}: {len(fixed)} fixed, {len(broke)} regressed"
+        )
         for k in broke:
             print(f"- regressed: {k[0]} [{k[1]}] {now[k]}")
 
