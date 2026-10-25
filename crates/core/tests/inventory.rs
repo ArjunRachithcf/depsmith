@@ -10,6 +10,31 @@ fn local_editables_with_dynamic_versions_are_retained_as_unknown() {
 }
 
 #[test]
+fn conda_source_packages_are_conda_packages_from_their_source() {
+    let source = "mist[548814ba] @ git+https://github.com/o/mist?tag=v0.3.5#253e073";
+    let packages = pixi_inventory(&format!(
+        "version: 7\nenvironments:\n  default:\n    packages:\n      linux-64:\n      - conda_source: {source}\npackages:\n- conda_source: {source}\n  version: 0.3.5\n  build: hb0f4dca_0\n  subdir: linux-64\n  depends:\n  - mojo-compiler >=1.1.0,<1.2.0\n"
+    ))
+    .unwrap();
+    assert_eq!(packages.len(), 1, "{packages:?}");
+    let mist = &packages[0];
+    assert_eq!(
+        (
+            mist.ecosystem.as_str(),
+            mist.name.as_str(),
+            mist.version.as_str()
+        ),
+        ("conda", "mist", "0.3.5")
+    );
+    assert_eq!(
+        mist.artifact,
+        "git+https://github.com/o/mist?tag=v0.3.5#253e073"
+    );
+    assert_eq!(mist.platform, "linux-64");
+    assert_eq!(mist.environments, ["default"]);
+}
+
+#[test]
 fn shared_wheels_are_reported_for_each_locked_target_platform() {
     let packages = pixi_inventory("version: 7\nenvironments:\n  default:\n    packages:\n      linux-64:\n      - pypi: https://files.pythonhosted.org/demo.whl\n      win-64:\n      - pypi: https://files.pythonhosted.org/demo.whl\npackages:\n- pypi: https://files.pythonhosted.org/demo.whl\n  name: demo\n  version: '1.0'\n").unwrap();
     assert_eq!(

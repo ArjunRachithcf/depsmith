@@ -17,6 +17,22 @@ struct Record<'a> {
     platforms: BTreeMap<String, BTreeSet<String>>,
 }
 
+/// The keys of `pixi.lock` package records, with each one's ecosystem:
+/// binary conda packages, conda packages built from source, PyPI packages.
+const RECORD_KINDS: [(&str, &str); 3] = [
+    ("conda", "conda"),
+    ("conda_source", "conda"),
+    ("pypi", "pypi"),
+];
+
+/// Where a record's package comes from: a source package's source, else its
+/// artifact.
+fn source(artifact: &str) -> &str {
+    artifact
+        .split_once(" @ ")
+        .map_or(artifact, |(_, source)| source)
+}
+
 /// The package records of a parsed `pixi.lock`, each with the platforms of
 /// the environments that use it and those environments (or its own subdir,
 /// with none, when none list it).
@@ -41,10 +57,8 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
                         (platform.as_str(), records.as_sequence())
                     {
                         for record in records {
-                            for ecosystem in ["conda", "pypi"] {
-                                if let Some(artifact) =
-                                    record.get(ecosystem).and_then(Value::as_str)
-                                {
+                            for (key, ecosystem) in RECORD_KINDS {
+                                if let Some(artifact) = record.get(key).and_then(Value::as_str) {
                                     platforms
                                         .entry((ecosystem.into(), artifact.into()))
                                         .or_default()
@@ -61,13 +75,17 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
     }
     let mut result = vec![];
     for item in packages {
-        let (ecosystem, artifact) = if let Some(a) = item.get("conda").and_then(Value::as_str) {
-            ("conda", a)
-        } else if let Some(a) = item.get("pypi").and_then(Value::as_str) {
-            ("pypi", a)
-        } else {
+        let Some((key, ecosystem, artifact)) = RECORD_KINDS.iter().find_map(|(key, ecosystem)| {
+            item.get(key)
+                .and_then(Value::as_str)
+                .map(|a| (*key, *ecosystem, a))
+        }) else {
             return Err(Error::Operation("unknown Pixi package record".into()));
         };
+        // A source package (pixi-build) is `NAME[HASH] @ SOURCE`.
+        let source_name = (key == "conda_source")
+            .then(|| artifact.split(['[', ' ']).next())
+            .flatten();
         let filename = artifact
             .rsplit('/')
             .next()
@@ -82,6 +100,7 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
         let name = item
             .get("name")
             .and_then(Value::as_str)
+            .or(source_name)
             .or_else(|| {
                 if ecosystem == "conda" && parts.len() == 3 {
                     Some(parts[2])
@@ -148,7 +167,7 @@ pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
                 ecosystem: record.ecosystem.into(),
                 name: record.name.into(),
                 version: record.version.into(),
-                artifact: record.artifact.into(),
+                artifact: source(record.artifact).into(),
                 platform,
                 environments: environments.into_iter().collect(),
             });
