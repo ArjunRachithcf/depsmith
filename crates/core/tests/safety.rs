@@ -293,3 +293,173 @@ fn recovery_refuses_to_overwrite_concurrent_edits() {
     );
     assert!(root.path().join(".depsmith/journal.json").exists());
 }
+
+/// Records what the stage holds at `LICENSE` and `pkg/target/mod.py`, and
+/// writes `project.lock`.
+#[cfg(unix)]
+struct StageProbe;
+#[cfg(unix)]
+impl depsmith_core::adapter::Adapter for StageProbe {
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("probe", &["project.toml"])
+    }
+    fn detects(&self, path: &std::path::Path, _: &str) -> bool {
+        path == std::path::Path::new("project.toml")
+    }
+    fn prepare(
+        &self,
+        root: &std::path::Path,
+        _: &depsmith_core::Target,
+        _: &UpdateOptions,
+    ) -> depsmith_core::Result<depsmith_core::adapter::Candidate> {
+        let link = root.join("crate/LICENSE");
+        let seen = match fs::symlink_metadata(&link) {
+            Ok(meta) if meta.file_type().is_symlink() => format!(
+                "link {} {}",
+                fs::read_link(&link)?.display(),
+                fs::read_to_string(&link)?
+            ),
+            Ok(_) => "file".into(),
+            Err(_) => "missing".into(),
+        };
+        let tracked = fs::read_to_string(root.join("pkg/target/mod.py")).unwrap_or_default();
+        fs::write(root.join("project.lock"), format!("{seen}|{tracked}"))?;
+        Ok(depsmith_core::adapter::Candidate {
+            files: vec!["project.lock".into()],
+            ..Default::default()
+        })
+    }
+}
+
+#[cfg(unix)]
+fn probe(root: &std::path::Path) -> depsmith_core::Result<depsmith_core::Proposal> {
+    Engine::new(vec![Box::new(StageProbe)]).prepare(
+        root,
+        &["probe:project.toml".into()],
+        UpdateOptions::default(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_inside_the_repository_are_staged_as_symlinks() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("project.toml"), "").unwrap();
+    fs::write(root.path().join("LICENSE"), "MIT").unwrap();
+    fs::create_dir_all(root.path().join("crate")).unwrap();
+    std::os::unix::fs::symlink("../LICENSE", root.path().join("crate/LICENSE")).unwrap();
+    // A link to a directory inside the repository is staged, not walked.
+    std::os::unix::fs::symlink("crate", root.path().join("alias")).unwrap();
+    let engine = Engine::new(vec![Box::new(StageProbe)]);
+    assert_eq!(engine.discover(root.path()).unwrap().len(), 1);
+    let proposal = probe(root.path()).unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(proposal.changes[0].after, "link ../LICENSE MIT|");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_that_leave_the_repository_are_rejected() {
+    let outside = tempdir().unwrap();
+    fs::write(outside.path().join("secret"), "outside").unwrap();
+    for target in [
+        outside.path().join("secret"),
+        std::path::PathBuf::from("../../outside"),
+    ] {
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("project.toml"), "").unwrap();
+        fs::create_dir_all(root.path().join("crate")).unwrap();
+        std::os::unix::fs::symlink(&target, root.path().join("crate/LICENSE")).unwrap();
+        let error = probe(root.path()).unwrap_err().to_string();
+        assert!(error.contains("outside the repository"), "{error}");
+    }
+}
+
+/// Commit everything under `root` to a new Git repository.
+#[cfg(unix)]
+fn commit_all(root: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .current_dir(root)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "initial"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn tracked_symlinks_inside_the_repository_are_staged_as_symlinks() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("project.toml"), "").unwrap();
+    fs::write(root.path().join("LICENSE"), "MIT").unwrap();
+    fs::create_dir_all(root.path().join("crate")).unwrap();
+    std::os::unix::fs::symlink("../LICENSE", root.path().join("crate/LICENSE")).unwrap();
+    commit_all(root.path());
+    let proposal = probe(root.path()).unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(proposal.changes[0].after, "link ../LICENSE MIT|");
+}
+
+#[cfg(unix)]
+#[test]
+fn tracked_files_in_directories_named_like_build_output_are_staged() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("project.toml"), "").unwrap();
+    fs::create_dir_all(root.path().join("pkg/target")).unwrap();
+    fs::write(root.path().join("pkg/target/mod.py"), "source").unwrap();
+    commit_all(root.path());
+    let proposal = probe(root.path()).unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(proposal.changes[0].after, "missing|source");
+}
+
+/// Writes the name of the directory it resolves in to `project.lock`.
+struct DirectoryName;
+impl depsmith_core::adapter::Adapter for DirectoryName {
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("named", &["project.toml"])
+    }
+    fn detects(&self, path: &std::path::Path, _: &str) -> bool {
+        path == std::path::Path::new("project.toml")
+    }
+    fn prepare(
+        &self,
+        root: &std::path::Path,
+        _: &depsmith_core::Target,
+        _: &UpdateOptions,
+    ) -> depsmith_core::Result<depsmith_core::adapter::Candidate> {
+        let name = root.file_name().unwrap().to_string_lossy();
+        fs::write(root.join("project.lock"), name.as_bytes())?;
+        Ok(depsmith_core::adapter::Candidate {
+            files: vec!["project.lock".into()],
+            ..Default::default()
+        })
+    }
+}
+
+#[test]
+fn the_stage_has_the_name_of_the_repository_directory() {
+    // npm names a lock after the directory of a package.json without a
+    // name, and Pixi a workspace without one, so the stage keeps it.
+    let parent = tempdir().unwrap();
+    let root = parent.path().join("helmet");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("project.toml"), "").unwrap();
+    let proposal = Engine::new(vec![Box::new(DirectoryName)])
+        .prepare(
+            &root,
+            &["named:project.toml".into()],
+            UpdateOptions::default(),
+        )
+        .unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(proposal.changes[0].after, "helmet");
+}

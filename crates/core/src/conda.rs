@@ -779,6 +779,15 @@ impl Adapter for Conda {
             "--lockfile".into(),
             stage.join(&lock).to_string_lossy().into(),
         ]);
+        // Without `platforms:` in the environment, conda-lock locks its own
+        // defaults, not the platforms the existing lock was made for.
+        let parsed: Value = serde_yaml::from_slice(&source)
+            .map_err(|e| Error::Invalid(format!("invalid environment file: {e}")))?;
+        if strings(parsed.get("platforms")).is_empty() && before_text.is_some() {
+            for platform in platforms(stage, target, &parsed) {
+                args.extend(["--platform".into(), platform]);
+            }
+        }
         if before_text.is_some() {
             for package in &options.packages {
                 args.extend(["--update".into(), package.clone()]);
@@ -802,13 +811,15 @@ impl Adapter for Conda {
         let locked: BTreeSet<&str> = after.iter().map(|p| p.platform.as_str()).collect();
         for declaration in self.declarations(stage, target)? {
             for platform in &locked {
+                // conda-lock locks a pip requirement that a conda package of
+                // the same name satisfies as that conda package only.
                 let found = after.iter().any(|p| {
                     p.platform == *platform
-                        && p.ecosystem == declaration.ecosystem
-                        && if p.ecosystem == "pypi" {
+                        && if declaration.ecosystem == "pypi" {
                             pypi_key(&p.name) == pypi_key(&declaration.package)
                         } else {
-                            p.name.eq_ignore_ascii_case(&declaration.package)
+                            p.ecosystem == declaration.ecosystem
+                                && p.name.eq_ignore_ascii_case(&declaration.package)
                         }
                 });
                 if !found {

@@ -556,14 +556,55 @@ impl Adapter for Uv {
         } else {
             vec![]
         };
-        let mut args = lock(&[]);
-        if upgrades.is_empty() {
-            args.push("--upgrade".into());
+        let lock_file = stage.join(lock_path(target));
+        let attempt = |upgrades: &[&str]| -> Result<String> {
+            let mut args = lock(&[]);
+            if upgrades.is_empty() {
+                args.push("--upgrade".into());
+            }
+            for name in upgrades {
+                args.extend(["--upgrade-package".into(), (*name).to_owned()]);
+            }
+            let previous = fs::read(&lock_file).ok();
+            let output = run_env(&uv, &args, &dir, timeout, options.tool_env("uv"))?;
+            // Pinning a fix version in every fork of a lock can move another
+            // package back, such as an older requests for an old Python; a
+            // precise update never does that, so it is undone.
+            if !precise.is_empty() {
+                let after = lock_inventory(&fs::read_to_string(&lock_file)?)?;
+                if let Some(package) = downgraded(check.before(), &after) {
+                    if let Some(previous) = previous {
+                        fs::write(&lock_file, previous)?;
+                    }
+                    return Err(Error::Operation(format!(
+                        "No solution found without moving {package} back"
+                    )));
+                }
+            }
+            Ok(output)
+        };
+        match attempt(&upgrades) {
+            // A fix version the resolver cannot reach, such as one a parent's
+            // requirement excludes or one that moves another package back,
+            // leaves its package where it is; the security update then
+            // reports that fix as blocked. The others are pinned one at a
+            // time, keeping each uv can reach.
+            Err(error) if !precise.is_empty() && unsatisfiable(&error) => {
+                let mut kept: Vec<&str> = options.packages.iter().map(String::as_str).collect();
+                for request in &precise {
+                    let mut trial = kept.clone();
+                    trial.push(request);
+                    match attempt(&trial) {
+                        Ok(_) => kept = trial,
+                        Err(error) if unsatisfiable(&error) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            result => {
+                result?;
+            }
         }
-        for name in upgrades {
-            args.extend(["--upgrade-package".into(), name.to_owned()]);
-        }
-        run_env(&uv, &args, &dir, timeout, options.tool_env("uv"))?;
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env(
             &uv,
@@ -574,6 +615,36 @@ impl Adapter for Uv {
         )?;
         check.candidate(stage, target, &resolved, vec![])
     }
+}
+
+/// The first package whose lowest locked version is lower in `after` than in
+/// `before`.
+fn downgraded(before: &[Package], after: &[Package]) -> Option<String> {
+    let scheme = crate::ecosystem::scheme("pypi")?;
+    let lowest = |packages: &[Package], name: &str| {
+        packages
+            .iter()
+            .filter(|p| p.name == name)
+            .map(|p| p.version.as_str())
+            .min_by(|a, b| scheme.compare(a, b))
+            .map(str::to_owned)
+    };
+    after.iter().find_map(|p| {
+        let was = lowest(before, &p.name)?;
+        let now = lowest(after, &p.name)?;
+        (scheme.compare(&now, &was) == std::cmp::Ordering::Less)
+            .then(|| format!("{} {was} to {now}", p.name))
+    })
+}
+
+/// Whether uv failed because the requirements have no solution, rather than
+/// for a reason another attempt would share (the network, a build).
+fn unsatisfiable(error: &Error) -> bool {
+    // uv wraps its explanation, so words are compared across line breaks.
+    let message = error.to_string();
+    let words: Vec<&str> = message.split_whitespace().collect();
+    let message = words.join(" ");
+    message.contains("No solution found") || message.contains("are unsatisfiable")
 }
 
 /// Apply the edits of one manifest's text, keeping comments and layout.

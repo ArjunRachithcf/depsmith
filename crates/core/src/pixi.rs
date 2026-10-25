@@ -248,7 +248,32 @@ impl Adapter for Pixi {
             "--manifest-path".into(),
             manifest.to_string_lossy().into(),
         ];
-        args.extend(options.packages.clone());
+        // `pixi update` names packages as the lock records them, so a PyPI
+        // package declared as `GitPython` is updated as `gitpython`.
+        args.extend(options.packages.iter().map(|name| {
+            before
+                .iter()
+                .find(|p| {
+                    !options.upgrade
+                        && p.ecosystem == "pypi"
+                        && crate::security::same_name("pypi", &p.name, name)
+                })
+                .map_or_else(|| name.clone(), |p| p.name.clone())
+        }));
+        // A plain update would move Git pins: update every other package.
+        let git = git_artifacts(&before);
+        if options.packages.is_empty()
+            && !options.upgrade
+            && !options.refresh_git
+            && !git.is_empty()
+        {
+            let others: std::collections::BTreeSet<&str> = before
+                .iter()
+                .filter(|p| !git.contains(&p.artifact))
+                .map(|p| p.name.as_str())
+                .collect();
+            args.extend(others.into_iter().map(str::to_owned));
+        }
         run_env(
             &options.tool("pixi"),
             &args,

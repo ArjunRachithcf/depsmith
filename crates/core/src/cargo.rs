@@ -674,16 +674,83 @@ impl Adapter for Cargo {
         let mut report = String::new();
         if options.precise.is_empty() || !options.packages.is_empty() {
             report = run_env_output(&cargo, &args, stage, timeout, &msrv)?.1;
+            // A whole update moves Git dependencies to their branch's newest
+            // commit; without --refresh-git, put each back on its commit.
+            if !options.refresh_git && options.packages.is_empty() && check.has_git_pins() {
+                let after = lock_inventory(&fs::read_to_string(stage.join(lock_path(target)))?)?;
+                for pinned in check
+                    .before()
+                    .iter()
+                    .filter(|p| p.artifact.starts_with("git+"))
+                {
+                    let Some((_, commit)) = pinned.artifact.rsplit_once('#') else {
+                        continue;
+                    };
+                    let Some(moved) = after.iter().find(|p| {
+                        p.name == pinned.name
+                            && p.artifact.starts_with("git+")
+                            && p.artifact != pinned.artifact
+                    }) else {
+                        continue;
+                    };
+                    // A full package ID: a crate can also come from a registry.
+                    let source = moved.artifact.rsplit_once('#').map_or("", |(s, _)| s);
+                    let mut back = update.clone();
+                    back.extend([
+                        "-p".into(),
+                        format!("{source}#{}@{}", moved.name, moved.version),
+                        "--precise".into(),
+                        commit.into(),
+                    ]);
+                    run_env_output(&cargo, &back, stage, timeout, &msrv)?;
+                }
+            }
         }
+        // A crate locked at several versions is named by each locked version
+        // below the request, as cargo requires. The lock is read again for
+        // each request, since an earlier one can move this crate too.
+        let scheme = crate::ecosystem::scheme("cargo");
+        let lock_file = stage.join(lock_path(target));
+        let specs = |request: &crate::PreciseUpdate| -> Result<Vec<String>> {
+            let current = match fs::read_to_string(&lock_file) {
+                Ok(text) => lock_inventory(&text)?,
+                Err(_) => vec![],
+            };
+            let mut locked: Vec<String> = current
+                .iter()
+                .filter(|p| p.name == request.package)
+                .filter(|p| {
+                    scheme.is_some_and(|s| {
+                        s.compare(&p.version, &request.version) == std::cmp::Ordering::Less
+                    })
+                })
+                .map(|p| format!("{}@{}", p.name, p.version))
+                .collect();
+            locked.sort();
+            locked.dedup();
+            if locked.is_empty() {
+                locked.push(request.package.clone());
+            }
+            Ok(locked)
+        };
         for request in &options.precise {
-            let mut precise = update.clone();
-            precise.extend([
-                "-p".into(),
-                request.package.clone(),
-                "--precise".into(),
-                request.version.clone(),
-            ]);
-            report.push_str(&run_env_output(&cargo, &precise, stage, timeout, &msrv)?.1);
+            for spec in specs(request)? {
+                let mut precise = update.clone();
+                precise.extend([
+                    "-p".into(),
+                    spec,
+                    "--precise".into(),
+                    request.version.clone(),
+                ]);
+                match run_env_output(&cargo, &precise, stage, timeout, &msrv) {
+                    Ok((_, output)) => report.push_str(&output),
+                    // A version cargo cannot select, such as one a parent's
+                    // requirement excludes, leaves the crate where it is; the
+                    // security update then reports that fix as blocked.
+                    Err(error) if error.to_string().contains("failed to select a version") => {}
+                    Err(error) => return Err(error),
+                }
+            }
         }
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env_output(

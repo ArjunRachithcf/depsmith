@@ -54,10 +54,6 @@ impl Layout {
         }
         layout
     }
-
-    fn skipped(&self, name: &str) -> bool {
-        self.skip_dirs.contains(name)
-    }
 }
 
 /// Whether `name` matches a file-name `pattern`, where `*` matches any run of
@@ -115,10 +111,10 @@ pub(crate) fn files(root: &Path, layout: &Layout) -> Result<Vec<PathBuf>> {
             .strip_prefix(root)
             .map_err(|e| Error::Operation(e.to_string()))?;
         if entry.file_type().is_some_and(|t| t.is_symlink()) {
-            return Err(Error::Invalid(format!(
-                "symlink requires an explicit staging policy: {}",
-                path.display()
-            )));
+            // Staged as a link, never followed: the walk does not enter it.
+            link_target(root, path)?;
+            paths.push(path.to_path_buf());
+            continue;
         }
         if entry.file_type().is_some_and(|t| t.is_file()) {
             paths.push(path.to_path_buf());
@@ -128,14 +124,10 @@ pub(crate) fn files(root: &Path, layout: &Layout) -> Result<Vec<PathBuf>> {
     // changes SCM dirty-state detection (and can drop required build sources).
     if let Some(snapshot) = crate::scm::Snapshot::read(root)? {
         for path in snapshot.tracked(root)? {
-            if path
-                .components()
-                .any(|c| c.as_os_str().to_str().is_some_and(|n| layout.skipped(n)))
-            {
-                return Err(Error::Invalid(format!(
-                    "tracked file uses an excluded staging directory: {}",
-                    path.display()
-                )));
+            // A tracked file below a directory the walk skips, such as a
+            // source package named `target`, is still part of the project.
+            if fs::symlink_metadata(root.join(&path)).is_ok_and(|m| m.file_type().is_symlink()) {
+                link_target(root, &path)?;
             }
             paths.push(path);
         }
@@ -184,7 +176,42 @@ pub(crate) fn fingerprint(root: &Path, layout: &Layout) -> Result<BTreeMap<PathB
     Ok(inputs)
 }
 
+/// The target of the symlink at `path` (relative to `root`), which must be a
+/// relative link that resolves inside the repository, outside `.git`.
+fn link_target(root: &Path, path: &Path) -> Result<PathBuf> {
+    let target = fs::read_link(root.join(path))?;
+    let resolved = normalize(&path.parent().unwrap_or(Path::new("")).join(&target));
+    let escapes = target.is_absolute()
+        || target
+            .components()
+            .any(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
+        || path
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join(&target)
+            .components()
+            .try_fold(0usize, |depth, c| match c {
+                Component::ParentDir => depth.checked_sub(1),
+                Component::Normal(_) => Some(depth + 1),
+                _ => Some(depth),
+            })
+            .is_none()
+        || !contained(&resolved)
+        || resolved.starts_with(".git");
+    if escapes {
+        return Err(Error::Invalid(format!(
+            "symlink points outside the repository: {} -> {}",
+            path.display(),
+            target.display()
+        )));
+    }
+    Ok(target)
+}
+
 fn file_hash(path: &Path) -> Result<String> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Ok(format!("symlink:{}", fs::read_link(path)?.display()));
+    }
     let mut hash = Sha256::new();
     std::io::copy(&mut fs::File::open(path)?, &mut hash)?;
     #[cfg(unix)]
@@ -215,13 +242,41 @@ pub(crate) fn stage(
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(root.join(path), dest)?;
+        let source = root.join(path);
+        if fs::symlink_metadata(&source)?.file_type().is_symlink() {
+            link(
+                &link_target(root, path)?,
+                &dest,
+                destination.join(path).parent(),
+            )?;
+        } else {
+            fs::copy(source, dest)?;
+        }
     }
     if let Some(snapshot) = crate::scm::Snapshot::read(root)? {
         snapshot.copy(destination)?;
     }
     if fingerprint(destination, layout)? != *inputs {
         return Err(Error::Stale("inputs changed during staging".into()));
+    }
+    Ok(())
+}
+
+/// Create a symlink at `dest` pointing to `target`.
+#[cfg(unix)]
+fn link(target: &Path, dest: &Path, _parent: Option<&Path>) -> Result<()> {
+    std::os::unix::fs::symlink(target, dest)?;
+    Ok(())
+}
+
+/// Create a symlink at `dest` pointing to `target`, as a directory link when
+/// the target (relative to `parent`) is a directory.
+#[cfg(windows)]
+fn link(target: &Path, dest: &Path, parent: Option<&Path>) -> Result<()> {
+    if parent.is_some_and(|p| p.join(target).is_dir()) {
+        std::os::windows::fs::symlink_dir(target, dest)?;
+    } else {
+        std::os::windows::fs::symlink_file(target, dest)?;
     }
     Ok(())
 }

@@ -573,6 +573,40 @@ impl Selection {
         self.moves.is_empty()
     }
 
+    /// When a fix release is itself affected by newer advisories, aim each
+    /// such package past them: true, with its fix version raised to the
+    /// lowest release that fixes those too, when every finding the
+    /// candidate's `report` introduced is on a package this update moves
+    /// and a newer release fixes it; false, changing nothing, otherwise.
+    pub(crate) fn raise(&mut self, report: &ScanReport) -> bool {
+        let mut raised: Vec<(usize, String)> = vec![];
+        for finding in report.introduced.iter().filter(|f| f.suppression.is_none()) {
+            let Some(index) = self.moves.iter().position(|m| {
+                m.ecosystem == ecosystem_of(finding)
+                    && same_name(&m.ecosystem, &finding.package, &m.declared)
+            }) else {
+                return false;
+            };
+            let m = &self.moves[index];
+            let Some(fix) = finding
+                .fix_versions
+                .iter()
+                .filter(|v| compare(&m.ecosystem, v, &m.fix_version) == Ordering::Greater)
+                .min_by(|a, b| compare(&m.ecosystem, a, b))
+            else {
+                return false;
+            };
+            raised.push((index, fix.clone()));
+        }
+        for (index, version) in &raised {
+            let m = &mut self.moves[*index];
+            if compare(&m.ecosystem, version, &m.fix_version) == Ordering::Greater {
+                m.fix_version.clone_from(version);
+            }
+        }
+        !raised.is_empty()
+    }
+
     /// The options that move exactly the selected packages: precise
     /// updates to their fix versions, or by name with `newest`, which is
     /// what an update by name does.

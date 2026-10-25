@@ -194,6 +194,44 @@ fn doctor_explains_prerequisites_in_plain_text() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_refused_apply_still_reports_why_each_target_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempdir().unwrap();
+    let tools = tempdir().unwrap();
+    fs::write(root.path().join("pixi.toml"), "[workspace]\nname='demo'\n").unwrap();
+    let backend = tools.path().join("pixi");
+    fs::write(&backend, "#!/bin/sh\necho 'solver exploded' >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&backend, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_depsmith"))
+        .args([
+            "update",
+            "--apply",
+            "--yes",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--target",
+            "pixi:pixi.toml",
+            "--tool",
+            &format!("pixi={}", backend.display()),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = result["error"].as_str().unwrap();
+    assert!(error.contains("partial application"), "{error}");
+    let failure = result["proposal"]["failures"][0]["message"]
+        .as_str()
+        .unwrap();
+    assert!(failure.contains("solver exploded"), "{failure}");
+    assert!(result["application"].is_null());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("solver exploded"), "{stderr}");
+}
+
 #[test]
 fn text_report_lists_validation_notes() {
     let root = tempdir().unwrap();

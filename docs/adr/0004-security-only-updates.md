@@ -18,6 +18,7 @@ Some teams accept dependency changes only when they fix a vulnerability, so a **
 - **Targets can be transitive**, so security updates select packages from the inventory, not only from declarations.
   - Each adapter must show, in its live tests, that its tool moves a nested package named this way.
   - Until it does, its transitive fixes are reported as blocked.
+- **A fix release can itself be vulnerable.** When the candidate scan shows findings in a targeted package that its fix release introduced, and newer releases fix them, the package's fix version is raised to cover them and the target is resolved again, at most three times. Findings introduced anywhere else, or with no newer fix, still fail the update.
 - **Other packages may still move.** Re-solving can move other packages (a target's own dependencies). Every package that moved without being targeted is listed in the proposal, and the baseline/candidate scan must show each targeted finding resolved and none introduced.
 - **Blocked fixes name the declaration to change.**
   - When the blocker is a declared constraint, the suggestion names it, and it is accepted with `--accept NAME=REQUIREMENT` as today.

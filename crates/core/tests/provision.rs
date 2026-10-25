@@ -695,6 +695,39 @@ mod symlinks {
     }
 
     #[test]
+    fn executables_the_tool_runs_keep_their_mode() {
+        // Node.js: bin/npm links into lib/, and npm runs bin/node.
+        use std::os::unix::fs::PermissionsExt;
+        let encoder = flate2::write::GzEncoder::new(vec![], flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        for (path, mode) in [("tool-x/bin/node", 0o755), ("tool-x/lib/data", 0o644)] {
+            let mut file = tar::Header::new_gnu();
+            file.set_size(PROGRAM.len() as u64);
+            file.set_mode(mode);
+            file.set_cksum();
+            builder.append_data(&mut file, path, PROGRAM).unwrap();
+        }
+        let tarball = builder.into_inner().unwrap().finish().unwrap();
+        let (base, _) = serve(vec![("/t.tar.gz", tarball.clone())]);
+        let d = download(
+            &base,
+            "/t.tar.gz",
+            &tarball,
+            Archive::TarGz,
+            "tool-x/lib/data",
+        );
+        let cache = tempfile::tempdir().unwrap();
+        installed(cache.path(), &d).unwrap();
+        let mode = |path: &str| {
+            fs::metadata(cache.path().join("tool/1.2.3").join(path))
+                .unwrap()
+                .permissions()
+                .mode()
+        };
+        assert_eq!(mode("tool-x/bin/node") & 0o111, 0o111);
+    }
+
+    #[test]
     fn links_leaving_the_archive_are_refused() {
         let tarball = with_link("tool-x/bin/tool", "../../../../etc/passwd");
         let (base, _) = serve(vec![("/t.tar.gz", tarball.clone())]);

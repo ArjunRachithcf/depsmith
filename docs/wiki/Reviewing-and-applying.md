@@ -53,8 +53,12 @@ configuration includes or filters, and worktree-specific configuration are
 rejected with a configuration error. Large histories add copying and hashing
 cost.
 
-Repository symlinks and local dependencies outside the repository are
-rejected.
+A symlink whose relative target stays inside the repository is staged as the
+same symlink and never followed; symlinks that point outside the repository
+(absolute, or climbing above its root) and local dependencies outside the
+repository are rejected. Files Git tracks are staged even inside directories
+that discovery skips, such as a source package named `target`. Updates are
+never written through a symlink.
 
 ## Backend processes
 

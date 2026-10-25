@@ -236,6 +236,66 @@ mod stand_in {
     const SIX: &str =
         "channels: [conda-forge]\ndependencies:\n  - conda-forge::six ==1.16.0  # pinned\n";
 
+    /// The platforms conda-lock is asked to lock, from a stand-in that
+    /// records its arguments, for `environment` beside an existing lock.
+    fn requested_platforms(environment: &str) -> Vec<String> {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("environment.yml"), environment).unwrap();
+        fs::write(
+            root.path().join("conda-lock.yml"),
+            LOCK.replace("[linux-64]", "[linux-64, osx-arm64]"),
+        )
+        .unwrap();
+        let script = conda_lock(tools.path());
+        let recorder = tools.path().join("recording-conda-lock");
+        let args = tools.path().join("args");
+        fs::write(
+            &recorder,
+            format!(
+                "#!/bin/sh\necho \"$@\" > '{}'\nexec '{script}' \"$@\"\n",
+                args.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&recorder, fs::Permissions::from_mode(0o755)).unwrap();
+        let options = UpdateOptions {
+            tools: BTreeMap::from([
+                ("conda-lock".into(), recorder.to_string_lossy().into_owned()),
+                ("conda".into(), "micromamba".into()),
+            ]),
+            ..Default::default()
+        };
+        Engine::new(vec![Box::new(Fixed)])
+            .prepare(root.path(), &["conda:environment.yml".into()], options)
+            .unwrap();
+        let recorded = fs::read_to_string(args).unwrap();
+        let words: Vec<&str> = recorded.split_whitespace().collect();
+        words
+            .windows(2)
+            .filter(|w| w[0] == "--platform")
+            .map(|w| w[1].to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_pip_requirement_a_conda_package_satisfies_is_locked() {
+        // conda-lock locks only the conda six for a pip six it satisfies.
+        let proposal = prepare(
+            "channels: [conda-forge]\ndependencies:\n  - six\n  - pip:\n    - six\n",
+            &[],
+        );
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    }
+
+    #[test]
+    fn an_update_keeps_the_platforms_of_the_existing_lock() {
+        // Without `platforms:`, conda-lock would lock its four defaults.
+        assert_eq!(requested_platforms(SIX), ["linux-64", "osx-arm64"]);
+        // Declared platforms are the environment's own; conda-lock reads them.
+        assert!(requested_platforms(&format!("{SIX}platforms: [win-64]\n")).is_empty());
+    }
+
     #[test]
     fn pins_are_suggested_and_accepted_in_place() {
         let proposal = prepare(SIX, &[]);

@@ -232,13 +232,22 @@ fn not_through_links(out: &Path, relative: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_entry(out: &Path, relative: &Path, reader: &mut dyn Read) -> Result<()> {
+/// Write the archive file `relative` under `out`, executable when the
+/// archive marks it so (Node.js's `bin/node`, which its `npm` runs).
+fn write_entry(out: &Path, relative: &Path, reader: &mut dyn Read, executable: bool) -> Result<()> {
     not_through_links(out, relative)?;
     let path = out.join(confined(relative, "archive entry")?);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    std::io::copy(reader, &mut fs::File::create(path)?)?;
+    std::io::copy(reader, &mut fs::File::create(&path)?)?;
+    #[cfg(unix)]
+    if executable {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+    }
+    #[cfg(not(unix))]
+    let _ = executable;
     Ok(())
 }
 
@@ -299,7 +308,7 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
                 Some(Setup::Run { installer, .. }) => Path::new(installer),
                 _ => Path::new(&download.executable),
             };
-            write_entry(out, name, &mut &bytes[..])
+            write_entry(out, name, &mut &bytes[..], false)
         }
         Archive::TarGz => {
             let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
@@ -319,7 +328,8 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
                     continue;
                 }
                 let path = entry.path().map_err(|e| unreadable(&e))?.into_owned();
-                write_entry(out, &path, &mut entry)?;
+                let executable = entry.header().mode().is_ok_and(|m| m & 0o111 != 0);
+                write_entry(out, &path, &mut entry, executable)?;
             }
             Ok(())
         }
@@ -332,7 +342,8 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
                     continue;
                 }
                 let path = PathBuf::from(entry.name());
-                write_entry(out, &path, &mut entry)?;
+                let executable = entry.unix_mode().is_some_and(|m| m & 0o111 != 0);
+                write_entry(out, &path, &mut entry, executable)?;
             }
             Ok(())
         }
