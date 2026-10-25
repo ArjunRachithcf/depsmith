@@ -466,6 +466,9 @@ impl Engine {
                 }
             }
             let mut security = None;
+            // The options before a security update picks its packages, to
+            // pick them again when it aims past a fix release.
+            let plain = options.clone();
             if options.security_only {
                 match security::select(
                     adapter,
@@ -515,7 +518,7 @@ impl Engine {
                     }
                 }
             }
-            let (options, fallback) = self.precise_fallback(&target, options);
+            let (mut options, fallback) = self.precise_fallback(&target, options);
             proposal.validation.extend(fallback);
             // Moving nothing must not become moving everything.
             if options.packages.is_empty()
@@ -533,190 +536,218 @@ impl Engine {
                 ));
                 continue;
             }
-            // The stage has the repository directory's name: npm names a lock
-            // after the directory of a package.json without a name, and Pixi
-            // a workspace without one.
-            let staging = tempfile::tempdir()?;
-            let stage = staging
-                .path()
-                .join(root.file_name().unwrap_or("repository".as_ref()));
-            fs::create_dir(&stage)?;
-            working_tree::stage(&root, &stage, &proposal.inputs, &proposal.layout)?;
-            let mut conflict = false;
-            let prepared = adapter
-                .availability(stage.as_path(), &target)
-                .and_then(|config| {
-                    // Acceptance edits the staged declarations before the
-                    // adapter resolves; suggestions describe the result.
-                    let lookup = constraints::Lookup::new(stage.as_path(), &options, config);
-                    let accepted = constraints::accept(
-                        adapter,
-                        stage.as_path(),
-                        &target,
-                        &options.accept,
-                        &lookup,
-                    )?;
-                    let resolve = UpdateOptions {
-                        accept: vec![],
-                        ..options.clone()
-                    };
-                    let mut candidate = adapter.prepare(stage.as_path(), &target, &resolve)?;
-                    candidate.validation.splice(0..0, accepted);
-                    candidate.suggestions.extend(constraints::suggest(
-                        adapter,
-                        stage.as_path(),
-                        &target,
-                        &lookup,
-                    )?);
-                    Ok(candidate)
-                })
-                .and_then(|mut candidate| {
-                    if options.scan {
-                        let report = scan::scan_pair(
-                            &target.id,
-                            if candidate.baseline_available {
-                                Some(&candidate.before)
+            // A fix release that newer advisories affect is aimed past, and
+            // the target resolved again, a few times at most.
+            let mut rounds = 0;
+            loop {
+                // The stage has the repository directory's name: npm names a lock
+                // after the directory of a package.json without a name, and Pixi
+                // a workspace without one.
+                let staging = tempfile::tempdir()?;
+                let stage = staging
+                    .path()
+                    .join(root.file_name().unwrap_or("repository".as_ref()));
+                fs::create_dir(&stage)?;
+                working_tree::stage(&root, &stage, &proposal.inputs, &proposal.layout)?;
+                let mut conflict = false;
+                let mut retry = false;
+                let prepared = adapter
+                    .availability(stage.as_path(), &target)
+                    .and_then(|config| {
+                        // Acceptance edits the staged declarations before the
+                        // adapter resolves; suggestions describe the result.
+                        let lookup = constraints::Lookup::new(stage.as_path(), &options, config);
+                        let accepted = constraints::accept(
+                            adapter,
+                            stage.as_path(),
+                            &target,
+                            &options.accept,
+                            &lookup,
+                        )?;
+                        let resolve = UpdateOptions {
+                            accept: vec![],
+                            ..options.clone()
+                        };
+                        let mut candidate = adapter.prepare(stage.as_path(), &target, &resolve)?;
+                        candidate.validation.splice(0..0, accepted);
+                        candidate.suggestions.extend(constraints::suggest(
+                            adapter,
+                            stage.as_path(),
+                            &target,
+                            &lookup,
+                        )?);
+                        Ok(candidate)
+                    })
+                    .and_then(|mut candidate| {
+                        if options.scan {
+                            let report = scan::scan_pair(
+                                &target.id,
+                                if candidate.baseline_available {
+                                    Some(&candidate.before)
+                                } else {
+                                    None
+                                },
+                                &candidate.after,
+                                &options,
+                                stage.as_path(),
+                            )?;
+                            let passed = report.policy_passed;
+                            if let Some(chosen) = &mut security {
+                                if rounds < 3
+                                    && !options.precise.is_empty()
+                                    && chosen.raise(&report)
+                                {
+                                    retry = true;
+                                    return Ok(());
+                                }
+                                let verified = adapter
+                                    .declarations(stage.as_path(), &target)
+                                    .and_then(|declarations| {
+                                        let graph = adapter.lock_graph(stage.as_path(), &target)?;
+                                        chosen.verify(
+                                            &target,
+                                            &report,
+                                            &candidate.after,
+                                            &declarations,
+                                            graph.as_ref(),
+                                        )
+                                    });
+                                let (fixes, suggestions) = match verified {
+                                    Ok(outcome) => outcome,
+                                    Err(error) => {
+                                        proposal.scans.push(report);
+                                        return Err(error);
+                                    }
+                                };
+                                proposal.security.extend(fixes);
+                                candidate.suggestions.extend(suggestions);
+                            }
+                            proposal.scans.push(report);
+                            if !passed {
+                                return Err(Error::Policy(
+                                    "vulnerability threshold exceeded".into(),
+                                ));
+                            }
+                        }
+                        let mut changes = vec![];
+                        for path in candidate.files {
+                            working_tree::output_path(stage.as_path(), &path)?;
+                            working_tree::output_path(&root, &path)?;
+                            let after = fs::read_to_string(stage.as_path().join(&path))?;
+                            let before = if root.join(&path).exists() {
+                                Some(fs::read_to_string(root.join(&path))?)
                             } else {
                                 None
-                            },
-                            &candidate.after,
-                            &options,
-                            stage.as_path(),
-                        )?;
-                        let passed = report.policy_passed;
-                        if let Some(chosen) = &security {
-                            let verified = adapter.declarations(stage.as_path(), &target).and_then(
-                                |declarations| {
-                                    let graph = adapter.lock_graph(stage.as_path(), &target)?;
-                                    chosen.verify(
-                                        &target,
-                                        &report,
-                                        &candidate.after,
-                                        &declarations,
-                                        graph.as_ref(),
-                                    )
-                                },
-                            );
-                            let (fixes, suggestions) = match verified {
-                                Ok(outcome) => outcome,
-                                Err(error) => {
-                                    proposal.scans.push(report);
-                                    return Err(error);
-                                }
                             };
-                            proposal.security.extend(fixes);
-                            candidate.suggestions.extend(suggestions);
+                            if before.as_deref() != Some(&after) {
+                                let diff = similar::TextDiff::from_lines(
+                                    before.as_deref().unwrap_or(""),
+                                    &after,
+                                )
+                                .unified_diff()
+                                .header(
+                                    &format!("a/{}", path.display()),
+                                    &format!("b/{}", path.display()),
+                                )
+                                .to_string();
+                                changes.push(FileChange {
+                                    target: target.id.clone(),
+                                    path,
+                                    before,
+                                    after,
+                                    diff,
+                                });
+                            }
                         }
-                        proposal.scans.push(report);
-                        if !passed {
-                            return Err(Error::Policy("vulnerability threshold exceeded".into()));
-                        }
-                    }
-                    let mut changes = vec![];
-                    for path in candidate.files {
-                        working_tree::output_path(stage.as_path(), &path)?;
-                        working_tree::output_path(&root, &path)?;
-                        let after = fs::read_to_string(stage.as_path().join(&path))?;
-                        let before = if root.join(&path).exists() {
-                            Some(fs::read_to_string(root.join(&path))?)
-                        } else {
-                            None
-                        };
-                        if before.as_deref() != Some(&after) {
-                            let diff = similar::TextDiff::from_lines(
-                                before.as_deref().unwrap_or(""),
-                                &after,
-                            )
-                            .unified_diff()
-                            .header(
-                                &format!("a/{}", path.display()),
-                                &format!("b/{}", path.display()),
-                            )
-                            .to_string();
-                            changes.push(FileChange {
-                                target: target.id.clone(),
-                                path,
-                                before,
-                                after,
-                                diff,
-                            });
-                        }
-                    }
-                    if changes
-                        .iter()
-                        .any(|c| proposal.changes.iter().any(|p| p.path == c.path))
-                    {
-                        conflict = true;
-                        return Err(Error::Invalid(
-                            "targets propose overlapping file changes; select one owner".into(),
-                        ));
-                    }
-                    let explained = proposal.dependencies.len();
-                    for before in &candidate.before {
-                        if !candidate.after.iter().any(|p| p.same_resolution(before)) {
-                            let after = candidate
-                                .after
-                                .iter()
-                                .find(|p| {
-                                    p.name == before.name
-                                        && p.ecosystem == before.ecosystem
-                                        && p.platform == before.platform
-                                })
-                                .cloned();
-                            proposal.dependencies.push(DependencyChange {
-                                before: Some(before.clone()),
-                                after,
-                                introducers: vec![],
-                                paths: vec![],
-                            });
-                        }
-                    }
-                    for after in &candidate.after {
-                        if !candidate.before.iter().any(|p| {
-                            p.name == after.name
-                                && p.ecosystem == after.ecosystem
-                                && p.platform == after.platform
-                        }) {
-                            proposal.dependencies.push(DependencyChange {
-                                before: None,
-                                after: Some(after.clone()),
-                                introducers: vec![],
-                                paths: vec![],
-                            });
-                        }
-                    }
-                    if let Some(chosen) = &security {
-                        let untargeted = chosen.untargeted(&proposal.dependencies[explained..]);
-                        if !untargeted.is_empty() {
-                            proposal.validation.push(format!(
-                                "{}: moved without being targeted: {}",
-                                target.id,
-                                untargeted.join(", ")
+                        if changes
+                            .iter()
+                            .any(|c| proposal.changes.iter().any(|p| p.path == c.path))
+                        {
+                            conflict = true;
+                            return Err(Error::Invalid(
+                                "targets propose overlapping file changes; select one owner".into(),
                             ));
                         }
-                    }
-                    proposal.validation.extend(explain(
-                        &mut proposal.dependencies[explained..],
-                        adapter,
-                        &root,
-                        stage.as_path(),
-                        &target,
+                        let explained = proposal.dependencies.len();
+                        for before in &candidate.before {
+                            if !candidate.after.iter().any(|p| p.same_resolution(before)) {
+                                let after = candidate
+                                    .after
+                                    .iter()
+                                    .find(|p| {
+                                        p.name == before.name
+                                            && p.ecosystem == before.ecosystem
+                                            && p.platform == before.platform
+                                    })
+                                    .cloned();
+                                proposal.dependencies.push(DependencyChange {
+                                    before: Some(before.clone()),
+                                    after,
+                                    introducers: vec![],
+                                    paths: vec![],
+                                });
+                            }
+                        }
+                        for after in &candidate.after {
+                            if !candidate.before.iter().any(|p| {
+                                p.name == after.name
+                                    && p.ecosystem == after.ecosystem
+                                    && p.platform == after.platform
+                            }) {
+                                proposal.dependencies.push(DependencyChange {
+                                    before: None,
+                                    after: Some(after.clone()),
+                                    introducers: vec![],
+                                    paths: vec![],
+                                });
+                            }
+                        }
+                        if let Some(chosen) = &security {
+                            let untargeted = chosen.untargeted(&proposal.dependencies[explained..]);
+                            if !untargeted.is_empty() {
+                                proposal.validation.push(format!(
+                                    "{}: moved without being targeted: {}",
+                                    target.id,
+                                    untargeted.join(", ")
+                                ));
+                            }
+                        }
+                        proposal.validation.extend(explain(
+                            &mut proposal.dependencies[explained..],
+                            adapter,
+                            &root,
+                            stage.as_path(),
+                            &target,
+                        ));
+                        proposal.changes.extend(changes);
+                        proposal.suggestions.extend(candidate.suggestions);
+                        proposal.unresolved.extend(candidate.unresolved);
+                        proposal.validation.extend(candidate.validation);
+                        Ok(())
+                    });
+                if retry {
+                    let chosen = security
+                        .as_ref()
+                        .expect("only a security update is retried");
+                    options = self.precise_fallback(&target, chosen.options(&plain)).0;
+                    rounds += 1;
+                    proposal.validation.push(format!(
+                        "{}: a fix release is affected by newer advisories; aiming past it",
+                        target.id
                     ));
-                    proposal.changes.extend(changes);
-                    proposal.suggestions.extend(candidate.suggestions);
-                    proposal.unresolved.extend(candidate.unresolved);
-                    proposal.validation.extend(candidate.validation);
-                    Ok(())
-                });
-            if let Err(error) = prepared {
-                if conflict {
-                    return Err(error);
+                    continue;
                 }
-                proposal.failures.push(Failure {
-                    target: target.id,
-                    code: error.exit_code(),
-                    message: error.to_string(),
-                });
+                if let Err(error) = prepared {
+                    if conflict {
+                        return Err(error);
+                    }
+                    proposal.failures.push(Failure {
+                        target: target.id,
+                        code: error.exit_code(),
+                        message: error.to_string(),
+                    });
+                }
+                break;
             }
         }
         Ok(proposal)

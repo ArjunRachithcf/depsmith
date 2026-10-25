@@ -77,8 +77,15 @@ fn prepare_with_releases(
     releases: &[(&str, &[&str])],
     failing: &[&str],
 ) -> Run {
-    prepare_refusing(
-        pyproject, baseline, next, advisories, options, releases, failing, None,
+    prepare_scripted(
+        pyproject,
+        baseline,
+        next,
+        advisories,
+        options,
+        releases,
+        failing,
+        &|_| String::new(),
     )
 }
 
@@ -93,16 +100,40 @@ fn prepare_refusing(
     options: UpdateOptions,
     releases: &[(&str, &[&str])],
     failing: &[&str],
-    refuse: Option<&str>,
+    refuse: &str,
+) -> Run {
+    let refusal = format!("case \"$*\" in *'{refuse}'*) echo '  × No solution found when resolving dependencies:' >&2; exit 1;; esac\n");
+    prepare_scripted(
+        pyproject,
+        baseline,
+        next,
+        advisories,
+        options,
+        releases,
+        failing,
+        &|_| refusal.clone(),
+    )
+}
+
+/// [`prepare_with_releases`] with `prefix(tools directory)` run first by the
+/// uv stand-in, to answer some invocations differently.
+#[allow(clippy::too_many_arguments)]
+fn prepare_scripted(
+    pyproject: &str,
+    baseline: &str,
+    next: &str,
+    advisories: &[(String, String)],
+    options: UpdateOptions,
+    releases: &[(&str, &[&str])],
+    failing: &[&str],
+    prefix: &dyn Fn(&std::path::Path) -> String,
 ) -> Run {
     let root = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
     fs::write(root.path().join("pyproject.toml"), pyproject).unwrap();
     fs::write(root.path().join("uv.lock"), baseline).unwrap();
     let dir = tools.path();
-    let refusal = refuse.map_or(String::new(), |r| {
-        format!("case \"$*\" in *'{r}'*) echo '  × No solution found when resolving dependencies:' >&2; exit 1;; esac\n")
-    });
+    let refusal = prefix(dir);
     fs::write(dir.join("next.lock"), next).unwrap();
     let rules: String = advisories
         .iter()
@@ -336,7 +367,7 @@ fn a_fix_the_resolver_cannot_reach_is_blocked_and_the_others_still_move() {
         UpdateOptions::default(),
         &[],
         &[],
-        Some("urllib3==2.0.7"),
+        "urllib3==2.0.7",
     );
     let proposal = run.result.unwrap();
     assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
@@ -349,6 +380,45 @@ fn a_fix_the_resolver_cannot_reach_is_blocked_and_the_others_still_move() {
         .suggestions
         .iter()
         .any(|s| s.reason.contains("GHSA-transitive")));
+}
+
+#[test]
+fn a_fix_release_that_newer_advisories_affect_is_aimed_past() {
+    let raised = lock("1.15.0", "3.8", "2.0.0");
+    let run = prepare_scripted(
+        PYPROJECT,
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[
+            advisory("GHSA-old", "idna", "3.6", "High", &["3.7"]),
+            // 3.7, the fix of GHSA-old, has an advisory of its own.
+            advisory("GHSA-new", "idna", "3.7", "High", &["3.8"]),
+        ],
+        UpdateOptions::default(),
+        &[],
+        &[],
+        &|dir| {
+            fs::write(dir.join("raised.lock"), &raised).unwrap();
+            format!(
+                "case \"$*\" in *--locked*) cmp -s '{d}/raised.lock' uv.lock && exit 0;; *'idna==3.8'*) echo \"$*\" >> '{d}/locks'; cp '{d}/raised.lock' uv.lock; exit 0;; esac\n",
+                d = dir.display()
+            )
+        },
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert!(
+        run.locks.iter().any(|l| l.contains("idna==3.8")),
+        "{:?}",
+        run.locks
+    );
+    let old = fix(&proposal, "GHSA-old");
+    assert_eq!(old.outcome, FixOutcome::Fixed);
+    assert_eq!(old.fix_version.as_deref(), Some("3.8"));
+    assert!(proposal
+        .validation
+        .iter()
+        .any(|v| v.contains("aiming past it")));
 }
 
 /// `lock` without the edge from idna to urllib3, so no declared dependency
