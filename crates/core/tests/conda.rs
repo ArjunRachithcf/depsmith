@@ -279,6 +279,16 @@ mod stand_in {
     }
 
     #[test]
+    fn a_pip_requirement_a_conda_package_satisfies_is_locked() {
+        // conda-lock locks only the conda six for a pip six it satisfies.
+        let proposal = prepare(
+            "channels: [conda-forge]\ndependencies:\n  - six\n  - pip:\n    - six\n",
+            &[],
+        );
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    }
+
+    #[test]
     fn an_update_keeps_the_platforms_of_the_existing_lock() {
         // Without `platforms:`, conda-lock would lock its four defaults.
         assert_eq!(requested_platforms(SIX), ["linux-64", "osx-arm64"]);

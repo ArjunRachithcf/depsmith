@@ -811,13 +811,15 @@ impl Adapter for Conda {
         let locked: BTreeSet<&str> = after.iter().map(|p| p.platform.as_str()).collect();
         for declaration in self.declarations(stage, target)? {
             for platform in &locked {
+                // conda-lock locks a pip requirement that a conda package of
+                // the same name satisfies as that conda package only.
                 let found = after.iter().any(|p| {
                     p.platform == *platform
-                        && p.ecosystem == declaration.ecosystem
-                        && if p.ecosystem == "pypi" {
+                        && if declaration.ecosystem == "pypi" {
                             pypi_key(&p.name) == pypi_key(&declaration.package)
                         } else {
-                            p.name.eq_ignore_ascii_case(&declaration.package)
+                            p.ecosystem == declaration.ecosystem
+                                && p.name.eq_ignore_ascii_case(&declaration.package)
                         }
                 });
                 if !found {
