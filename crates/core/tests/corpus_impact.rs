@@ -1,7 +1,8 @@
 //! The corpus harness's impact driver (`scripts/corpus/run.py`): after an
 //! applied update in a real repository, compares the target's lock at `HEAD`
 //! with the working tree and walks the change to the target's usage sites.
-//! Ignored by default; the harness sets `CORPUS_ROOT` and `CORPUS_TARGET`
+//! Ignored by default, and does nothing without `CORPUS_ROOT`; the harness
+//! sets it and `CORPUS_TARGET`
 //! (`manager:path`) and runs it with `--ignored --nocapture`.
 use depsmith_core::{
     adapter::Adapter,
@@ -18,7 +19,12 @@ use std::path::{Path, PathBuf};
 #[test]
 #[ignore = "driven by the corpus harness"]
 fn impact_of_the_applied_update() {
-    let root = PathBuf::from(std::env::var("CORPUS_ROOT").expect("CORPUS_ROOT"));
+    // Native integration runs every ignored test; outside the harness
+    // there is no repository to drive.
+    let Some(root) = std::env::var_os("CORPUS_ROOT").map(PathBuf::from) else {
+        eprintln!("CORPUS_ROOT is not set; nothing to drive");
+        return;
+    };
     let id = std::env::var("CORPUS_TARGET").expect("CORPUS_TARGET");
     let (manager, manifest) = id.split_once(':').expect("manager:path");
     let target = Target {

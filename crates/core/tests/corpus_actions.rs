@@ -2,7 +2,8 @@
 //! hosts that cannot reach the GitHub REST API: the real adapter prepares,
 //! applies and re-checks a workflow in a real repository, with releases read
 //! from `git ls-remote --tags` (a plain `vX.Y.Z` tag counts as stable).
-//! Ignored by default; the harness sets `CORPUS_ROOT` and `CORPUS_TARGET`.
+//! Ignored by default, and does nothing without `CORPUS_ROOT`; the harness
+//! sets it and `CORPUS_TARGET`.
 use depsmith_core::{
     actions::{Actions, Release, ReleaseSource},
     apply, Engine, Result, UpdateOptions,
@@ -57,7 +58,12 @@ impl ReleaseSource for GitTags {
 #[test]
 #[ignore = "driven by the corpus harness"]
 fn update_a_workflow_and_check_it_again() {
-    let root = PathBuf::from(std::env::var("CORPUS_ROOT").expect("CORPUS_ROOT"));
+    // Native integration runs every ignored test; outside the harness
+    // there is no repository to drive.
+    let Some(root) = std::env::var_os("CORPUS_ROOT").map(PathBuf::from) else {
+        eprintln!("CORPUS_ROOT is not set; nothing to drive");
+        return;
+    };
     let target = std::env::var("CORPUS_TARGET").expect("CORPUS_TARGET");
     let engine = Engine::new(vec![Box::new(Actions {
         source: Box::new(GitTags),
