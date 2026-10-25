@@ -102,7 +102,7 @@ fn prepare_refusing(
     failing: &[&str],
     refuse: &str,
 ) -> Run {
-    let refusal = format!("case \"$*\" in *'{refuse}'*) echo '  × No solution found when resolving dependencies:' >&2; exit 1;; esac\n");
+    let refusal = format!("case \"$*\" in *'{refuse}'*) printf \"      we can conclude that your project's requirements are\\n      unsatisfiable.\\n\" >&2; exit 1;; esac\n");
     prepare_scripted(
         pyproject,
         baseline,

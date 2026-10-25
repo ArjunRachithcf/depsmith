@@ -640,7 +640,10 @@ fn downgraded(before: &[Package], after: &[Package]) -> Option<String> {
 /// Whether uv failed because the requirements have no solution, rather than
 /// for a reason another attempt would share (the network, a build).
 fn unsatisfiable(error: &Error) -> bool {
+    // uv wraps its explanation, so words are compared across line breaks.
     let message = error.to_string();
+    let words: Vec<&str> = message.split_whitespace().collect();
+    let message = words.join(" ");
     message.contains("No solution found") || message.contains("are unsatisfiable")
 }
 
