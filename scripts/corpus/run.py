@@ -56,6 +56,10 @@ def tools() -> dict[str, str]:
         "conda-lock": next(base.glob("conda-lock/*/venv/bin/conda-lock"), None),
         "grype": next(base.glob("grype/*/grype"), None),
     }
+    # Where Grype's database host is out of reach, a stand-in backed by the
+    # GitHub advisory database (fake_grype.py, wrapped by fake-grype/grype).
+    if os.environ.get("CORPUS_FAKE_GRYPE"):
+        found["grype"] = base / "fake-grype" / "grype"
     return {name: str(path) for name, path in found.items() if path}
 
 
