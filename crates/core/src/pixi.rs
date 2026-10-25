@@ -248,7 +248,18 @@ impl Adapter for Pixi {
             "--manifest-path".into(),
             manifest.to_string_lossy().into(),
         ];
-        args.extend(options.packages.clone());
+        // `pixi update` names packages as the lock records them, so a PyPI
+        // package declared as `GitPython` is updated as `gitpython`.
+        args.extend(options.packages.iter().map(|name| {
+            before
+                .iter()
+                .find(|p| {
+                    !options.upgrade
+                        && p.ecosystem == "pypi"
+                        && crate::security::same_name("pypi", &p.name, name)
+                })
+                .map_or_else(|| name.clone(), |p| p.name.clone())
+        }));
         run_env(
             &options.tool("pixi"),
             &args,
