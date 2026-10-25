@@ -5,3 +5,18 @@
 #   design - depsmith declines by design; recorded, not fixed
 #   bug    - a depsmith defect
 # Rules are added as clusters are triaged, each with the reason.
+
+[[rule]]
+pattern = "conda-pypi mapping|conda-mapping\\.prefix\\.dev"
+class = "env"
+note = "Pixi's conda-to-PyPI mapping lives on prefix.dev, which this container's proxy blocks"
+
+[[rule]]
+pattern = "tunnel error|CONNECT tunnel failed"
+class = "env"
+note = "a host the container's proxy blocks (an index or download host other than the registries)"
+
+[[rule]]
+pattern = "No space left on device|StorageFull"
+class = "env"
+note = "the session's disk allowance ran out"

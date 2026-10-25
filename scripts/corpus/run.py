@@ -40,6 +40,9 @@ LOCKS = {
     "cargo": "Cargo.lock",
 }
 _lock = threading.Lock()
+# Per-thread environment: each repository's package caches and temp files live
+# under its work directory and are deleted with it, so disk use stays bounded.
+_ctx = threading.local()
 _clone_locks: dict[str, threading.RLock] = {}
 
 
@@ -55,6 +58,7 @@ def tools() -> dict[str, str]:
         "conda": next(base.glob("conda/*/micromamba"), None),
         "conda-lock": next(base.glob("conda-lock/*/venv/bin/conda-lock"), None),
         "grype": next(base.glob("grype/*/grype"), None),
+        "npm": next(base.glob("npm/*/node-*/bin/npm"), None),
     }
     # Where Grype's database host is out of reach, a stand-in backed by the
     # GitHub advisory database (fake_grype.py, wrapped by fake-grype/grype).
@@ -69,7 +73,7 @@ def run(cmd: list[str], cwd: Path, log: Path | None = None, timeout: int = STEP_
     try:
         proc = subprocess.run(
             cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, **(env or {})}, stdin=subprocess.DEVNULL,
+            env={**os.environ, **getattr(_ctx, "env", {}), **(env or {})}, stdin=subprocess.DEVNULL,
         )
         code, out, err = proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as e:
@@ -202,10 +206,38 @@ class Recorder:
 
 
 def process(entry: dict, rec: Recorder):
+    name = f"{entry['manager']}__" + entry["repo"].replace("/", "__")
+    caches = work_dir() / f"pass-{rec.pass_id}" / "caches" / name
+    tmp = caches / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    cargo_home = caches / "cargo"
+    cargo_home.mkdir(exist_ok=True)
+    # Keep the toolchain's own cargo/rustup binaries reachable.
+    for item in ("bin", "env"):
+        src = Path.home() / ".cargo" / item
+        if src.exists() and not (cargo_home / item).exists():
+            (cargo_home / item).symlink_to(src)
+    npm = tools().get("npm")
+    _ctx.env = {
+        # The pinned Node.js first, for npm and for its native lock check.
+        "PATH": (str(Path(npm).parent) + os.pathsep if npm else "") + os.environ["PATH"],
+        "TMPDIR": str(tmp),
+        "RATTLER_CACHE_DIR": str(caches / "rattler"),
+        "PIXI_CACHE_DIR": str(caches / "rattler"),
+        "UV_CACHE_DIR": str(caches / "uv"),
+        "npm_config_cache": str(caches / "npm"),
+        "CARGO_HOME": str(cargo_home),
+        "CONDA_PKGS_DIRS": str(caches / "conda-pkgs"),
+        "MAMBA_ROOT_PREFIX": str(caches / "mamba"),
+        "XDG_CACHE_HOME": str(caches / "xdg"),
+    }
     try:
         _process(entry, rec)
     except Exception as e:  # noqa: BLE001 - one repository must not stop the pass
         rec.add(entry, "harness", "triage", -1, 0, "harness: " + signature(repr(e)), repr(e))
+    finally:
+        _ctx.env = {}
+        shutil.rmtree(caches, ignore_errors=True)
 
 
 def _process(entry: dict, rec: Recorder):
