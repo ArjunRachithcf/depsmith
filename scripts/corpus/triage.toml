@@ -60,3 +60,8 @@ note = "the project cannot be re-resolved as it stands (a build needs system lib
 pattern = "file: dependency URLs are not relocatable"
 class = "design"
 note = "depsmith rejects file: URLs that cannot be staged"
+
+[[rule]]
+pattern = "introduced findings: GHSA-wjr9-j795-jxcr in fast-uri"
+class = "repo"
+note = "firebase-tools' .npmrc sets min-release-age=21, which keeps fast-uri's six-day-old fix release out; npm moves to the newest release it allows, which the advisory affects"
