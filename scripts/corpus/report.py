@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import collections
 import csv
+import json
 import os
 import re
 from pathlib import Path
@@ -20,6 +21,18 @@ import tomllib
 
 HERE = Path(__file__).resolve().parent
 WORK = Path(os.environ.get("CORPUS_WORK", HERE.parent.parent / "target" / "corpus"))
+
+
+def message(pass_id: str, row: dict) -> str:
+    """The full failure message of `row`, from its step's JSON report."""
+    name = f"{row['manager']}__" + row["repo"].replace("/", "__")
+    path = WORK / f"pass-{pass_id}" / "logs" / name / f"{row['step']}.out"
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return ""
+    failures = (report.get("proposal") or {}).get("failures") or []
+    return failures[0]["message"] if failures else str(report.get("error", ""))
 
 
 def rows(pass_id: str | None):
@@ -34,8 +47,9 @@ def rows(pass_id: str | None):
             latest[(r["repo"], r["step"])] = r
     rules = tomllib.loads((HERE / "triage.toml").read_text()).get("rule", [])
     for r in latest.values():
+        text = r["signature"] + " " + r["detail"] + " " + message(pass_id, r)
         for rule in rules:
-            if re.search(rule["pattern"], r["signature"] + " " + r["detail"]):
+            if re.search(rule["pattern"], text):
                 r["class"], r["note"] = rule["class"], rule.get("note", "")
                 break
     return pass_id, list(latest.values())
