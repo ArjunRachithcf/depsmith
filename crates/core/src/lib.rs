@@ -270,7 +270,7 @@ impl Engine {
     pub fn discover(&self, root: &Path) -> Result<Vec<Target>> {
         let root = working_tree::canonical(root)?;
         let mut targets = vec![];
-        for path in working_tree::files(&root, &self.layout())? {
+        for path in working_tree::walk(&root, &self.layout())?.files {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let mut content = None;
             for (adapter, spec) in &self.adapters {
@@ -427,7 +427,7 @@ impl Engine {
             )));
         }
         let layout = self.layout();
-        let inputs = working_tree::fingerprint(&root, &layout)?;
+        let (inputs, tree) = working_tree::fingerprint_tree(&root, &layout)?;
         let mut proposal = Proposal {
             schema_version: 1,
             root: root.clone(),
@@ -531,6 +531,25 @@ impl Engine {
                         "only a precise update was requested"
                     }
                 ));
+                continue;
+            }
+            // A left-out path fails every target whose directory holds it
+            // (ADR 0007).
+            let dir = target.manifest.parent().unwrap_or(Path::new(""));
+            let left_out: Vec<String> = tree
+                .under(dir)
+                .map(|l| format!("{} ({})", l.path.display(), l.reason))
+                .collect();
+            if !left_out.is_empty() {
+                let error = Error::Invalid(format!(
+                    "the target's directory holds paths left out of the stage: {}",
+                    left_out.join(", ")
+                ));
+                proposal.failures.push(Failure {
+                    target: target.id.clone(),
+                    code: error.exit_code(),
+                    message: error.to_string(),
+                });
                 continue;
             }
             let stage = tempfile::tempdir()?;
