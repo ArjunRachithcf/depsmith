@@ -383,6 +383,26 @@ fn a_fix_the_resolver_cannot_reach_is_blocked_and_the_others_still_move() {
 }
 
 #[test]
+fn a_fix_that_would_downgrade_another_package_is_blocked() {
+    // uv reaches idna 3.7 only by moving urllib3 back to 1.0.0.
+    let baseline = lock("1.15.0", "3.6", "2.0.0");
+    let run = prepare_scripted(
+        PYPROJECT,
+        &baseline,
+        &lock("1.15.0", "3.7", "1.0.0"),
+        &[advisory("GHSA-direct", "idna", "3.6", "High", &["3.7"])],
+        UpdateOptions::default(),
+        &[],
+        &[],
+        &|_| "case \"$*\" in *--locked*) exit 0;; esac\n".into(),
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(fix(&proposal, "GHSA-direct").outcome, FixOutcome::Blocked);
+    assert!(proposal.changes.is_empty(), "{:?}", proposal.changes);
+}
+
+#[test]
 fn a_fix_release_that_newer_advisories_affect_is_aimed_past() {
     let raised = lock("1.15.0", "3.8", "2.0.0");
     let run = prepare_scripted(
