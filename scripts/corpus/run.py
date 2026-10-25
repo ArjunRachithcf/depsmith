@@ -40,7 +40,7 @@ LOCKS = {
     "cargo": "Cargo.lock",
 }
 _lock = threading.Lock()
-_clone_locks: dict[str, threading.Lock] = {}
+_clone_locks: dict[str, threading.RLock] = {}
 
 
 def work_dir() -> Path:
@@ -86,10 +86,13 @@ def run(cmd: list[str], cwd: Path, log: Path | None = None, timeout: int = STEP_
 
 def clone(repo: str, ref: str | None) -> Path:
     """A cached shallow clone of `repo` at `ref` (default branch when None)."""
-    with _lock:
-        guard = _clone_locks.setdefault(repo, threading.Lock())
-    with guard:
+    with repo_lock(repo):
         return _clone(repo, ref)
+
+
+def repo_lock(repo: str) -> threading.RLock:
+    with _lock:
+        return _clone_locks.setdefault(repo, threading.RLock())
 
 
 def _clone(repo: str, ref: str | None) -> Path:
@@ -167,12 +170,12 @@ def outcome(step: str, code: int, out: str, err: str):
         return "bug", f"{step}: stdout is not JSON (exit {code})", (out or err)[-500:]
     proposal = report.get("proposal") or {}
     failures = proposal.get("failures") or []
-    if report.get("error"):
-        return "triage", f"{step}: " + signature(report["error"]), report["error"]
     if failures:
         first = failures[0]
         msg = first.get("message") or json.dumps(first)
         return "triage", f"{step}: " + signature(msg), json.dumps(failures)[:2000]
+    if report.get("error"):
+        return "triage", f"{step}: " + signature(report["error"]), report["error"]
     if code not in EXPECTED[step]:
         tail = err.strip().splitlines()[-1] if err.strip() else ""
         return "triage", f"{step}: exit {code}: " + signature(tail), err[-1000:]
@@ -199,6 +202,13 @@ class Recorder:
 
 
 def process(entry: dict, rec: Recorder):
+    try:
+        _process(entry, rec)
+    except Exception as e:  # noqa: BLE001 - one repository must not stop the pass
+        rec.add(entry, "harness", "triage", -1, 0, "harness: " + signature(repr(e)), repr(e))
+
+
+def _process(entry: dict, rec: Recorder):
     manager, target = entry["manager"], f"{entry['manager']}:{entry['target']}"
     name = f"{manager}__" + entry["repo"].replace("/", "__")
     base = work_dir() / f"pass-{rec.pass_id}"
@@ -209,7 +219,6 @@ def process(entry: dict, rec: Recorder):
         rec.add(entry, "clone", "env", -1, 0, signature(str(e)), str(e))
         return
     copy = lambda step: fresh_copy(src, base / "trees" / name / step)
-    keep = False
 
     root = copy("discover")
     code, out, err, secs = run([str(DEPSMITH), "--root", str(root), "--json", "discover"], root, logs / "discover")
@@ -224,6 +233,7 @@ def process(entry: dict, rec: Recorder):
         rec.add(entry, "discover", "triage", code, secs, "discover: target not discovered", " ".join(ids)[:500])
         return
     rec.add(entry, "discover", "ok", code, secs)
+    shutil.rmtree(root, ignore_errors=True)
 
     if manager == "github-actions" and os.environ.get("CORPUS_ACTIONS_VIA_GIT"):
         root = copy("update")
@@ -245,25 +255,23 @@ def process(entry: dict, rec: Recorder):
     cls, sig, detail = outcome("check", code, out, err)
     rec.add(entry, "check", cls, code, secs, sig, detail)
     pending = cls == "ok" and code == 1
+    if cls == "ok":
+        shutil.rmtree(root, ignore_errors=True)
 
     baseline = native_check(manager, src, entry["target"], logs / "native-baseline")
     root = copy("update")
     code, out, err, secs = depsmith(root, target, ["update", "--apply", "--yes"], logs / "update")
     cls, sig, detail = outcome("update", code, out, err)
     rec.add(entry, "update", cls, code, secs, sig, detail)
-    if cls == "ok":
-        keep |= post_apply(entry, target, root, rec, logs, "update", baseline, pending)
+    if cls == "ok" and not post_apply(entry, target, root, rec, logs, "update", baseline, pending):
+        shutil.rmtree(root, ignore_errors=True)
 
     root = copy("fix")
     code, out, err, secs = depsmith(root, target, ["fix", "--apply", "--yes"], logs / "fix", scan=True)
     cls, sig, detail = outcome("fix", code, out, err)
     rec.add(entry, "fix", cls, code, secs, sig, detail)
-    if cls == "ok":
-        keep |= post_apply(entry, target, root, rec, logs, "fix", baseline, None)
-    else:
-        keep = True
-    if not keep:
-        shutil.rmtree(base / "trees" / name, ignore_errors=True)
+    if cls == "ok" and not post_apply(entry, target, root, rec, logs, "fix", baseline, None):
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def post_apply(entry, target, root, rec, logs, step, baseline, pending) -> bool:
@@ -359,7 +367,8 @@ def cmd_run(args):
         futures = [pool.submit(process, e, rec) for e in others]
         futures.append(pool.submit(lambda: [process(e, rec) for e in actions]))
         for f in concurrent.futures.as_completed(futures):
-            f.result()
+            if f.exception():
+                print(f"harness error: {f.exception()!r}", flush=True)
 
 
 def cmd_pin(args):
@@ -373,42 +382,54 @@ def cmd_pin(args):
     lock = threading.Lock()
 
     def check(c):
+        # A rejected candidate's clone is deleted: the cache only keeps the corpus.
+        with repo_lock(c["repo"]):
+            if not keep(c) and not any(e["repo"] == c["repo"] for v in kept.values() for e in v):
+                shutil.rmtree(work_dir() / "cache" / c["repo"].replace("/", "__"), ignore_errors=True)
+
+    def keep(c) -> bool:
         manager = c["manager"]
         with lock:
             if len(kept.get(manager, [])) >= PER_MANAGER or (manager, c["repo"]) in existing:
-                return
+                return True
         code, out, _, _ = run(["git", "ls-remote", f"https://github.com/{c['repo']}", "HEAD"], work_dir(), timeout=60)
         if code or not out.strip():
             print(f"skip {c['repo']}: unreachable", flush=True)
-            return
+            return False
         sha = out.split()[0]
         try:
             src = clone(c["repo"], sha)
         except Exception as e:  # noqa: BLE001
             print(f"skip {c['repo']}: {e}", flush=True)
-            return
+            return False
+        size = sum(f.stat().st_size for f in src.rglob("*") if f.is_file() and not f.is_symlink())
+        if size > 300 * 2**20:
+            print(f"skip {c['repo']}: checkout over 300 MB", flush=True)
+            return False
         code, out, _, _ = run([str(DEPSMITH), "--root", str(src), "--json", "discover"], src)
         target = f"{manager}:{c['manifest']}"
         if target not in out:
             print(f"skip {c['repo']}: {target} not discovered", flush=True)
-            return
+            return False
         if manager in LOCKS:
             lock_file = src / Path(c["manifest"]).parent / LOCKS[manager]
             if manager == "cargo":
                 lock_file = c.get("lock") and src / c["lock"] or lock_file
             if lock_file.exists() and sum(1 for _ in lock_file.open(errors="replace")) > 20000:
                 print(f"skip {c['repo']}: lock over 20k lines", flush=True)
-                return
+                return False
         log = work_dir() / "pin-logs" / c["repo"].replace("/", "__")
         code = native_check(manager, src, c["manifest"], log)
         if code not in (None, 0):
             print(f"skip {c['repo']}: native lock check fails at {sha[:10]}", flush=True)
-            return
+            return False
         with lock:
             if len(kept.setdefault(manager, [])) < PER_MANAGER:
                 kept[manager].append({"manager": manager, "repo": c["repo"], "ref": sha,
                                       "target": c["manifest"], "notes": c.get("notes", "")})
                 print(f"keep {manager} {c['repo']} ({len(kept[manager])})", flush=True)
+                return True
+        return False
 
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         list(pool.map(check, candidates))
