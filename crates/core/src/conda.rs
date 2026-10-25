@@ -779,6 +779,15 @@ impl Adapter for Conda {
             "--lockfile".into(),
             stage.join(&lock).to_string_lossy().into(),
         ]);
+        // Without `platforms:` in the environment, conda-lock locks its own
+        // defaults, not the platforms the existing lock was made for.
+        let parsed: Value = serde_yaml::from_slice(&source)
+            .map_err(|e| Error::Invalid(format!("invalid environment file: {e}")))?;
+        if strings(parsed.get("platforms")).is_empty() && before_text.is_some() {
+            for platform in platforms(stage, target, &parsed) {
+                args.extend(["--platform".into(), platform]);
+            }
+        }
         if before_text.is_some() {
             for package in &options.packages {
                 args.extend(["--update".into(), package.clone()]);
