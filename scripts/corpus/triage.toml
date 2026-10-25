@@ -20,3 +20,48 @@ note = "a host the container's proxy blocks (an index or download host other tha
 pattern = "No space left on device|StorageFull"
 class = "env"
 note = "the session's disk allowance ran out"
+
+[[rule]]
+pattern = "403 Forbidden - GET https://github\\.com|conda\\.modular\\.com|coalesced request failed"
+class = "env"
+note = "a download host the container's proxy blocks (GitHub tarballs, conda.modular.com)"
+
+[[rule]]
+pattern = "exceeded \\d+s timeout"
+class = "env"
+note = "the native solver ran past depsmith's 900 s limit"
+
+[[rule]]
+pattern = "The channel configuration has changed|Original channels"
+class = "repo"
+note = "the lock was made with other channels than the environment now names; conda-lock 4.0.2 then refuses even without --update"
+
+[[rule]]
+pattern = "conda-lock-pkgs-.*'--dry-run'|Could not lock the environment for platform"
+class = "repo"
+note = "conda-lock's default virtual packages (an old __osx) cannot install current conda-forge builds for a locked platform; conda-lock fails the same way by hand"
+
+[[rule]]
+pattern = "InvalidRequirement"
+class = "repo"
+note = "conda-lock cannot parse a local-path pip entry in the environment"
+
+[[rule]]
+pattern = "MSRV-aware resolution needs cargo"
+class = "repo"
+note = "the repository's rust-toolchain file pins a cargo older than 1.84"
+
+[[rule]]
+pattern = "Failed to build|gdal-config|extra-build-dependencies|name is shadowed by one of your workspace members"
+class = "repo"
+note = "the project cannot be re-resolved as it stands (a build needs system libraries or undeclared build dependencies, or a workspace member shadows a dependency)"
+
+[[rule]]
+pattern = "file: dependency URLs are not relocatable"
+class = "design"
+note = "depsmith rejects file: URLs that cannot be staged"
+
+[[rule]]
+pattern = "the security update introduced findings"
+class = "design"
+note = "the lowest fix release is itself affected by a newer advisory; ADR 0004 fails such an update (open question: retry with the newer fix)"
