@@ -65,3 +65,8 @@ note = "depsmith rejects file: URLs that cannot be staged"
 pattern = "introduced findings: GHSA-wjr9-j795-jxcr in fast-uri"
 class = "repo"
 note = "firebase-tools' .npmrc sets min-release-age=21, which keeps fast-uri's six-day-old fix release out; npm moves to the newest release it allows, which the advisory affects"
+
+[[rule]]
+pattern = "the security update introduced findings"
+class = "design"
+note = "a fix release pulls another package into releases with newer advisories, and no release uv can resolve for every supported Python fixes them; after aiming past them, ADR 0004 fails such an update"
