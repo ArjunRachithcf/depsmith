@@ -138,6 +138,12 @@ fn duplicate_or_unproven_mappings_are_rejected() {
             "pkg:generic/openssl@3.0.0",
             "https://example.org/feedstock",
         )],
+        vec![mapping("pkg:npm/%00x", "https://example.org/feedstock")],
+        vec![mapping("pkg:npm/%40", "https://example.org/feedstock")],
+        vec![mapping(
+            "pkg:npm/%40scope%2Fname",
+            "https://example.org/feedstock",
+        )],
     ] {
         assert!(inventory_sbom(&[], &mappings).is_err(), "{mappings:?}");
     }
@@ -160,5 +166,23 @@ fn scanning_a_pixi_target_without_a_lock_names_the_missing_file() {
     assert!(
         matches!(&error, depsmith_core::Error::Invalid(m) if m.contains("pixi.lock") && m.contains("pixi lock")),
         "{error}"
+    );
+}
+#[test]
+fn scoped_and_unscoped_npm_registry_packages_are_both_scanned() {
+    let npm = |name: &str, tarball: &str| Package {
+        artifact: format!("https://registry.npmjs.org/{name}/-/{tarball}-1.2.3.tgz"),
+        ..package("npm", name, "1.2.3")
+    };
+    let (sbom, unknown) = inventory_sbom(
+        &[npm("left-pad", "left-pad"), npm("@acme/widget", "widget")],
+        &[],
+    )
+    .unwrap();
+    assert!(unknown.is_empty(), "{unknown:?}");
+    assert_eq!(sbom["components"][0]["purl"], "pkg:npm/left-pad@1.2.3");
+    assert_eq!(
+        sbom["components"][1]["purl"],
+        "pkg:npm/%40acme/widget@1.2.3"
     );
 }
