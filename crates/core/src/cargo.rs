@@ -706,21 +706,50 @@ impl Adapter for Cargo {
                 }
             }
         }
+        // A crate locked at several versions is named by each locked version
+        // below the request, as cargo requires. The lock is read again for
+        // each request, since an earlier one can move this crate too.
+        let scheme = crate::ecosystem::scheme("cargo");
+        let lock_file = stage.join(lock_path(target));
+        let specs = |request: &crate::PreciseUpdate| -> Result<Vec<String>> {
+            let current = match fs::read_to_string(&lock_file) {
+                Ok(text) => lock_inventory(&text)?,
+                Err(_) => vec![],
+            };
+            let mut locked: Vec<String> = current
+                .iter()
+                .filter(|p| p.name == request.package)
+                .filter(|p| {
+                    scheme.is_some_and(|s| {
+                        s.compare(&p.version, &request.version) == std::cmp::Ordering::Less
+                    })
+                })
+                .map(|p| format!("{}@{}", p.name, p.version))
+                .collect();
+            locked.sort();
+            locked.dedup();
+            if locked.is_empty() {
+                locked.push(request.package.clone());
+            }
+            Ok(locked)
+        };
         for request in &options.precise {
-            let mut precise = update.clone();
-            precise.extend([
-                "-p".into(),
-                request.package.clone(),
-                "--precise".into(),
-                request.version.clone(),
-            ]);
-            match run_env_output(&cargo, &precise, stage, timeout, &msrv) {
-                Ok((_, output)) => report.push_str(&output),
-                // A version cargo cannot select, such as one a parent's
-                // requirement excludes, leaves the crate where it is; the
-                // security update then reports that fix as blocked.
-                Err(error) if error.to_string().contains("failed to select a version") => {}
-                Err(error) => return Err(error),
+            for spec in specs(request)? {
+                let mut precise = update.clone();
+                precise.extend([
+                    "-p".into(),
+                    spec,
+                    "--precise".into(),
+                    request.version.clone(),
+                ]);
+                match run_env_output(&cargo, &precise, stage, timeout, &msrv) {
+                    Ok((_, output)) => report.push_str(&output),
+                    // A version cargo cannot select, such as one a parent's
+                    // requirement excludes, leaves the crate where it is; the
+                    // security update then reports that fix as blocked.
+                    Err(error) if error.to_string().contains("failed to select a version") => {}
+                    Err(error) => return Err(error),
+                }
             }
         }
         let resolved = check.resolved(stage, options.refresh_git)?;

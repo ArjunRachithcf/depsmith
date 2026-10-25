@@ -494,6 +494,96 @@ mod stand_in {
     }
 
     #[test]
+    fn a_precise_update_names_the_locked_version_of_a_crate_locked_twice() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        let rand = |version: &str| {
+            format!("\n[[package]]\nname = \"rand\"\nversion = \"{version}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"abc\"\n")
+        };
+        let lock = format!(
+            "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"0.1.0\"\n{}{}",
+            rand("0.8.5"),
+            rand("0.9.2")
+        );
+        write(
+            root.path(),
+            &[("Cargo.toml", &package("a", "")), ("Cargo.lock", &lock)],
+        );
+        let log = tools.path().join("log");
+        let script = tools.path().join("cargo");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n  --version) echo 'cargo 1.98.1 (fake 2026-01-01)';;\n  *'-p rand --precise'*) echo 'error: specification `rand` is ambiguous' >&2; exit 101;;\nesac\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let options = UpdateOptions {
+            tools: BTreeMap::from([("cargo".into(), script.to_string_lossy().into_owned())]),
+            precise: vec![depsmith_core::PreciseUpdate {
+                package: "rand".into(),
+                version: "0.9.3".into(),
+            }],
+            ..Default::default()
+        };
+        let proposal = Engine::new(vec![Box::new(Cargo::default())])
+            .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let log = fs::read_to_string(log).unwrap();
+        assert!(log.contains("-p rand@0.9.2 --precise 0.9.3"), "{log}");
+        assert!(log.contains("-p rand@0.8.5 --precise 0.9.3"), "{log}");
+    }
+
+    #[test]
+    fn a_precise_update_names_the_version_an_earlier_one_left() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        let lock = |rand: &str| {
+            format!("version = 4\n\n[[package]]\nname = \"a\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"rand\"\nversion = \"{rand}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"abc\"\n")
+        };
+        write(
+            root.path(),
+            &[
+                ("Cargo.toml", &package("a", "")),
+                ("Cargo.lock", &lock("0.8.5")),
+            ],
+        );
+        let moved = tools.path().join("moved");
+        fs::write(&moved, lock("0.8.6")).unwrap();
+        let log = tools.path().join("log");
+        let script = tools.path().join("cargo");
+        // Moving rand_core moves rand too; rand@0.8.5 is then gone.
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n  --version) echo 'cargo 1.98.1 (fake 2026-01-01)';;\n  *'-p rand_core --precise'*) cp '{}' Cargo.lock;;\n  *'-p rand@0.8.5'*) echo 'error: package ID specification `rand@0.8.5` did not match any packages' >&2; exit 101;;\nesac\n",
+                log.display(),
+                moved.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let request = |package: &str, version: &str| depsmith_core::PreciseUpdate {
+            package: package.into(),
+            version: version.into(),
+        };
+        let options = UpdateOptions {
+            tools: BTreeMap::from([("cargo".into(), script.to_string_lossy().into_owned())]),
+            precise: vec![request("rand_core", "0.6.4"), request("rand", "0.8.7")],
+            ..Default::default()
+        };
+        let proposal = Engine::new(vec![Box::new(Cargo::default())])
+            .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let log = fs::read_to_string(log).unwrap();
+        assert!(log.contains("-p rand@0.8.6 --precise 0.8.7"), "{log}");
+    }
+
+    #[test]
     fn a_whole_update_keeps_git_pins_without_refresh_git() {
         let lock = |once_cell: &str, rev: &str| {
             format!(
