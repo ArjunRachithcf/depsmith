@@ -1,6 +1,7 @@
-//! The repository's working tree: listing files while respecting ignore
-//! rules, fingerprinting inputs, copying them into a stage, and rejecting
-//! paths that escape the repository.
+//! The repository's working tree: listing files and in-repository symlinks
+//! while respecting ignore rules, fingerprinting inputs, copying them into a
+//! stage, and leaving out paths the stage cannot safely copy, such as a
+//! symlink that escapes the repository or a nested repository (ADR 0007).
 use crate::{adapter::AdapterSpec, Error, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -311,6 +312,8 @@ pub(crate) fn walk(root: &Path, layout: &Layout) -> Result<Tree> {
     Ok(tree)
 }
 
+/// The fingerprint of the working tree's inputs; see [`fingerprint_tree`] to
+/// also keep the [`Tree`] they were read from.
 pub(crate) fn fingerprint(root: &Path, layout: &Layout) -> Result<BTreeMap<PathBuf, String>> {
     Ok(fingerprint_tree(root, layout)?.0)
 }
@@ -364,6 +367,8 @@ fn file_hash(path: &Path) -> Result<String> {
     Ok(format!("{:x}{suffix}", hash.finalize()))
 }
 
+/// Copy `inputs` into `destination`, recreating each kept symlink in place
+/// of a copy, then re-fingerprint the stage to confirm it matches `inputs`.
 pub(crate) fn stage(
     root: &Path,
     destination: &Path,
