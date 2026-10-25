@@ -494,6 +494,51 @@ mod stand_in {
     }
 
     #[test]
+    fn a_whole_update_keeps_git_pins_without_refresh_git() {
+        let lock = |once_cell: &str, rev: &str| {
+            format!(
+                "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"g\"\nversion = \"0.1.0\"\nsource = \"git+https://example.invalid/g.git#{rev}\"\n\n[[package]]\nname = \"once_cell\"\nversion = \"{once_cell}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"abc\"\n"
+            )
+        };
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        write(
+            root.path(),
+            &[
+                ("Cargo.toml", &package("a", "")),
+                ("Cargo.lock", &lock("1.17.0", "1111111")),
+            ],
+        );
+        let (moved, kept) = (tools.path().join("moved"), tools.path().join("kept"));
+        fs::write(&moved, lock("1.21.3", "2222222")).unwrap();
+        fs::write(&kept, lock("1.21.3", "1111111")).unwrap();
+        let script = tools.path().join("cargo");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncase \"$*\" in\n  --version) echo 'cargo 1.98.1 (fake 2026-01-01)';;\n  *--locked*) ;;\n  *'-p git+https://example.invalid/g.git#g@0.1.0 --precise 1111111'*) cp '{}' Cargo.lock;;\n  update*) cp '{}' Cargo.lock;;\n  *) exit 2;;\nesac\n",
+                kept.display(),
+                moved.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let options = UpdateOptions {
+            tools: BTreeMap::from([("cargo".into(), script.to_string_lossy().into_owned())]),
+            ..Default::default()
+        };
+        let proposal = Engine::new(vec![Box::new(Cargo::default())])
+            .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let after = &proposal.changes[0].after;
+        assert!(
+            after.contains("g.git#1111111") && after.contains("1.21.3"),
+            "{after}"
+        );
+    }
+
+    #[test]
     fn cargo_older_than_1_84_is_unsupported() {
         let proposal = prepare("1.0", &[], "1.80.0");
         assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);

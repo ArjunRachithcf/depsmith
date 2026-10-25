@@ -674,6 +674,37 @@ impl Adapter for Cargo {
         let mut report = String::new();
         if options.precise.is_empty() || !options.packages.is_empty() {
             report = run_env_output(&cargo, &args, stage, timeout, &msrv)?.1;
+            // A whole update moves Git dependencies to their branch's newest
+            // commit; without --refresh-git, put each back on its commit.
+            if !options.refresh_git && options.packages.is_empty() && check.has_git_pins() {
+                let after = lock_inventory(&fs::read_to_string(stage.join(lock_path(target)))?)?;
+                for pinned in check
+                    .before()
+                    .iter()
+                    .filter(|p| p.artifact.starts_with("git+"))
+                {
+                    let Some((_, commit)) = pinned.artifact.rsplit_once('#') else {
+                        continue;
+                    };
+                    let Some(moved) = after.iter().find(|p| {
+                        p.name == pinned.name
+                            && p.artifact.starts_with("git+")
+                            && p.artifact != pinned.artifact
+                    }) else {
+                        continue;
+                    };
+                    // A full package ID: a crate can also come from a registry.
+                    let source = moved.artifact.rsplit_once('#').map_or("", |(s, _)| s);
+                    let mut back = update.clone();
+                    back.extend([
+                        "-p".into(),
+                        format!("{source}#{}@{}", moved.name, moved.version),
+                        "--precise".into(),
+                        commit.into(),
+                    ]);
+                    run_env_output(&cargo, &back, stage, timeout, &msrv)?;
+                }
+            }
         }
         for request in &options.precise {
             let mut precise = update.clone();
