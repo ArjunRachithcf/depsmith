@@ -1,0 +1,1255 @@
+# The corpus: real repositories pinned to a commit, about 30 per package manager.
+# Built by `run.py pin` from code-search candidates; see scripts/corpus/run.py.
+
+[[repo]]
+manager = "conda"
+repo = "tomas-gajarsky/facetorch"
+ref = "24e7718a0e8d0c3759ece6196a56e484a812f95d"
+target = "environment.yml"
+notes = "channels: conda-forge, 1 platform (linux-64); lock 1890 lines"
+
+[[repo]]
+manager = "conda"
+repo = "Aharoni-Lab/Miniscope-DAQ-QT-Software"
+ref = "7e644bf52ba5b6f4cdbe0be7f8ed52fd2f792aaa"
+target = "environment.yml"
+notes = "channels: conda-forge, pip deps, 3 platforms (linux-64/osx-arm64/win-64); lock 7790 lines"
+
+[[repo]]
+manager = "conda"
+repo = "mamba-org/setup-micromamba"
+ref = "b216771f24ea869759713ed09834e25f04bfed23"
+target = "test/environment.yml"
+notes = "channels: conda-forge/defaults, 2 platforms (linux-64/osx-arm64); lock 910 lines; subdir"
+
+[[repo]]
+manager = "conda"
+repo = "SlideRuleEarth/sliderule"
+ref = "07cdb99a77a683384d18b9e4f51ee3109d96d4a4"
+target = "targets/slideruleearth/docker/pysr/environment.yml"
+notes = "channels: conda-forge, 1 platform (linux-aarch64); lock 3019 lines; subdir"
+
+[[repo]]
+manager = "conda"
+repo = "earth-mover/aifs-demo"
+ref = "740c6cdf120a3c8b936ff75fe68f34156fd4e6ad"
+target = "env/environment.yaml"
+notes = "channels: conda-forge, pip deps, 1 platform (linux-64); lock 7802 lines; subdir"
+
+[[repo]]
+manager = "conda"
+repo = "DavidT3/XGA"
+ref = "4665c3c20c6e041b689613f4512683b2173b4d44"
+target = "conda_envs/environment.yml"
+notes = "channels: conda-forge/defaults, 3 platforms (linux-64/osx-64/osx-arm64); lock 5490 lines; subdir"
+
+[[repo]]
+manager = "conda"
+repo = "CNES/S2Shores"
+ref = "fe1bb10f23ac39f1d191d6b0843b2a475c1c4c50"
+target = "environment.yml"
+notes = "channels: nvidia/pytorch/conda-forge/defaults, pip deps, 1 platform (linux-64); lock 4526 lines"
+
+[[repo]]
+manager = "conda"
+repo = "GenericMappingTools/agu24workshop"
+ref = "33ff20b806983c09f6579dc95b084e4d81a5974d"
+target = "environment.yml"
+notes = "channels: conda-forge, 1 platform (linux-64); lock 5232 lines"
+
+[[repo]]
+manager = "conda"
+repo = "ML4GW/amplfi"
+ref = "8e0377bd0d6e79b8ab22bcbd122d1b96ad7f8426"
+target = "environment.yaml"
+notes = "channels: conda-forge, 1 platform (linux-64); lock 1613 lines"
+
+[[repo]]
+manager = "conda"
+repo = "pangeo-data/ncar-hackathon-xarray-on-gpus"
+ref = "716d38ab3b962a38da632b5c4e08741cd4752558"
+target = "environment.yml"
+notes = "channels: conda-forge, pip deps, 1 platform (linux-64); lock 6050 lines"
+
+[[repo]]
+manager = "conda"
+repo = "chembl/EnsembleFlex"
+ref = "88c9bff1adc1eb6d5ab49df76ba3331bb8f4cea5"
+target = "environment.yml"
+notes = "channels: conda-forge/bioconda, pip deps, 2 platforms (linux-64/osx-64); lock 11442 lines"
+
+[[repo]]
+manager = "conda"
+repo = "microsoft/aurorabp-sample-data"
+ref = "8c7affc22b2de111c7b4e5571e3ccd7d14639aa5"
+target = "notebooks/environment.yml"
+notes = "channels: defaults, 4 platforms (linux-64/win-64/osx-64/osx-arm64); lock 8264 lines; subdir"
+
+[[repo]]
+manager = "conda"
+repo = "USGS-CMG/stglib"
+ref = "a8a3afea2a636cccd33a57215f25c4380dbf482f"
+target = "doc/environment.yml"
+notes = "channels: conda-forge, 1 platform (linux-64); lock 3702 lines; subdir"
+
+[[repo]]
+manager = "conda"
+repo = "durrantlab/subpex"
+ref = "4f5180bee9bbaef7a1e127892adcf3b867741d68"
+target = "environment.yml"
+notes = "channels: conda-forge/defaults, 3 platforms (linux-64/osx-64/win-64); lock 4541 lines"
+
+[[repo]]
+manager = "conda"
+repo = "luocfprime/2d-sds"
+ref = "f58ab75b43f3d5c4134896e805a73addb8adaabb"
+target = "environment.yml"
+notes = "channels: pytorch/conda-forge/defaults, 1 platform (linux-64); lock 980 lines"
+
+[[repo]]
+manager = "conda"
+repo = "TheochemUI/eOn"
+ref = "579738a9387e8d0ea55496f45dd057812cfab892"
+target = "environment.yml"
+notes = "channels: conda-forge, pip deps, 4 platforms (linux-64/osx-64/osx-arm64/win-64); lock 6425 lines"
+
+[[repo]]
+manager = "conda"
+repo = "ddspot/pysewer"
+ref = "0bd089a404ca889c72141b55d76055badad5c7d6"
+target = "environment.yml"
+notes = "channels: conda-forge, 1 platform (linux-64); lock 6142 lines"
+
+[[repo]]
+manager = "conda"
+repo = "roi-hpi/IDK-token-tuning"
+ref = "a492c54690e04594517e66c7256fb66172fd0983"
+target = "environment.yml"
+notes = "channels: conda-forge, pip deps, 1 platform (linux-64); lock 3493 lines"
+
+[[repo]]
+manager = "conda"
+repo = "nmfs-opensci/py-rocket-base"
+ref = "a599aaab7a2234dd4ca1c7504d2b33876d186e92"
+target = "environment.yml"
+notes = "channels: conda-forge, pip deps, 1 platform (linux-64); lock 5879 lines"
+
+[[repo]]
+manager = "conda"
+repo = "roocs/rook"
+ref = "d31e6cce47af5a0ab591ba6a9ae130a7bf396e6a"
+target = "environment.yml"
+notes = "channels: conda-forge, 1 platform (linux-64); lock 5791 lines"
+
+[[repo]]
+manager = "conda"
+repo = "Ives-Street/Connectome"
+ref = "47c3825dccec5bf34a67100b5f6eea0ad2068f4b"
+target = "environment.yml"
+notes = "channels: conda-forge, pip deps, 1 platform (linux-64); lock 6220 lines"
+
+[[repo]]
+manager = "conda"
+repo = "cseptesting/floatcsep"
+ref = "6276dbea43c7ec2907b94e029164edcc181a2077"
+target = "environment.yml"
+notes = "channels: conda-forge/defaults, 2 platforms (linux-64/osx-arm64); lock 7182 lines"
+
+[[repo]]
+manager = "conda"
+repo = "lemul4/MitsuNeuroPilotAPI"
+ref = "2fd91971537d8d8caf5130c37af48f34f376406b"
+target = "environment.yml"
+notes = "channels: conda-forge/defaults, 2 platforms (osx-64/linux-64); lock 677 lines"
+
+[[repo]]
+manager = "conda"
+repo = "RoyiAvital/RoyiFileManager"
+ref = "df155e96c7725f2ec90ad04b5ee982911a019ac4"
+target = "environment.yml"
+notes = "channels: conda-forge, 1 platform (win-64); lock 2451 lines"
+
+[[repo]]
+manager = "conda"
+repo = "clipo/phases"
+ref = "a469202b2210007be13dd267fac65c62eeb8cfeb"
+target = "environment.yml"
+notes = "channels: conda-forge, pip deps, 4 platforms (linux-64/osx-64/osx-arm64/win-64); lock 10306 lines"
+
+[[repo]]
+manager = "conda"
+repo = "jsboigeEpita/2025-Epita-Intelligence-Symbolique"
+ref = "fe9f9e4c27bd1491352534ab3a199ee35d49852d"
+target = "environment.yml"
+notes = "channels: conda-forge/pytorch/defaults, pip deps, 1 platform (win-64); lock 5823 lines"
+
+[[repo]]
+manager = "conda"
+repo = "EverlastEngineering/DrumToMIDI"
+ref = "96d63f7faa3f6f9e218483d647a15310ef87a0e1"
+target = "environment.yml"
+notes = "channels: conda-forge/pytorch, pip deps, 2 platforms (linux-64/linux-aarch64); lock 7861 lines"
+
+[[repo]]
+manager = "conda"
+repo = "uw-cryo/AWS"
+ref = "77e43a2d6a79ed2c8fad5d48aabbf3b5b1982fce"
+target = "environment.yml"
+notes = "channels: conda-forge, 3 platforms (osx-64/linux-64/win-64); lock 1567 lines"
+
+[[repo]]
+manager = "conda"
+repo = "msilbersteingit/Ionic_Circuit_Design_Tool_2025"
+ref = "836b5ca290e6a81f04453cf19e3065c1800de8c2"
+target = "environment.yml"
+notes = "channels: conda-forge/defaults, pip deps, 3 platforms (linux-64/osx-64/win-64); lock 10162 lines"
+
+[[repo]]
+manager = "conda"
+repo = "Vanuatu-National-Statistics-Office/climate-change-natural-disasters"
+ref = "524db6dac9131450a23a5738d39b6f7ec9169f09"
+target = "environment.yml"
+notes = "channels: conda-forge, 1 platform (linux-64); lock 5120 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "underloam/xbbg"
+ref = "b842c1dffc8fc278d3a18c3fb8ebd079f64db43e"
+target = "pixi.toml"
+notes = "9 envs, 9 features, pypi-deps, 3 platforms; lock 11737 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "QVPR/Patch-NetVLAD"
+ref = "d7fc6e874e54f18a71e19eaa01f92313177060a3"
+target = "pixi.toml"
+notes = "default env, pypi-deps, 5 platforms; lock 17976 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "lukaszliniewicz/Pandrator"
+ref = "36061e23f18e1379f45c9447121344c20ed4ea00"
+target = "pixi.toml"
+notes = "4 envs, 3 features, pypi-deps, 2 platforms; lock 10630 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "dorjeduck/llm.mojo"
+ref = "95674f606200e40dc70111148ac3c0177f620c9b"
+target = "pixi.toml"
+notes = "default env, 3 platforms; lock 1975 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "gerlero/openfoam-app"
+ref = "87788e3dbef982a49acc0fb8253b4ac147a0e7b3"
+target = "pixi.toml"
+notes = "1 envs, 1 features, 2 platforms; lock 4202 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "Quantco/polarify"
+ref = "834f747f5aa58cd16ac9b6df936c88a5db0ff59d"
+target = "pixi.toml"
+notes = "9 envs, 9 features, 4 platforms; lock 6071 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "martinfleis/clustergram"
+ref = "8177c0ef22afce40a207cfc9c70d6f789053c0a1"
+target = "pixi.toml"
+notes = "default env, pypi-deps, 4 platforms; lock 9499 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "milkschen/leviosam2"
+ref = "90cebe1c3d323c877e9858e5f359c248c2f3795b"
+target = "pixi.toml"
+notes = "1 envs, 1 features, 4 platforms; lock 6931 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "tudelft3d/val3dity"
+ref = "5edc12efd1021927469c0fb98fd0e63e9bacde0d"
+target = "pixi.toml"
+notes = "default env, 4 platforms; lock 1520 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "scikit-learn-contrib/scikit-dimension"
+ref = "8ab560deb04666b6e79727b5c47045c2b494c387"
+target = "pixi.toml"
+notes = "2 envs, 2 features, pypi-deps, 4 platforms; lock 13800 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "saezlab/corneto"
+ref = "d9f6d238d6c41cc20ecc0b4a17d105cbf209b360"
+target = "docs/tutorials/carnival/pixi.toml"
+notes = "default env, pypi-deps, 4 platforms; lock 9777 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "pymc-labs/pymc-modeling"
+ref = "68cbe666f361016f585985884502640baf04d875"
+target = "pixi.toml"
+notes = "5 envs, 4 features, pypi-deps, 1 platforms; lock 2010 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "stellarmesh/stellarmesh"
+ref = "79b4689c8222d2c4ed1f9384b114fe0f4c78583d"
+target = "pixi.toml"
+notes = "4 envs, 4 features, pypi-deps, 1 platforms; lock 9648 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "gmdsi/GMDSI_notebooks"
+ref = "665666d4dc8af06f5c8c181f405a90605fd9019a"
+target = "pixi.toml"
+notes = "default env, pypi-deps, 5 platforms; lock 13839 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "thatstoasty/prism"
+ref = "5d8567cf443de3a51cad22e41c21b0e4de6eb9c8"
+target = "pixi.toml"
+notes = "default env, 3 platforms; lock 1929 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "rnabioco/sracha-rs"
+ref = "6c005f3370897be3c554ca390795e46e50a8f7ac"
+target = "pixi.toml"
+notes = "1 envs, 1 features, pypi-deps, 2 platforms; lock 6060 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "jupyter-xeus/xeus-haskell"
+ref = "7c465750e2e6ac4b9bdbab2764c4ff5683e36db4"
+target = "pixi.toml"
+notes = "5 envs, 5 features, 1 platforms; lock 5219 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "NOAA-ORR-ERD/gridded"
+ref = "405cd937541f1eaf4118d1b5d9f39351fa595f63"
+target = "pixi.toml"
+notes = "9 envs, 7 features, pypi-deps, 4 platforms; lock 19423 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "bootphon/phonemizer"
+ref = "8eac8d644fb90cb8aea58d9d9808c94040a69dad"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 5 envs, 5 features, pypi-deps, 3 platforms; lock 4114 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "robot-descriptions/robot_descriptions.py"
+ref = "b48baf4472130d6ea594e6ffb2fff5eca09525f5"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 9 envs, 10 features, pypi-deps, 1 platforms; lock 7459 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "qpsolvers/qpsolvers"
+ref = "299c8bffd9b38af1f3d3e90850172ce499af2591"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 8 envs, 9 features, pypi-deps, 4 platforms; lock 15287 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "deeptools/deepTools"
+ref = "13bf814ebd8da4297940d258d669def9d44e548a"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 4 envs, 4 features, pypi-deps, 3 platforms; lock 13957 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "drivendataorg/erdantic"
+ref = "f7364af5416c40a2dda435cc968ae81bd4c31252"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 7 envs, 5 features, pypi-deps, 4 platforms; lock 9465 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "jcmgray/cotengra"
+ref = "7a63d02b6d8d842bdee7de08fc1bd16b3e519765"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 8 envs, 10 features, pypi-deps, 4 platforms; lock 15894 lines"
+
+[[repo]]
+manager = "uv"
+repo = "pyecharts/pyecharts"
+ref = "c50da2aa877bb4ce576b15b5be3b2ad0c8aa33c6"
+target = "pyproject.toml"
+notes = "dev-dependencies; lock 3866 lines"
+
+[[repo]]
+manager = "uv"
+repo = "Stanford-Trinity/ARTEMIS"
+ref = "f309242d2a74493cd41aa3f8b02cec4d3fdd479d"
+target = "pyproject.toml"
+notes = "dev-dependencies; lock 670 lines"
+
+[[repo]]
+manager = "uv"
+repo = "TheAhmadOsman/4o-ghibli-at-home"
+ref = "ceaa8b1ba43a58ebc0a63f1847a3a4bd1e585854"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups; lock 1255 lines"
+
+[[repo]]
+manager = "uv"
+repo = "rtCamp/Frappe-Manager"
+ref = "ce165d0c6193029445c417208dc1c696313fe255"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups; lock 891 lines"
+
+[[repo]]
+manager = "uv"
+repo = "neurobionics/onshape-robotics-toolkit"
+ref = "f4cedbda68ef80092b03e3953bc2fba4790f8cd2"
+target = "pyproject.toml"
+notes = "dev-dependencies; lock 2503 lines"
+
+[[repo]]
+manager = "uv"
+repo = "seapagan/fastapi-template"
+ref = "23fe83f2fe1ed934032737a301583fd47ec7d1e3"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups; lock 4103 lines"
+
+[[repo]]
+manager = "uv"
+repo = "OvertureMaps/schema"
+ref = "ac5e973056702c2f7d3fd2d7efaac0fcb42553dc"
+target = "pyproject.toml"
+notes = "workspace, 1 dep-groups; lock 1952 lines"
+
+[[repo]]
+manager = "uv"
+repo = "elefant-ai/open-p2p"
+ref = "a329d98cbe62119679a254d71bea6446773541bc"
+target = "pyproject.toml"
+notes = "workspace, sources, custom index; lock 4625 lines"
+
+[[repo]]
+manager = "uv"
+repo = "whitphx/streamlit-server-state"
+ref = "3e0c195a8bf59a27e2cd5a58fb92e0af685d34c7"
+target = "pyproject.toml"
+notes = "dev-dependencies; lock 1721 lines"
+
+[[repo]]
+manager = "uv"
+repo = "plan4better/goat"
+ref = "fa0bc8384d9324dbfc5f355c7aa305450346a9e6"
+target = "pyproject.toml"
+notes = "workspace, sources, 1 dep-groups; lock 3039 lines"
+
+[[repo]]
+manager = "uv"
+repo = "ringsaturn/tzfpy"
+ref = "544a1a2b9143c6cb429ab2a4d851969fccd3d951"
+target = "pyproject.toml"
+notes = "workspace, sources, 2 dep-groups; lock 1698 lines"
+
+[[repo]]
+manager = "uv"
+repo = "rlouf/zeta"
+ref = "f959a1f7c65b1a40a3886f0c896f7b9a156f3e80"
+target = "pyproject.toml"
+notes = "workspace, sources, 1 dep-groups; lock 1264 lines"
+
+[[repo]]
+manager = "uv"
+repo = "bytedance/jaqmc"
+ref = "74e917c922c767f0ce68718fb70814c90104b47a"
+target = "pyproject.toml"
+notes = "workspace, 6 dep-groups; lock 3980 lines"
+
+[[repo]]
+manager = "uv"
+repo = "alibaba/loongsuite-python"
+ref = "c27eb2a6d8f2ece92b0f315025697b5771a30fd5"
+target = "pyproject.toml"
+notes = "workspace, git source, 1 dep-groups; lock 6000 lines"
+
+[[repo]]
+manager = "uv"
+repo = "smithy-lang/smithy-python"
+ref = "3bb1d951e8b02872ebf9ca2479f6c0b252be976e"
+target = "pyproject.toml"
+notes = "workspace, sources, 4 dep-groups; lock 919 lines"
+
+[[repo]]
+manager = "uv"
+repo = "groundlight/mcp-vision"
+ref = "ca6cf6948f5dcd9c007192553a4c9e1b708824bb"
+target = "pyproject.toml"
+notes = "dev-dependencies; lock 1210 lines"
+
+[[repo]]
+manager = "uv"
+repo = "Tanzania-AI-Community/twiga"
+ref = "33e7e95410e5d35d2e6681c5b28646ebf15e8568"
+target = "pyproject.toml"
+notes = "dev-dependencies; lock 2208 lines"
+
+[[repo]]
+manager = "uv"
+repo = "microsoft/Agent365-python"
+ref = "b84c030fdfde93cb39ccd99101ebf382d9d62dde"
+target = "pyproject.toml"
+notes = "workspace, sources, dev-dependencies; lock 6715 lines"
+
+[[repo]]
+manager = "uv"
+repo = "StuartMacKay/crispy-forms-gds"
+ref = "120a2c8fb2bd20c96d29279a3b1fdb030fdd7d8e"
+target = "pyproject.toml"
+notes = "dev-dependencies; lock 1271 lines"
+
+[[repo]]
+manager = "uv"
+repo = "wouterbles/pyaugmecon"
+ref = "8821b3bfb556ec852c77971052b1ad1c52799ac0"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups; lock 1355 lines"
+
+[[repo]]
+manager = "uv"
+repo = "aws/mcp-proxy-for-aws"
+ref = "52ddc4fe88dd6bb0f6b45a6cc8fafc2274990cdc"
+target = "pyproject.toml"
+notes = "workspace, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 7114 lines"
+
+[[repo]]
+manager = "uv"
+repo = "sotopia-lab/sotopia"
+ref = "a0aaafb440e570e5e61b7c44a44e5e417c545383"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 4947 lines"
+
+[[repo]]
+manager = "uv"
+repo = "kiviktnm/decman"
+ref = "fc668600ba7df74cd8d21fdfe7ff9baf78a9e52f"
+target = "pyproject.toml"
+notes = "workspace, sources, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 286 lines"
+
+[[repo]]
+manager = "uv"
+repo = "Future-House/aviary"
+ref = "7167342915e656fba1d93af4a5f0549cb803cd76"
+target = "pyproject.toml"
+notes = "workspace, sources, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 5248 lines"
+
+[[repo]]
+manager = "uv"
+repo = "projectfluent/python-fluent"
+ref = "724a6cf0cba068df12cb43dd9d0071eaec14f18e"
+target = "pyproject.toml"
+notes = "workspace, sources, tool.uv only via subtables (no bare [tool.uv] header); lock 593 lines"
+
+[[repo]]
+manager = "uv"
+repo = "PineTreeLabs/archimedes"
+ref = "5a5b82dc3ee82547c58667f68179136a9d0e2914"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 3351 lines"
+
+[[repo]]
+manager = "uv"
+repo = "compl-ai/compl-ai"
+ref = "c359f0a61112f8316715ea1c6e140983f0c50a40"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 5258 lines"
+
+[[repo]]
+manager = "uv"
+repo = "bhoov/hamux"
+ref = "9326531818c465f0cda47b79b63558271ff15544"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 2955 lines"
+
+[[repo]]
+manager = "uv"
+repo = "bitsky-tech/bridgic"
+ref = "2cca118c99c640972320c3b664c7b09162c6634c"
+target = "pyproject.toml"
+notes = "workspace, sources, 2 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 3980 lines"
+
+[[repo]]
+manager = "uv"
+repo = "ActivityWatch/aw-import-screentime"
+ref = "1297039793819b25f926289fb033d77c66786c50"
+target = "pyproject.toml"
+notes = "git source, 1 dep-groups, tool.uv only via subtables (no bare [tool.uv] header); lock 766 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "scottransom/presto"
+ref = "df50c1d6bee54374caae9dda807aa1ded291937e"
+target = "pixi.toml"
+notes = "default env, 3 platforms; lock 10948 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "cooperative-computing-lab/cctools"
+ref = "5bef53fd48573f4474dbfe4307909dfb8edc4023"
+target = "pixi.toml"
+notes = "default env, 3 platforms; lock 6421 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "spglib/moyo"
+ref = "e3b36b3bf091a34dc16fdfec267df89f027087d3"
+target = "pixi.toml"
+notes = "default env, 3 platforms; lock 1623 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "spylang/spy"
+ref = "a39950cab36e7adeca4808fb0e75081526ee44c8"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 2 envs, 1 features, pypi-deps, 2 platforms; lock 2060 lines"
+
+[[repo]]
+manager = "pixi"
+repo = "ericmjl/nxviz"
+ref = "9ab9e72cbd1bfd020c0ac666ef340c253cc7016b"
+target = "pyproject.toml"
+notes = "pyproject [tool.pixi]; 7 envs, 7 features, pypi-deps, 2 platforms; lock 4621 lines"
+
+[[repo]]
+manager = "cargo"
+repo = "sharkdp/hexyl"
+ref = "6ecc29b9c8c84d08a7e860f7f69c22b113b480ea"
+target = "Cargo.toml"
+notes = "single crate; 68 locked pkgs; lock v4; rust-version set"
+
+[[repo]]
+manager = "cargo"
+repo = "ajeetdsouza/zoxide"
+ref = "f0b31631d295b0623bc440016ed0aba3c7c49dde"
+target = "Cargo.toml"
+notes = "single crate; 128 locked pkgs; lock v4; rust-version set"
+
+[[repo]]
+manager = "cargo"
+repo = "bootandy/dust"
+ref = "ae5c770d84316c28bc95e2a3cc7f43fea84b1f68"
+target = "Cargo.toml"
+notes = "single crate; 125 locked pkgs; lock v4; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "XAMPPRocky/tokei"
+ref = "c14f744716272fadeb27a74443cdffa0af35f82f"
+target = "Cargo.toml"
+notes = "single crate; 208 locked pkgs; lock v3; rust-version set"
+
+[[repo]]
+manager = "cargo"
+repo = "chmln/sd"
+ref = "44febdf86343c653255ae4f20f5e1882dad6be17"
+target = "Cargo.toml"
+notes = "workspace; 106 locked pkgs; lock v4; rust-version set"
+
+[[repo]]
+manager = "cargo"
+repo = "svenstaro/miniserve"
+ref = "e698dbd06cbaab9745772679c02d1cc380451dd2"
+target = "Cargo.toml"
+notes = "single crate; 440 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "orf/gping"
+ref = "fad1ee3c02fdc45751271778814cec452a45f2ab"
+target = "Cargo.toml"
+notes = "workspace; 204 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "imsnif/bandwhich"
+ref = "1899870cea8bb377948f05cfea64733ec6ea2cd6"
+target = "Cargo.toml"
+notes = "single crate; 424 locked pkgs; lock v4; rust-version set; git deps (1 git sources in lock)"
+
+[[repo]]
+manager = "cargo"
+repo = "pemistahl/grex"
+ref = "99cc347707375e00514f938b76d885a201dfc110"
+target = "Cargo.toml"
+notes = "single crate; 167 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "Canop/broot"
+ref = "141fcefa7658231e173483b6b1fb7653faf02c8d"
+target = "Cargo.toml"
+notes = "single crate; 498 locked pkgs; lock v4; rust-version set; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "watchexec/watchexec"
+ref = "a7170667adbb828633c11764fa57c58147b83ccb"
+target = "Cargo.toml"
+notes = "workspace; 454 locked pkgs; lock v3"
+
+[[repo]]
+manager = "cargo"
+repo = "lycheeverse/lychee"
+ref = "06f90b08225d739519535ef06434301b5a2504c6"
+target = "Cargo.toml"
+notes = "workspace; 580 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "dalance/procs"
+ref = "b10d652b64f5cc18b66071f781c1154853728baa"
+target = "Cargo.toml"
+notes = "single crate; 303 locked pkgs; lock v4; rust-version set; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "killercup/cargo-edit"
+ref = "5cf6c0ba4c9bb604617630fff870213cec824a0f"
+target = "Cargo.toml"
+notes = "single crate; 276 locked pkgs; lock v4; rust-version set; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "tamasfe/taplo"
+ref = "08f343be02ce1b20296470396a42f0fa47820449"
+target = "Cargo.toml"
+notes = "workspace; 316 locked pkgs; lock v3; rust-version set"
+
+[[repo]]
+manager = "cargo"
+repo = "est31/cargo-udeps"
+ref = "354ce235b6a527cdb72cf6aefb1fcb4b5dbad07c"
+target = "Cargo.toml"
+notes = "single crate; 404 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "lsd-rs/lsd"
+ref = "4b6c14a110fe0fd544ec0204501b5fd3a5d6218f"
+target = "Cargo.toml"
+notes = "single crate; 240 locked pkgs; lock v4; rust-version set; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "ClementTsang/bottom"
+ref = "7d65d62c8310f592727e6a142007f761504c2c8b"
+target = "Cargo.toml"
+notes = "single crate; 219 locked pkgs; lock v4; rust-version set; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "ouch-org/ouch"
+ref = "6df14b05ea6d1e600f1f3ff16bccd4a756c20c94"
+target = "Cargo.toml"
+notes = "single crate; 236 locked pkgs; lock v4; rust-version set"
+
+[[repo]]
+manager = "cargo"
+repo = "tealdeer-rs/tealdeer"
+ref = "993a8e0232ef42c4d9935ff5598796b6e98bf213"
+target = "Cargo.toml"
+notes = "single crate; 173 locked pkgs; lock v4; rust-version set; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "kamiyaa/joshuto"
+ref = "dab6375439b1179859e94784de84bef399112841"
+target = "Cargo.toml"
+notes = "single crate; 404 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "theryangeary/choose"
+ref = "f1c53eef5706a767b7327889c2bf1c09a3c4006e"
+target = "Cargo.toml"
+notes = "single crate; 32 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "ms-jpq/sad"
+ref = "4df03aebb22af23d54fb83f5d864223c0bd8c413"
+target = "Cargo.toml"
+notes = "single crate; 99 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "denisidoro/navi"
+ref = "7cc5d42b22f223bd205b85f61cc75ba6fd2c54c7"
+target = "Cargo.toml"
+notes = "single crate; 112 locked pkgs; lock v4; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "sxyazi/yazi"
+ref = "40a91421893bfd1ae02ef7a55afd41f886558d8c"
+target = "Cargo.toml"
+notes = "workspace; 558 locked pkgs; lock v4; rust-version set; git deps (1 git sources in lock); path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "dandavison/delta"
+ref = "3c2269c6b845913965575f11b0196d70ef5352f3"
+target = "Cargo.toml"
+notes = "single crate; 277 locked pkgs; lock v4; path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "Orange-OpenSource/hurl"
+ref = "66e63611d045bea99f63b998f628cf0628181d1e"
+target = "Cargo.toml"
+notes = "workspace; 159 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "epi052/feroxbuster"
+ref = "b07a7662d588bd8e4371e9be4704a02d976c89bb"
+target = "Cargo.toml"
+notes = "single crate; 475 locked pkgs; lock v4"
+
+[[repo]]
+manager = "cargo"
+repo = "rustic-rs/rustic"
+ref = "143d073f6039fcf29b64191ceb36c926744b6fe4"
+target = "Cargo.toml"
+notes = "single crate; 760 locked pkgs; lock v4; rust-version set; git deps (2 git sources in lock); path = entries (path deps)"
+
+[[repo]]
+manager = "cargo"
+repo = "cargo-generate/cargo-generate"
+ref = "44f679770ad264b2f3cac830e12dd3031c389ca4"
+target = "Cargo.toml"
+notes = "single crate; 421 locked pkgs; lock v4; path = entries (path deps)"
+
+[[repo]]
+manager = "github-actions"
+repo = "axios/axios"
+ref = "aa54a5e1e0e50cd1a2561b854ae5490ff589d065"
+target = ".github/workflows/release-branch.yml"
+notes = "8 workflows; manifest has 24 third-party uses; repo-wide: SHA-pinned w/ version comment x60"
+
+[[repo]]
+manager = "github-actions"
+repo = "Orange-OpenSource/hurl"
+ref = "66e63611d045bea99f63b998f628cf0628181d1e"
+target = ".github/workflows/package.yml"
+notes = "12 workflows; manifest has 36 third-party uses; repo-wide: SHA-pinned w/ version comment x94, subdir actions (owner/repo/path@ref) x2"
+
+[[repo]]
+manager = "github-actions"
+repo = "killercup/cargo-edit"
+ref = "5cf6c0ba4c9bb604617630fff870213cec824a0f"
+target = ".github/workflows/ci.yml"
+notes = "4 workflows; manifest has 18 third-party uses; repo-wide: SHA-pinned w/ version comment x26, major tags x2, subdir actions (owner/repo/path@ref) x1"
+
+[[repo]]
+manager = "github-actions"
+repo = "puppeteer/puppeteer"
+ref = "08e7b1aebe60462b6f7834e9dfe0f6c70464247c"
+target = ".github/workflows/ci.yml"
+notes = "14 workflows; manifest has 28 third-party uses; repo-wide: SHA-pinned w/ version comment x88, local ./ actions x4, subdir actions (owner/repo/path@ref) x1"
+
+[[repo]]
+manager = "github-actions"
+repo = "serverless/serverless"
+ref = "e238572c237725143cb2521b500efbcd001e243b"
+target = ".github/workflows/release-framework.yml"
+notes = "13 workflows; manifest has 12 third-party uses; repo-wide: SHA-pinned w/ version comment x79, local ./ actions x19"
+
+[[repo]]
+manager = "github-actions"
+repo = "ossf/scorecard"
+ref = "47770053fe5d4445ffedd98754258a24b75792ac"
+target = ".github/workflows/main.yml"
+notes = "16 workflows; manifest has 30 third-party uses; repo-wide: SHA-pinned w/ version comment x84, major tags x1, reusable workflows x2, subdir actions (owner/repo/path@ref) x5"
+
+[[repo]]
+manager = "github-actions"
+repo = "sigstore/cosign"
+ref = "a1a30f35757c5f9a484f5be8150c9c8a18bc5db3"
+target = ".github/workflows/e2e-tests.yml"
+notes = "17 workflows; manifest has 14 third-party uses; repo-wide: SHA-pinned w/ version comment x71, reusable workflows x2, subdir actions (owner/repo/path@ref) x13"
+
+[[repo]]
+manager = "github-actions"
+repo = "slsa-framework/slsa-github-generator"
+ref = "bb91a05077afa6601a3d7538c4cbbdbf0abe7ed9"
+target = ".github/workflows/builder_container-based_slsa3.yml"
+notes = "29 workflows; manifest has 21 third-party uses; repo-wide: SHA-pinned w/ version comment x106, reusable workflows x9, local ./ actions x70, subdir actions (owner/repo/path@ref) x53"
+
+[[repo]]
+manager = "github-actions"
+repo = "step-security/harden-runner"
+ref = "dc2769abcc0fcfbadfc1df54081c1608579ef6b2"
+target = ".github/workflows/runs-on.yml"
+notes = "9 workflows; manifest has 8 third-party uses; repo-wide: SHA-pinned w/ version comment x15, major tags x5, docker:// actions x5, subdir actions (owner/repo/path@ref) x4"
+
+[[repo]]
+manager = "github-actions"
+repo = "kubernetes-sigs/kind"
+ref = "2b29bebb68be838c81ed868cc4f21836c5b1c911"
+target = ".github/workflows/vm.yaml"
+notes = "4 workflows; manifest has 5 third-party uses; repo-wide: SHA-pinned w/ version comment x10, local ./ actions x3, subdir actions (owner/repo/path@ref) x1"
+
+[[repo]]
+manager = "github-actions"
+repo = "jest-community/eslint-plugin-jest"
+ref = "ee44deed3c55a9b690ee18201e2506cf91f696b2"
+target = ".github/workflows/nodejs.yml"
+notes = "6 workflows; manifest has 11 third-party uses; repo-wide: SHA-pinned w/ version comment x21, major tags x1, local ./ actions x7, docker:// actions x1"
+
+[[repo]]
+manager = "github-actions"
+repo = "APIs-guru/graphql-voyager"
+ref = "656b8ddb4e7bec958d7300e2d737f632c7b5ba30"
+target = ".github/workflows/ci.yml"
+notes = "6 workflows; manifest has 17 third-party uses; repo-wide: SHA-pinned w/ version comment x30, local ./ actions x5, docker:// actions x2, subdir actions (owner/repo/path@ref) x3"
+
+[[repo]]
+manager = "github-actions"
+repo = "cure53/DOMPurify"
+ref = "b7e0edc1293359d6ab54dc0ccc9cf9bbdd72aff7"
+target = ".github/workflows/build-and-test.yml"
+notes = "9 workflows; manifest has 8 third-party uses; repo-wide: SHA-pinned w/ version comment x34, subdir actions (owner/repo/path@ref) x4"
+
+[[repo]]
+manager = "github-actions"
+repo = "ClementTsang/bottom"
+ref = "7d65d62c8310f592727e6a142007f761504c2c8b"
+target = ".github/workflows/build_releases.yml"
+notes = "11 workflows; manifest has 23 third-party uses; repo-wide: SHA-pinned w/ version comment x51, local ./ actions x6"
+
+[[repo]]
+manager = "github-actions"
+repo = "Schniz/fnm"
+ref = "86adc9676ceb2a509b21e75e74048b93c89f097d"
+target = ".github/workflows/rust.yml"
+notes = "5 workflows; manifest has 48 third-party uses; repo-wide: major tags x62"
+
+[[repo]]
+manager = "github-actions"
+repo = "nodejs/nodejs.org"
+ref = "85a140781ef9b366ea84b3dbc0bdda995ef7b725"
+target = ".github/workflows/build.yml"
+notes = "24 workflows; manifest has 9 third-party uses; repo-wide: SHA-pinned w/ version comment x60, reusable workflows x3, subdir actions (owner/repo/path@ref) x16"
+
+[[repo]]
+manager = "github-actions"
+repo = "JohnnyMorganz/StyLua"
+ref = "d6562caedd4a45c2bd0e734574dd8ff200a44d63"
+target = ".github/workflows/release.yml"
+notes = "9 workflows; manifest has 22 third-party uses; repo-wide: major tags x56"
+
+[[repo]]
+manager = "github-actions"
+repo = "lycheeverse/lychee"
+ref = "06f90b08225d739519535ef06434301b5a2504c6"
+target = ".github/workflows/pypi.yml"
+notes = "11 workflows; manifest has 18 third-party uses; repo-wide: major tags x60"
+
+[[repo]]
+manager = "github-actions"
+repo = "recharts/recharts"
+ref = "bb1a3751c683468b9349956c958413956acc92f1"
+target = ".github/workflows/ci.yml"
+notes = "6 workflows; manifest has 49 third-party uses; repo-wide: SHA-pinned w/ version comment x5, major tags x57"
+
+[[repo]]
+manager = "github-actions"
+repo = "ionic-team/capacitor"
+ref = "02e43f83f7e101f1773e9d33cd12e3c52e7d2c4b"
+target = ".github/workflows/ci.yml"
+notes = "14 workflows; manifest has 19 third-party uses; repo-wide: major tags x39, local ./ actions x3"
+
+[[repo]]
+manager = "github-actions"
+repo = "SciML/DiffEqGPU.jl"
+ref = "9cef7c8360782dd472d46bcf03bd99ac7797f65e"
+target = ".github/workflows/GPU.yml"
+notes = "11 workflows; manifest has 6 third-party uses; repo-wide: major tags x16, reusable workflows x8"
+
+[[repo]]
+manager = "github-actions"
+repo = "google/zx"
+ref = "1e1cdb46b96f2d54abc04c713c91b069000c9c50"
+target = ".github/workflows/test.yml"
+notes = "8 workflows; manifest has 29 third-party uses; repo-wide: SHA-pinned w/ version comment x12, major tags x65, reusable workflows x2, subdir actions (owner/repo/path@ref) x2"
+
+[[repo]]
+manager = "github-actions"
+repo = "standardnotes/server"
+ref = "b7d2f3664e005aba6e4df14eb73dc3f2e622f5a2"
+target = ".github/workflows/publish.yml"
+notes = "18 workflows; manifest has 16 third-party uses; repo-wide: major tags x40, reusable workflows x17"
+
+[[repo]]
+manager = "github-actions"
+repo = "sxyazi/yazi"
+ref = "40a91421893bfd1ae02ef7a55afd41f886558d8c"
+target = ".github/workflows/draft.yml"
+notes = "10 workflows; manifest has 22 third-party uses; repo-wide: major tags x30, reusable workflows x3"
+
+[[repo]]
+manager = "github-actions"
+repo = "cargo-generate/cargo-generate"
+ref = "44f679770ad264b2f3cac830e12dd3031c389ca4"
+target = ".github/workflows/build.yml"
+notes = "8 workflows; manifest has 26 third-party uses; repo-wide: major tags x25, reusable workflows x1"
+
+[[repo]]
+manager = "github-actions"
+repo = "awslabs/aws-c-s3"
+ref = "cd01f826bde6d9fed6d702702bf43f20f9430b99"
+target = ".github/workflows/ci.yml"
+notes = "10 workflows; manifest has 21 third-party uses; repo-wide: major tags x32, reusable workflows x1, subdir actions (owner/repo/path@ref) x2"
+
+[[repo]]
+manager = "github-actions"
+repo = "strimzi/strimzi-mqtt-bridge"
+ref = "ef91a533d23cfc54d50de29ba0e4bddd73449e22"
+target = ".github/workflows/cve-rebuild.yml"
+notes = "6 workflows; manifest has 14 third-party uses; repo-wide: major tags x45, reusable workflows x1, docker:// actions x1, subdir actions (owner/repo/path@ref) x26"
+
+[[repo]]
+manager = "github-actions"
+repo = "swift-server-community/mqtt-nio"
+ref = "498d79ccaa2a22de847de2e25505e392a48bad5a"
+target = ".github/workflows/ci.yml"
+notes = "3 workflows; manifest has 11 third-party uses; repo-wide: major tags x2, reusable workflows x1, docker:// actions x1"
+
+[[repo]]
+manager = "github-actions"
+repo = "tamasfe/taplo"
+ref = "08f343be02ce1b20296470396a42f0fa47820449"
+target = ".github/workflows/releases.yaml"
+notes = "3 workflows; manifest has 55 third-party uses; repo-wide: major tags x71, docker:// actions x1"
+
+[[repo]]
+manager = "github-actions"
+repo = "knex/knex"
+ref = "e25d54bcb707714a17f5a5744eba5c4246bb4d1d"
+target = ".github/workflows/release.yml"
+notes = "10 workflows; manifest has 13 third-party uses; repo-wide: major tags x36, docker:// actions x1, subdir actions (owner/repo/path@ref) x2"
+
+[[repo]]
+manager = "npm"
+repo = "mochajs/mocha"
+ref = "cb21a4eba550da665fb2c3fa1ce021777a191e23"
+target = "package.json"
+notes = "lockfileVersion 3; 10074 lock lines; 54 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "axios/axios"
+ref = "aa54a5e1e0e50cd1a2561b854ae5490ff589d065"
+target = "package.json"
+notes = "lockfileVersion 3; 9727 lock lines; 42 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "chaijs/chai"
+ref = "78d9637c79e211ed4f2455d9ba9b8a47be22dc6c"
+target = "package.json"
+notes = "lockfileVersion 3; 7561 lock lines; 18 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "nock/nock"
+ref = "415fc645e663aa79d3f9aaa8abbb82f4229ee524"
+target = "package.json"
+notes = "lockfileVersion 3; 10959 lock lines; 25 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "markedjs/marked"
+ref = "4b7b5b2d1e05d24c85ac2c2fa96bbfe6952e6770"
+target = "package.json"
+notes = "lockfileVersion 3; 8875 lock lines; 25 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "cheeriojs/cheerio"
+ref = "f222764ff1e0dcb1649cb359389a6eba6a7a2cf0"
+target = "package.json"
+notes = "lockfileVersion 3; 5879 lock lines; 34 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "winstonjs/winston"
+ref = "ff0b79de8562bb322c390fbc82fe71c11f373428"
+target = "package.json"
+notes = "lockfileVersion 3; 8226 lock lines; 29 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "bpmn-io/bpmn-js"
+ref = "e7b7435ed60f662b3d80caaefe5dccba5d3a4c75"
+target = "package.json"
+notes = "lockfileVersion 3; 15137 lock lines; 53 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "semantic-release/semantic-release"
+ref = "04c1923646eb801cf6f0f90455cf00b78b94fdb7"
+target = "package.json"
+notes = "lockfileVersion 3; 14660 lock lines; 51 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "uuidjs/uuid"
+ref = "8eed10acf6b1a43778bb70ea3ed3f40e8a7a6d7b"
+target = "package.json"
+notes = "lockfileVersion 3; 13407 lock lines; 17 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "terser/terser"
+ref = "707c978227009aa6948f2a1048aa59f5fdd5bc40"
+target = "package.json"
+notes = "lockfileVersion 2; 4244 lock lines; 14 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "http-party/http-server"
+ref = "0d3b7bb5b6e8a59fd450ae2dca65870009cfcd8b"
+target = "package.json"
+notes = "lockfileVersion 2; 14682 lock lines; 20 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "Leaflet/Leaflet"
+ref = "67d241f461e0c8659a06d1d8edd693a14bbf7103"
+target = "package.json"
+notes = "lockfileVersion 3; 4453 lock lines; 21 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "jquery/jquery"
+ref = "c2f27864e4ffc2d1409c289fcb9a42b6165dfeaf"
+target = "package.json"
+notes = "lockfileVersion 3; 10995 lock lines; 33 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "karma-runner/karma"
+ref = "84f85e7016efc2266fa6b3465f494a3fa151c85c"
+target = "package.json"
+notes = "lockfileVersion 3; 14606 lock lines; 63 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "bcoe/c8"
+ref = "ae5a0cf4349b92cac910cf7275e724ab7a725b9d"
+target = "package.json"
+notes = "lockfileVersion 2; 8743 lock lines; 19 direct deps; peerDependencies"
+
+[[repo]]
+manager = "npm"
+repo = "googleapis/release-please"
+ref = "c589293ca38aee267b329f9bf9b26c9d6516a687"
+target = "package.json"
+notes = "lockfileVersion 3; 5601 lock lines; 58 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "github/eslint-plugin-github"
+ref = "3984c2cb50cc4ea0aad20fa564cbc0f57efe6495"
+target = "package.json"
+notes = "lockfileVersion 3; 5685 lock lines; 30 direct deps; peerDependencies"
+
+[[repo]]
+manager = "npm"
+repo = "recharts/recharts"
+ref = "bb1a3751c683468b9349956c958413956acc92f1"
+target = "package.json"
+notes = "lockfileVersion 3; 19308 lock lines; 107 direct deps; npm workspaces; peerDependencies"
+
+[[repo]]
+manager = "npm"
+repo = "firebase/firebase-tools"
+ref = "926b3fe846dd861f5743e50d45f3475bac6fa209"
+target = "firebase-vscode/package.json"
+notes = "lockfileVersion 3; 17847 lock lines; 49 direct deps; manifest in subdir firebase-vscode/"
+
+[[repo]]
+manager = "npm"
+repo = "nolimits4web/swiper"
+ref = "947ed585b1a48534220291ad5b76df69e4336161"
+target = "package.json"
+notes = "lockfileVersion 3; 7823 lock lines; 33 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "apexcharts/react-apexcharts"
+ref = "61b71376c22b18b6ecf2fc39dd37cb77923bf57b"
+target = "package.json"
+notes = "lockfileVersion 3; 9834 lock lines; 19 direct deps; peerDependencies"
+
+[[repo]]
+manager = "npm"
+repo = "knex/knex"
+ref = "e25d54bcb707714a17f5a5744eba5c4246bb4d1d"
+target = "docs/package.json"
+notes = "lockfileVersion 3; 4069 lock lines; 4 direct deps; private root; manifest in subdir docs/"
+
+[[repo]]
+manager = "npm"
+repo = "actions/toolkit"
+ref = "0c3a9c332b678ff1e776f93d728a4ad279803abe"
+target = "package.json"
+notes = "lockfileVersion 3; 16383 lock lines; 16 direct deps; private root"
+
+[[repo]]
+manager = "npm"
+repo = "koajs/koa"
+ref = "a82feec38a7c28e14f4db7525b8f500801214a76"
+target = "package.json"
+notes = "lockfileVersion 3; 5290 lock lines; 23 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "helmetjs/helmet"
+ref = "9398bed759bf3342310b85a1d224467f434a75b4"
+target = "package.json"
+notes = "lockfileVersion 2; 6598 lock lines; 17 direct deps; private root"
+
+[[repo]]
+manager = "npm"
+repo = "motdotla/dotenv"
+ref = "c40119a1c875268a2b2331f3d70bd16677e0ef6d"
+target = "package.json"
+notes = "lockfileVersion 2; 16350 lock lines; 9 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "node-cron/node-cron"
+ref = "22cacf992364cd8786fd3b547aab0f1ac09c6f8e"
+target = "package.json"
+notes = "lockfileVersion 3; 3512 lock lines; 18 direct deps"
+
+[[repo]]
+manager = "npm"
+repo = "microsoft/vscode-languageserver-node"
+ref = "e4ddcca2234e7cd037afbaf9fa408ec50612d6ec"
+target = "package.json"
+notes = "lockfileVersion 3; 6485 lock lines; 20 direct deps; private root"
+
+[[repo]]
+manager = "npm"
+repo = "yjs/yjs"
+ref = "0e0dc3401b9753fbffb60699f6b68460cf1bcdf9"
+target = "package.json"
+notes = "lockfileVersion 3; 5935 lock lines; 9 direct deps"
