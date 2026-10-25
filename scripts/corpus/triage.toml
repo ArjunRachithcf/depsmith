@@ -1,0 +1,7 @@
+# How the corpus report classifies failure signatures (scripts/corpus/report.py).
+# The first rule whose pattern matches a row's signature or detail sets its class:
+#   env    - the network, a registry or a rate limit; not depsmith's doing
+#   repo   - the repository at its pinned commit cannot be resolved as it stands
+#   design - depsmith declines by design; recorded, not fixed
+#   bug    - a depsmith defect
+# Rules are added as clusters are triaged, each with the reason.
