@@ -683,7 +683,14 @@ impl Adapter for Cargo {
                 "--precise".into(),
                 request.version.clone(),
             ]);
-            report.push_str(&run_env_output(&cargo, &precise, stage, timeout, &msrv)?.1);
+            match run_env_output(&cargo, &precise, stage, timeout, &msrv) {
+                Ok((_, output)) => report.push_str(&output),
+                // A version cargo cannot select, such as one a parent's
+                // requirement excludes, leaves the crate where it is; the
+                // security update then reports that fix as blocked.
+                Err(error) if error.to_string().contains("failed to select a version") => {}
+                Err(error) => return Err(error),
+            }
         }
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env_output(

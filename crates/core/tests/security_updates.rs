@@ -77,11 +77,32 @@ fn prepare_with_releases(
     releases: &[(&str, &[&str])],
     failing: &[&str],
 ) -> Run {
+    prepare_refusing(
+        pyproject, baseline, next, advisories, options, releases, failing, None,
+    )
+}
+
+/// [`prepare_with_releases`] with a uv that finds no solution whenever its
+/// arguments contain `refuse`.
+#[allow(clippy::too_many_arguments)]
+fn prepare_refusing(
+    pyproject: &str,
+    baseline: &str,
+    next: &str,
+    advisories: &[(String, String)],
+    options: UpdateOptions,
+    releases: &[(&str, &[&str])],
+    failing: &[&str],
+    refuse: Option<&str>,
+) -> Run {
     let root = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
     fs::write(root.path().join("pyproject.toml"), pyproject).unwrap();
     fs::write(root.path().join("uv.lock"), baseline).unwrap();
     let dir = tools.path();
+    let refusal = refuse.map_or(String::new(), |r| {
+        format!("case \"$*\" in *'{r}'*) echo '  × No solution found when resolving dependencies:' >&2; exit 1;; esac\n")
+    });
     fs::write(dir.join("next.lock"), next).unwrap();
     let rules: String = advisories
         .iter()
@@ -97,7 +118,7 @@ fn prepare_with_releases(
     let uv = script(
         "uv",
         format!(
-            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'uv 0.12.15';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n",
+            "#!/bin/sh\n{refusal}case \"$1\" in\n  --version) echo 'uv 0.12.15';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n",
             d = dir.display()
         ),
     );
@@ -300,6 +321,34 @@ fn a_transitive_package_left_below_its_fix_is_a_suggestion_naming_its_path() {
         .changes
         .iter()
         .all(|c| !c.path.ends_with("pyproject.toml")));
+}
+
+#[test]
+fn a_fix_the_resolver_cannot_reach_is_blocked_and_the_others_still_move() {
+    let run = prepare_refusing(
+        PYPROJECT,
+        &lock("1.15.0", "3.6", "2.0.0"),
+        &lock("1.15.0", "3.7", "2.0.0"),
+        &[
+            advisory("GHSA-direct", "idna", "3.6", "High", &["3.7"]),
+            advisory("GHSA-transitive", "urllib3", "2.0.0", "High", &["2.0.7"]),
+        ],
+        UpdateOptions::default(),
+        &[],
+        &[],
+        Some("urllib3==2.0.7"),
+    );
+    let proposal = run.result.unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(fix(&proposal, "GHSA-direct").outcome, FixOutcome::Fixed);
+    assert_eq!(
+        fix(&proposal, "GHSA-transitive").outcome,
+        FixOutcome::Blocked
+    );
+    assert!(proposal
+        .suggestions
+        .iter()
+        .any(|s| s.reason.contains("GHSA-transitive")));
 }
 
 /// `lock` without the edge from idna to urllib3, so no declared dependency

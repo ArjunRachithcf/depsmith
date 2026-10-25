@@ -460,6 +460,40 @@ mod stand_in {
     }
 
     #[test]
+    fn a_precise_update_cargo_cannot_select_leaves_its_crate_and_the_others_move() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        write(root.path(), &[("Cargo.toml", &package("a", ""))]);
+        let inner = cargo(tools.path(), "1.98.1");
+        let (script, log) = (tools.path().join("refusing"), tools.path().join("log"));
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in *'-p idna --precise'*) printf 'error: failed to select a version for the requirement `idna = \"^0.5.0\"`\nrequired by package `url v2.5.2`\n' >&2; exit 101;; esac\nexec '{inner}' \"$@\"\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let request = |package: &str, version: &str| depsmith_core::PreciseUpdate {
+            package: package.into(),
+            version: version.into(),
+        };
+        let options = UpdateOptions {
+            tools: BTreeMap::from([("cargo".into(), script.to_string_lossy().into_owned())]),
+            precise: vec![request("idna", "1.0.0"), request("once_cell", "1.17.0")],
+            ..Default::default()
+        };
+        let proposal = Engine::new(vec![Box::new(Cargo::default())])
+            .prepare(root.path(), &["cargo:Cargo.toml".into()], options)
+            .unwrap();
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let log = fs::read_to_string(log).unwrap();
+        assert!(log.contains("-p once_cell --precise 1.17.0"), "{log}");
+        assert!(log.lines().last().unwrap().contains("--locked"), "{log}");
+    }
+
+    #[test]
     fn cargo_older_than_1_84_is_unsupported() {
         let proposal = prepare("1.0", &[], "1.80.0");
         assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);

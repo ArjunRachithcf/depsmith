@@ -556,14 +556,37 @@ impl Adapter for Uv {
         } else {
             vec![]
         };
-        let mut args = lock(&[]);
-        if upgrades.is_empty() {
-            args.push("--upgrade".into());
+        let attempt = |upgrades: &[&str]| -> Result<String> {
+            let mut args = lock(&[]);
+            if upgrades.is_empty() {
+                args.push("--upgrade".into());
+            }
+            for name in upgrades {
+                args.extend(["--upgrade-package".into(), (*name).to_owned()]);
+            }
+            run_env(&uv, &args, &dir, timeout, options.tool_env("uv"))
+        };
+        match attempt(&upgrades) {
+            // A fix version the resolver cannot reach, such as one a parent's
+            // requirement excludes, leaves its package where it is; the
+            // security update then reports that fix as blocked. The others
+            // are pinned one at a time, keeping each uv can reach.
+            Err(error) if !precise.is_empty() && unsatisfiable(&error) => {
+                let mut kept: Vec<&str> = options.packages.iter().map(String::as_str).collect();
+                for request in &precise {
+                    let mut trial = kept.clone();
+                    trial.push(request);
+                    match attempt(&trial) {
+                        Ok(_) => kept = trial,
+                        Err(error) if unsatisfiable(&error) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            result => {
+                result?;
+            }
         }
-        for name in upgrades {
-            args.extend(["--upgrade-package".into(), name.to_owned()]);
-        }
-        run_env(&uv, &args, &dir, timeout, options.tool_env("uv"))?;
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env(
             &uv,
@@ -574,6 +597,13 @@ impl Adapter for Uv {
         )?;
         check.candidate(stage, target, &resolved, vec![])
     }
+}
+
+/// Whether uv failed because the requirements have no solution, rather than
+/// for a reason another attempt would share (the network, a build).
+fn unsatisfiable(error: &Error) -> bool {
+    let message = error.to_string();
+    message.contains("No solution found") || message.contains("are unsatisfiable")
 }
 
 /// Apply the edits of one manifest's text, keeping comments and layout.
