@@ -161,7 +161,19 @@ fn tail(mut errors: std::fs::File, env: &[(String, String)]) -> String {
     let text = String::from_utf8_lossy(&bytes);
     let text = strip_styling(&text);
     let lines: Vec<&str> = text.lines().collect();
-    let kept = lines[lines.len().saturating_sub(LINES)..].join("\n");
+    let start = lines.len().saturating_sub(LINES);
+    let mut kept = lines[start..].join("\n");
+    // A cause printed above a long tail, such as the platform conda-lock
+    // could not lock above its traceback, is kept too.
+    let cause = lines[..start].iter().find(|line| {
+        let line = line.trim_start().to_ascii_lowercase();
+        ["error", "could not", "fatal"]
+            .iter()
+            .any(|word| line.starts_with(word))
+    });
+    if let Some(cause) = cause {
+        kept = format!("{cause}\n...\n{kept}");
+    }
     redact(&kept, env)
 }
 

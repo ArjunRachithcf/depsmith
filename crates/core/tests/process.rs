@@ -117,6 +117,33 @@ exit 1
     assert!(error.contains("\ndone"), "{error:?}");
 }
 
+#[cfg(unix)]
+#[test]
+fn failures_keep_the_first_error_line_above_a_long_tail() {
+    // conda-lock names the platform that failed, then prints a traceback.
+    let script = r"
+echo 'Locking dependencies for [linux-64, osx-64]...' >&2
+echo 'Could not lock the environment for platform osx-64' >&2
+i=0; while [ $i -lt 60 ]; do echo '  File x.py, line 1, in solve' >&2; i=$((i+1)); done
+echo 'subprocess.CalledProcessError: returned non-zero exit status 1.' >&2
+exit 1
+";
+    let error = depsmith_core::process::run(
+        "sh",
+        &["-c".into(), script.into()],
+        std::path::Path::new("."),
+        10,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Could not lock the environment for platform osx-64"),
+        "{error}"
+    );
+    assert!(!error.contains("Locking dependencies"), "{error}");
+    assert!(error.contains("CalledProcessError"), "{error}");
+}
+
 /// A freshly written executable can be briefly busy (ETXTBSY) while any
 /// process still holds a write handle, e.g. a concurrently forked child that
 /// inherited it. Starting the tool must wait that out rather than fail.
