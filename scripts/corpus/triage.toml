@@ -60,8 +60,3 @@ note = "the project cannot be re-resolved as it stands (a build needs system lib
 pattern = "file: dependency URLs are not relocatable"
 class = "design"
 note = "depsmith rejects file: URLs that cannot be staged"
-
-[[rule]]
-pattern = "the security update introduced findings"
-class = "design"
-note = "the lowest fix release is itself affected by a newer advisory; ADR 0004 fails such an update (open question: retry with the newer fix)"

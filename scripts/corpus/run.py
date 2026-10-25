@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import itertools
 import json
 import os
 import re
@@ -394,7 +395,12 @@ def cmd_run(args):
     rec = Recorder(args.pass_id)
     # GitHub Actions lookups share one API rate limit; keep them to one at a time.
     actions = [e for e in entries if e["manager"] == "github-actions"]
-    others = [e for e in entries if e["manager"] != "github-actions"]
+    # Interleave the managers so slow solvers (conda) do not hold every worker.
+    by_manager: dict[str, list] = {}
+    for e in entries:
+        if e["manager"] != "github-actions":
+            by_manager.setdefault(e["manager"], []).append(e)
+    others = [e for group in itertools.zip_longest(*by_manager.values()) for e in group if e]
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         futures = [pool.submit(process, e, rec) for e in others]
         futures.append(pool.submit(lambda: [process(e, rec) for e in actions]))
