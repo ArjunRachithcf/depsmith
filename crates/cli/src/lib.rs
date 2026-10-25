@@ -477,7 +477,21 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
             interactive && !proposal.changes.is_empty() && confirm("Apply these exact changes?")?
         };
         if approved {
-            applied = Some(core::apply(&proposal, allow_partial)?);
+            match core::apply(&proposal, allow_partial) {
+                Ok(application) => applied = Some(application),
+                // A refused apply still reports the proposal, so each target's
+                // own failure is not lost behind the refusal.
+                Err(error) => {
+                    for failure in &proposal.failures {
+                        eprintln!("{}: {}", failure.target, failure.message);
+                    }
+                    eprintln!("{error}");
+                    return Ok((
+                        json!({"schema_version":1,"proposal":proposal,"application":null,"error":error.to_string()}),
+                        error.exit_code(),
+                    ));
+                }
+            }
             status = proposal.exit_code(false);
         }
     }
