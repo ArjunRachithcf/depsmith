@@ -377,8 +377,10 @@ def cmd_pin(args):
     candidates = []
     for path in args.candidates:
         candidates += [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+    previous = load_repos(Path(args.out)) if Path(args.out).exists() and args.append else []
+    existing = {(e["manager"], e["repo"]) for e in previous}
     kept: dict[str, list] = {}
-    existing = {(e["manager"], e["repo"]) for e in load_repos(Path(args.out))} if Path(args.out).exists() and args.append else set()
+    room = {m: PER_MANAGER - sum(e["manager"] == m for e in previous) for m in {c["manager"] for c in candidates}}
     lock = threading.Lock()
 
     def check(c):
@@ -390,7 +392,7 @@ def cmd_pin(args):
     def keep(c) -> bool:
         manager = c["manager"]
         with lock:
-            if len(kept.get(manager, [])) >= PER_MANAGER or (manager, c["repo"]) in existing:
+            if len(kept.get(manager, [])) >= room[manager] or (manager, c["repo"]) in existing:
                 return True
         code, out, _, _ = run(["git", "ls-remote", f"https://github.com/{c['repo']}", "HEAD"], work_dir(), timeout=60)
         if code or not out.strip():
@@ -424,7 +426,7 @@ def cmd_pin(args):
             print(f"skip {c['repo']}: native lock check fails at {sha[:10]}", flush=True)
             return False
         with lock:
-            if len(kept.setdefault(manager, [])) < PER_MANAGER:
+            if len(kept.setdefault(manager, [])) < room[manager]:
                 kept[manager].append({"manager": manager, "repo": c["repo"], "ref": sha,
                                       "target": c["manifest"], "notes": c.get("notes", "")})
                 print(f"keep {manager} {c['repo']} ({len(kept[manager])})", flush=True)
