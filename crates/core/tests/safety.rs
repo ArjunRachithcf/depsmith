@@ -420,3 +420,46 @@ fn tracked_files_in_directories_named_like_build_output_are_staged() {
     assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
     assert_eq!(proposal.changes[0].after, "missing|source");
 }
+
+/// Writes the name of the directory it resolves in to `project.lock`.
+struct DirectoryName;
+impl depsmith_core::adapter::Adapter for DirectoryName {
+    fn spec(&self) -> depsmith_core::adapter::AdapterSpec {
+        depsmith_core::adapter::AdapterSpec::new("named", &["project.toml"])
+    }
+    fn detects(&self, path: &std::path::Path, _: &str) -> bool {
+        path == std::path::Path::new("project.toml")
+    }
+    fn prepare(
+        &self,
+        root: &std::path::Path,
+        _: &depsmith_core::Target,
+        _: &UpdateOptions,
+    ) -> depsmith_core::Result<depsmith_core::adapter::Candidate> {
+        let name = root.file_name().unwrap().to_string_lossy();
+        fs::write(root.join("project.lock"), name.as_bytes())?;
+        Ok(depsmith_core::adapter::Candidate {
+            files: vec!["project.lock".into()],
+            ..Default::default()
+        })
+    }
+}
+
+#[test]
+fn the_stage_has_the_name_of_the_repository_directory() {
+    // npm names a lock after the directory of a package.json without a
+    // name, and Pixi a workspace without one, so the stage keeps it.
+    let parent = tempdir().unwrap();
+    let root = parent.path().join("helmet");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("project.toml"), "").unwrap();
+    let proposal = Engine::new(vec![Box::new(DirectoryName)])
+        .prepare(
+            &root,
+            &["named:project.toml".into()],
+            UpdateOptions::default(),
+        )
+        .unwrap();
+    assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+    assert_eq!(proposal.changes[0].after, "helmet");
+}

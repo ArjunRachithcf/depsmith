@@ -533,18 +533,25 @@ impl Engine {
                 ));
                 continue;
             }
-            let stage = tempfile::tempdir()?;
-            working_tree::stage(&root, stage.path(), &proposal.inputs, &proposal.layout)?;
+            // The stage has the repository directory's name: npm names a lock
+            // after the directory of a package.json without a name, and Pixi
+            // a workspace without one.
+            let staging = tempfile::tempdir()?;
+            let stage = staging
+                .path()
+                .join(root.file_name().unwrap_or("repository".as_ref()));
+            fs::create_dir(&stage)?;
+            working_tree::stage(&root, &stage, &proposal.inputs, &proposal.layout)?;
             let mut conflict = false;
             let prepared = adapter
-                .availability(stage.path(), &target)
+                .availability(stage.as_path(), &target)
                 .and_then(|config| {
                     // Acceptance edits the staged declarations before the
                     // adapter resolves; suggestions describe the result.
-                    let lookup = constraints::Lookup::new(stage.path(), &options, config);
+                    let lookup = constraints::Lookup::new(stage.as_path(), &options, config);
                     let accepted = constraints::accept(
                         adapter,
-                        stage.path(),
+                        stage.as_path(),
                         &target,
                         &options.accept,
                         &lookup,
@@ -553,11 +560,11 @@ impl Engine {
                         accept: vec![],
                         ..options.clone()
                     };
-                    let mut candidate = adapter.prepare(stage.path(), &target, &resolve)?;
+                    let mut candidate = adapter.prepare(stage.as_path(), &target, &resolve)?;
                     candidate.validation.splice(0..0, accepted);
                     candidate.suggestions.extend(constraints::suggest(
                         adapter,
-                        stage.path(),
+                        stage.as_path(),
                         &target,
                         &lookup,
                     )?);
@@ -574,13 +581,13 @@ impl Engine {
                             },
                             &candidate.after,
                             &options,
-                            stage.path(),
+                            stage.as_path(),
                         )?;
                         let passed = report.policy_passed;
                         if let Some(chosen) = &security {
-                            let verified = adapter.declarations(stage.path(), &target).and_then(
+                            let verified = adapter.declarations(stage.as_path(), &target).and_then(
                                 |declarations| {
-                                    let graph = adapter.lock_graph(stage.path(), &target)?;
+                                    let graph = adapter.lock_graph(stage.as_path(), &target)?;
                                     chosen.verify(
                                         &target,
                                         &report,
@@ -607,9 +614,9 @@ impl Engine {
                     }
                     let mut changes = vec![];
                     for path in candidate.files {
-                        working_tree::output_path(stage.path(), &path)?;
+                        working_tree::output_path(stage.as_path(), &path)?;
                         working_tree::output_path(&root, &path)?;
-                        let after = fs::read_to_string(stage.path().join(&path))?;
+                        let after = fs::read_to_string(stage.as_path().join(&path))?;
                         let before = if root.join(&path).exists() {
                             Some(fs::read_to_string(root.join(&path))?)
                         } else {
@@ -692,7 +699,7 @@ impl Engine {
                         &mut proposal.dependencies[explained..],
                         adapter,
                         &root,
-                        stage.path(),
+                        stage.as_path(),
                         &target,
                     ));
                     proposal.changes.extend(changes);
