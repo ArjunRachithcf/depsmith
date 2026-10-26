@@ -53,7 +53,7 @@ Choosing a repository's targets and saving them to `depsmith.toml`, then checkin
 _Avoid_: Setup, bootstrap
 
 **Tool cache**:
-The per-user directory where init installs native tools, one directory per tool and version.
+The per-user directory where init installs native tools, one directory per tool and version, plus the Python interpreter shared by the tools that run on Python.
 _Avoid_: Tool directory, vendor directory
 
 **Tool record**:

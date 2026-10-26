@@ -597,7 +597,7 @@ mod python_tools {
         let uv = dir.join("uv");
         fs::write(
             &uv,
-            "#!/bin/sh\nset -e\ncase \"$1\" in\n  venv) for a; do last=$a; done; mkdir -p \"$last/bin\"; echo \"$*\" > \"$last/venv-args\";;\n  pip) shift 2; venv=\"\"; req=\"\"; flags=\"\"; while [ $# -gt 0 ]; do case \"$1\" in --python) venv=$2; shift 2;; -r) req=$2; shift 2;; *) flags=\"$flags $1\"; shift;; esac; done; echo \"$flags\" > \"$venv/pip-flags\"; cp \"$req\" \"$venv/requirements\"; printf '#!/bin/sh\\necho conda-lock 4.0.2\\n' > \"$venv/bin/conda-lock\"; chmod 755 \"$venv/bin/conda-lock\";;\n  *) exit 2;;\nesac\n",
+            "#!/bin/sh\nset -e\ncase \"$1\" in\n  venv) for a; do last=$a; done; mkdir -p \"$last/bin\"; echo \"$*\" > \"$last/venv-args\"; echo \"$UV_PYTHON_INSTALL_DIR\" > \"$last/python-dir\";;\n  pip) shift 2; venv=\"\"; req=\"\"; flags=\"\"; while [ $# -gt 0 ]; do case \"$1\" in --python) venv=$2; shift 2;; -r) req=$2; shift 2;; *) flags=\"$flags $1\"; shift;; esac; done; echo \"$flags\" > \"$venv/pip-flags\"; cp \"$req\" \"$venv/requirements\"; printf '#!/bin/sh\\necho conda-lock 4.0.2\\n' > \"$venv/bin/conda-lock\"; chmod 755 \"$venv/bin/conda-lock\";;\n  *) exit 2;;\nesac\n",
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
@@ -638,6 +638,10 @@ mod python_tools {
         let requirements = fs::read_to_string(venv.join("requirements")).unwrap();
         assert!(requirements.contains("conda-lock==4.0.2"), "{requirements}");
         assert!(requirements.contains("--hash=sha256:"));
+        // The venv's interpreter lives in the tool cache, not in uv's own
+        // directory under the user's home, which a cleanup could remove.
+        let python_dir = fs::read_to_string(venv.join("python-dir")).unwrap();
+        assert_eq!(Path::new(python_dir.trim()), cache.path().join("uv-python"));
     }
 
     #[test]
