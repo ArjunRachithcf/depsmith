@@ -214,18 +214,28 @@ impl Adapter for Pixi {
         let parsed: toml::Value = content
             .parse()
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-        validate_paths(&parsed, manifest.parent().unwrap(), stage)?;
+        validate_dependency_paths(
+            &parsed,
+            is_pyproject(target),
+            manifest.parent().unwrap(),
+            stage,
+        )?;
         let layout = crate::working_tree::Layout::new([&self.spec()]);
         for relative in crate::working_tree::files(stage, &layout)? {
             if relative
                 .file_name()
                 .is_some_and(|n| n == "pyproject.toml" || n == "pixi.toml")
             {
-                let path = stage.join(relative);
+                let path = stage.join(&relative);
                 let value: toml::Value = fs::read_to_string(&path)?
                     .parse()
                     .map_err(|e| Error::Invalid(format!("invalid staged manifest: {e}")))?;
-                validate_paths(&value, path.parent().unwrap(), stage)?;
+                validate_dependency_paths(
+                    &value,
+                    relative.file_name().is_some_and(|n| n == "pyproject.toml"),
+                    path.parent().unwrap(),
+                    stage,
+                )?;
             }
         }
         if options.upgrade && options.packages.is_empty() {
@@ -466,6 +476,33 @@ fn rewrite_manifest(text: &str, pyproject: bool, edits: &[Edit]) -> Result<Strin
         return Err(crate::adapter::undeclared(&edit.declaration));
     }
     Ok(document.to_string())
+}
+
+/// Checks the local dependency paths of a manifest. Tables for other tools
+/// (`[tool.*]` in either manifest kind) can hold `path` keys that are not
+/// dependencies, such as a build's version file, so only pixi's own tables
+/// and, in a pyproject.toml, the standard dependency tables are checked.
+fn validate_dependency_paths(
+    value: &toml::Value,
+    pyproject: bool,
+    base: &Path,
+    stage: &Path,
+) -> Result<()> {
+    let Some(table) = value.as_table() else {
+        return Ok(());
+    };
+    if !pyproject {
+        return table
+            .iter()
+            .filter(|(key, _)| *key != "tool")
+            .try_for_each(|(_, v)| validate_paths(v, base, stage));
+    }
+    let pixi = value.get("tool").and_then(|t| t.get("pixi"));
+    ["project", "dependency-groups", "build-system"]
+        .iter()
+        .filter_map(|key| table.get(*key))
+        .chain(pixi)
+        .try_for_each(|v| validate_paths(v, base, stage))
 }
 
 fn validate_paths(value: &toml::Value, base: &Path, stage: &Path) -> Result<()> {

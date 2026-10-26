@@ -13,6 +13,12 @@ configured platform, and keeps platform targets, features, environments,
 channels, local paths and intentional pins. A failure on any platform blocks
 that target's proposal.
 
+Before resolving, every local dependency path in the repository's Pixi
+manifests must exist in the stage and stay inside the repository. Only
+dependency tables count: Pixi's own tables and, in a `pyproject.toml`,
+`[project]`, `[dependency-groups]` and `[build-system]`. `path` keys in other
+tools' `[tool.*]` tables, such as a build's version file, are not checked.
+
 - `--package NAME` (repeatable) updates only the named **direct dependencies**:
   names in Pixi dependency tables, and for `pyproject.toml` also `[project]`
   dependencies, optional dependencies and dependency groups. Unknown names fail
