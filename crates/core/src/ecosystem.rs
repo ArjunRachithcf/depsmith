@@ -255,6 +255,12 @@ impl VersionScheme for NpmSemver {
     }
 }
 
+/// Order two versions of `ecosystem` by its scheme, or as text when depsmith
+/// knows none.
+pub(crate) fn compare_versions(ecosystem: &str, left: &str, right: &str) -> Ordering {
+    scheme(ecosystem).map_or_else(|| left.cmp(right), |s| s.compare(left, right))
+}
+
 /// The version scheme of `ecosystem`, if depsmith knows it.
 pub(crate) fn scheme(ecosystem: &str) -> Option<&'static dyn VersionScheme> {
     match ecosystem {

@@ -645,39 +645,10 @@ impl Engine {
                         ));
                     }
                     let explained = proposal.dependencies.len();
-                    for before in &candidate.before {
-                        if !candidate.after.iter().any(|p| p.same_resolution(before)) {
-                            let after = candidate
-                                .after
-                                .iter()
-                                .find(|p| {
-                                    p.name == before.name
-                                        && p.ecosystem == before.ecosystem
-                                        && p.platform == before.platform
-                                })
-                                .cloned();
-                            proposal.dependencies.push(DependencyChange {
-                                before: Some(before.clone()),
-                                after,
-                                introducers: vec![],
-                                paths: vec![],
-                            });
-                        }
-                    }
-                    for after in &candidate.after {
-                        if !candidate.before.iter().any(|p| {
-                            p.name == after.name
-                                && p.ecosystem == after.ecosystem
-                                && p.platform == after.platform
-                        }) {
-                            proposal.dependencies.push(DependencyChange {
-                                before: None,
-                                after: Some(after.clone()),
-                                introducers: vec![],
-                                paths: vec![],
-                            });
-                        }
-                    }
+                    proposal.dependencies.extend(DependencyChange::between(
+                        &candidate.before,
+                        &candidate.after,
+                    ));
                     if let Some(chosen) = &security {
                         let untargeted = chosen.untargeted(&proposal.dependencies[explained..]);
                         if !untargeted.is_empty() {
