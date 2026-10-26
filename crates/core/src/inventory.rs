@@ -155,9 +155,11 @@ fn parse(text: &str) -> Result<Value> {
     serde_yaml::from_str(text).map_err(|e| Error::Operation(format!("invalid Pixi lockfile: {e}")))
 }
 
-/// The resolved packages of every environment and platform in a `pixi.lock`.
-/// Packages whose lock record has no version keep an empty version and are
-/// later reported as unassessed.
+/// The resolved packages of every environment and platform in a `pixi.lock`,
+/// excluding packages pixi-build builds from the repository or a Git URL
+/// (the project itself, not a scanned package). Packages whose lock record
+/// has no version keep an empty version and are later reported as
+/// unassessed.
 ///
 /// # Errors
 ///
