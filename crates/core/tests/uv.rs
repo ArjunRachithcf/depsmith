@@ -513,7 +513,9 @@ mod stand_in {
             run.proposal.failures
         );
         let calls = lock_calls(&run);
-        assert_eq!(calls.len(), 2, "{calls:?}");
+        // The pass changed the lock, so it runs once more (the uv adapter
+        // wiki says why).
+        assert_eq!(calls.len(), 3, "{calls:?}");
         assert!(
             calls[0].contains("--color never")
                 && calls[0].contains("--upgrade-package six")
@@ -523,7 +525,8 @@ mod stand_in {
             "{}",
             calls[0]
         );
-        assert!(calls[1].contains("--locked"), "{}", calls[1]);
+        assert_eq!(calls[1], calls[0]);
+        assert!(calls[2].contains("--locked"), "{}", calls[2]);
         assert!(run
             .proposal
             .changes
@@ -543,6 +546,37 @@ mod stand_in {
             six.reason
         );
         assert!(six.evidence[0].contains("1.17.0"), "{:?}", six.evidence);
+    }
+
+    /// The settling pass runs only when a by-name pass around Git pins
+    /// changed the lock: not when nothing moved, and not for a selection.
+    #[test]
+    fn only_a_lock_changing_pass_around_git_pins_runs_twice() {
+        let unchanged = prepare(
+            Some(&lock("3.0", "aaaa")),
+            &lock("3.0", "aaaa"),
+            UpdateOptions::default(),
+        );
+        assert_eq!(
+            lock_calls(&unchanged).len(),
+            2,
+            "{:?}",
+            lock_calls(&unchanged)
+        );
+        let selected = prepare(
+            Some(&lock("3.0", "aaaa")),
+            &lock("3.10", "aaaa"),
+            UpdateOptions {
+                packages: vec!["idna".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            lock_calls(&selected).len(),
+            2,
+            "{:?}",
+            lock_calls(&selected)
+        );
     }
 
     #[test]

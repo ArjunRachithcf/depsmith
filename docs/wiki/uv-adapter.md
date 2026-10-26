@@ -21,7 +21,10 @@ requirement; `uv.lock` covers every platform.
   (`uv lock --upgrade`).
 - **Git dependencies** stay at their locked commit unless `--refresh-git` is
   given: every other locked package is upgraded by name
-  (`--upgrade-package`) instead.
+  (`--upgrade-package`) instead. uv reorders `resolution-markers` on a second
+  such run without moving any version, so a run that changed the lock is
+  repeated once and the proposal is already settled. Selected packages and
+  precise updates run once.
 - `--package NAME` (repeatable) upgrades only the named direct dependencies.
   Names match by PEP 503 normalisation.
 - A **precise update** (the `precise` option) moves each named package,
