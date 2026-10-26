@@ -20,7 +20,9 @@ environment's `platforms:` list, else the existing lock's, else conda-lock's
 defaults. They are always passed to conda-lock, sorted, so a new lock matches
 its relock and an existing lock keeps its platforms. Without
 `--package` every package is re-solved; `--package NAME` (repeatable) passes
-`--update NAME` so only those packages move.
+`--update NAME` so only those packages move. conda-lock 4.0.2 relocks a pip
+package given by a wheel URL as version 0.0.0; depsmith keeps the version
+the previous lock gave that URL, or else the one in the wheel's file name.
 
 A security update moves a package to the newest release its constraints
 allow (conda-lock has no precise update), and reports a finding in a
