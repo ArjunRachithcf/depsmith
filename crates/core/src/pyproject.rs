@@ -13,6 +13,9 @@ pub(crate) struct Pep508 {
 }
 
 impl Pep508 {
+    /// Parses one requirement-list entry, or returns `None` if it has no
+    /// package name: a pip option (`-e .`, `-r file.txt`, `--index-url …`)
+    /// or a bare URL or VCS reference given without a `name @` prefix.
     pub(crate) fn parse(text: &str) -> Option<Self> {
         let start = text.len() - text.trim_start().len();
         let name_end = text[start..]
