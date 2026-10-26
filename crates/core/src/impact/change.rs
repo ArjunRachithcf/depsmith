@@ -199,24 +199,11 @@ fn compare(ecosystem: &str, left: &str, right: &str) -> Ordering {
 
 /// Whether moving from `before` to `after` changes the major version.
 fn major(ecosystem: &str, before: &str, after: &str) -> bool {
-    let (before, after) = (major_part(before), major_part(after));
+    let (before, after) = (
+        crate::ecosystem::major_part(before),
+        crate::ecosystem::major_part(after),
+    );
     before != after && compare(ecosystem, &before, &after) != Ordering::Equal
-}
-
-/// The major part of `version`: any epoch, then the first component, or the
-/// first two when the first is `0`.
-fn major_part(version: &str) -> String {
-    let version = version.trim().trim_start_matches(['v', 'V']);
-    let (epoch, rest) = match version.split_once('!') {
-        Some((epoch, rest)) => (format!("{epoch}!"), rest),
-        None => (String::new(), version),
-    };
-    let mut parts = rest.split(|c: char| !c.is_ascii_alphanumeric());
-    let first = parts.next().unwrap_or_default();
-    match first.trim_start_matches('0') {
-        "" if !first.is_empty() => format!("{epoch}0.{}", parts.next().unwrap_or_default()),
-        _ => format!("{epoch}{first}"),
-    }
 }
 
 /// One side of a comparison: a target's inventory and lock graph, as the
