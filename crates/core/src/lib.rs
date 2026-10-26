@@ -533,7 +533,7 @@ impl Engine {
                 ));
                 continue;
             }
-            let stage = tempfile::tempdir()?;
+            let stage = working_tree::Stage::new(&root)?;
             working_tree::stage(&root, stage.path(), &proposal.inputs, &proposal.layout)?;
             let mut conflict = false;
             let prepared = adapter
