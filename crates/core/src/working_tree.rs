@@ -399,6 +399,9 @@ pub(crate) fn stage(
     if fingerprint(destination, layout)? != *inputs {
         return Err(Error::Stale("inputs changed during staging".into()));
     }
+    if destination.join(".git").exists() {
+        crate::scm::Snapshot::keep_missing_unchanged(destination)?;
+    }
     Ok(())
 }
 
@@ -685,6 +688,69 @@ mod tests {
             .contains("secret"));
         assert!(!destination.path().join(".git/hooks/private-hook").exists());
         assert_eq!(fs::read(root.path().join(".git/index")).unwrap(), index);
+    }
+
+    /// Left-out tracked paths are missing from the stage, yet the stage's
+    /// copied index still lists them: the stage must not look dirty when the
+    /// repository is clean.
+    #[cfg(unix)]
+    #[test]
+    fn tracked_paths_left_out_of_the_stage_keep_it_clean() {
+        let root = git_project();
+        std::os::unix::fs::symlink("/nonexistent/share", root.path().join("share")).unwrap();
+        git(root.path(), &["add", "share"]);
+        let head = git(root.path(), &["rev-parse", "HEAD"]);
+        let gitlink = format!("160000,{},vendor/lib", head.trim());
+        git(
+            root.path(),
+            &["update-index", "--add", "--cacheinfo", &gitlink],
+        );
+        // An uninitialized submodule is an empty directory.
+        fs::create_dir_all(root.path().join("vendor/lib")).unwrap();
+        git(root.path(), &["commit", "-m", "outside link and submodule"]);
+        git(root.path(), &["tag", "v1.2.4"]);
+        assert_eq!(
+            left_out(root.path()),
+            [
+                ("share".into(), "symlink outside the repository".into()),
+                (
+                    "vendor/lib".into(),
+                    "nested Git repository or submodule".into()
+                ),
+            ]
+        );
+        let destination = tempfile::tempdir().unwrap();
+        let inputs = fingerprint(root.path(), &layout()).unwrap();
+        stage(root.path(), destination.path(), &inputs, &layout()).unwrap();
+        assert_eq!(
+            git(root.path(), &["describe", "--tags", "--dirty"]).trim(),
+            "v1.2.4"
+        );
+        assert_eq!(
+            git(destination.path(), &["describe", "--tags", "--dirty"]).trim(),
+            "v1.2.4"
+        );
+    }
+
+    /// With core.symlinks=false Git checks a tracked link out as a file
+    /// holding the target: it is staged as that file.
+    #[cfg(unix)]
+    #[test]
+    fn tracked_links_checked_out_as_files_are_staged_as_files() {
+        let root = git_project();
+        std::os::unix::fs::symlink("tracked.txt", root.path().join("alias")).unwrap();
+        git(root.path(), &["add", "alias"]);
+        git(root.path(), &["commit", "-m", "link"]);
+        git(root.path(), &["config", "core.symlinks", "false"]);
+        fs::remove_file(root.path().join("alias")).unwrap();
+        fs::write(root.path().join("alias"), "tracked.txt").unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let inputs = fingerprint(root.path(), &layout()).unwrap();
+        stage(root.path(), destination.path(), &inputs, &layout()).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.path().join("alias")).unwrap(),
+            "tracked.txt"
+        );
     }
 
     #[cfg(unix)]
