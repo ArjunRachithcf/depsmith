@@ -635,6 +635,14 @@ impl Engine {
                             });
                         }
                     }
+                    // A file two targets share (a pyproject owned by Pixi and
+                    // uv) may change the same way in both: that is one change.
+                    changes.retain(|c| {
+                        !proposal
+                            .changes
+                            .iter()
+                            .any(|p| p.path == c.path && p.before == c.before && p.after == c.after)
+                    });
                     if changes
                         .iter()
                         .any(|c| proposal.changes.iter().any(|p| p.path == c.path))

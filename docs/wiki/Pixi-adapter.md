@@ -3,8 +3,10 @@
 ## Targets
 
 `pixi.toml` files and `pyproject.toml` files with a `[tool.pixi]` table are
-targets (`pixi:pixi.toml`, `pixi:pyproject.toml`). An ordinary Python project
-without `[tool.pixi]` is not a target yet.
+targets (`pixi:pixi.toml`, `pixi:pyproject.toml`). When a `uv.lock` sits
+beside such a `pyproject.toml`, it is also a [uv target](uv-adapter), so an
+update moves both locks; the same edit of the shared file counts once. An
+ordinary Python project without `[tool.pixi]` is not a target yet.
 
 ## Updates and upgrades
 

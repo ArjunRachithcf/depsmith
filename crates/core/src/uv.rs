@@ -396,25 +396,28 @@ impl Adapter for Uv {
             },
         }
     }
-    /// A pyproject uv manages: one with a `[tool.uv]` table and no
-    /// `[tool.pixi]` table (that one is Pixi's).
+    /// A pyproject uv manages, judged from its text alone: one with a
+    /// `[tool.uv]` table and no `[tool.pixi]` table. Discovery uses
+    /// `detects_in`, which also counts a `uv.lock` beside the file.
     fn detects(&self, _: &Path, content: &str) -> bool {
         content
             .parse::<toml::Value>()
             .is_ok_and(|v| tool(&v, "uv").is_some() && tool(&v, "pixi").is_none())
     }
-    /// A pyproject with a `uv.lock` beside it or a `[tool.uv]` table, not
-    /// managed by Pixi, and not a member of an enclosing uv workspace:
-    /// exactly the projects that own a `uv.lock`.
+    /// A pyproject with a `uv.lock` beside it, or a `[tool.uv]` table when
+    /// Pixi does not manage it, that is not a member of an enclosing uv
+    /// workspace: exactly the projects that own a `uv.lock`. A Pixi project
+    /// with a `uv.lock` is a target of both, so both locks move.
     fn detects_in(&self, root: &Path, relative: &Path, content: &str) -> bool {
         let Ok(parsed) = content.parse::<toml::Value>() else {
             return false;
         };
-        if tool(&parsed, "pixi").is_some() {
-            return false;
-        }
         let dir = relative.parent().unwrap_or(Path::new(""));
-        if tool(&parsed, "uv").is_none() && !root.join(dir).join("uv.lock").is_file() {
+        let locked = root.join(dir).join("uv.lock").is_file();
+        let uv_table = tool(&parsed, "uv").is_some();
+        let pixi = tool(&parsed, "pixi").is_some();
+        let owned = locked || (uv_table && !pixi);
+        if !owned {
             return false;
         }
         for ancestor in dir.ancestors().skip(1) {
