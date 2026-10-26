@@ -126,3 +126,131 @@ fn pixi_packages_record_the_environments_that_lock_them() {
         ]
     );
 }
+
+/// Lock schema 5 names a record's artifact `url` and its ecosystem `kind`.
+#[test]
+fn schema_5_records_are_read_by_kind_and_url() {
+    let lock = r#"version: 5
+environments:
+  default:
+    packages:
+      linux-64:
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.1-hb9d3cd8_2.conda
+      - pypi: https://files.pythonhosted.org/packages/six-1.16.0-py2.py3-none-any.whl
+packages:
+- kind: conda
+  name: zlib
+  version: 1.3.1
+  build: hb9d3cd8_2
+  subdir: linux-64
+  url: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.1-hb9d3cd8_2.conda
+- kind: pypi
+  name: six
+  version: 1.16.0
+  url: https://files.pythonhosted.org/packages/six-1.16.0-py2.py3-none-any.whl
+"#;
+    let packages: Vec<_> = pixi_inventory(lock)
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.ecosystem, p.name, p.version, p.platform, p.environments))
+        .collect();
+    assert_eq!(
+        packages,
+        [
+            (
+                "conda".into(),
+                "zlib".into(),
+                "1.3.1".into(),
+                "linux-64".into(),
+                vec!["default".into()]
+            ),
+            (
+                "pypi".into(),
+                "six".into(),
+                "1.16.0".into(),
+                "linux-64".into(),
+                vec!["default".into()]
+            ),
+        ]
+    );
+}
+
+/// Pixi builds a source package (pixi-build) from the repository or a Git
+/// URL: it is the project itself, with no registry artifact or version, so
+/// it is not part of the inventory (its name carries a build hash that
+/// changes on every lock).
+#[test]
+fn source_packages_are_not_part_of_the_inventory() {
+    let lock = r#"version: 7
+environments:
+  default:
+    packages:
+      linux-64:
+      - conda_source: demo-core[07415ef2] @ .
+      - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.16.0-pyh6c4a22f_0.conda
+packages:
+- conda_source: demo-core[07415ef2] @ .
+  variants:
+    target_platform: noarch
+  depends:
+  - python
+  source:
+    path: ''
+- conda: https://conda.anaconda.org/conda-forge/noarch/six-1.16.0-pyh6c4a22f_0.conda
+"#;
+    let names: Vec<_> = pixi_inventory(lock)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(names, ["six"]);
+}
+
+/// Schema 5 locates a local PyPI project by `path` instead of `url`.
+#[test]
+fn schema_5_local_pypi_projects_are_read_by_path() {
+    let lock = "version: 5\npackages:\n- kind: pypi\n  name: demo\n  version: 0.1.0\n  path: ./demo\n  editable: true\n";
+    let packages = pixi_inventory(lock).unwrap();
+    assert_eq!(
+        (packages[0].name.as_str(), packages[0].version.as_str()),
+        ("demo", "0.1.0")
+    );
+}
+
+/// Schema 6 records a package Pixi builds from source as a conda record
+/// with a path: the project itself, like a schema 7 `conda_source` record.
+#[test]
+fn schema_6_path_conda_records_are_not_part_of_the_inventory() {
+    // A local archive is a built package, not a source build.
+    let lock = "version: 6\npackages:\n- conda: .\n  name: demo-core\n  version: 0.1.0\n  input:\n    hash: abc\n- conda: https://conda.anaconda.org/conda-forge/noarch/six-1.16.0-pyh6c4a22f_0.conda\n- conda: ./channel/noarch/vendored-1.0-0.conda\n";
+    let names: Vec<_> = pixi_inventory(lock)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(names, ["six", "vendored"]);
+}
+
+/// A source package stays in the lock graph, so what only it requires
+/// still has a path from the manifest.
+#[test]
+fn source_packages_keep_their_requirements_in_the_graph() {
+    let lock = r#"version: 7
+environments:
+  default:
+    packages:
+      linux-64:
+      - conda_source: demo-core[07415ef2] @ .
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.1-hb9d3cd8_2.conda
+packages:
+- conda_source: demo-core[07415ef2] @ .
+  depends:
+  - zlib >=1.3
+- conda: https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.1-hb9d3cd8_2.conda
+"#;
+    let graph = depsmith_core::inventory::pixi_graph(lock).unwrap();
+    assert_eq!(
+        requires(&graph, "linux-64", "demo-core"),
+        [pair("zlib", Some(">=1.3"))]
+    );
+}

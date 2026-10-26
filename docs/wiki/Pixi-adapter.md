@@ -6,6 +6,11 @@
 targets (`pixi:pixi.toml`, `pixi:pyproject.toml`). An ordinary Python project
 without `[tool.pixi]` is not a target yet.
 
+depsmith reads `pixi.lock` schemas 5 to 7. Packages pixi-build builds from
+the repository or a Git URL (`conda_source` records, or conda records with a
+path) are the project itself: they stay in the lock graph but are not part
+of the scanned inventory.
+
 ## Updates and upgrades
 
 An **update** re-resolves the lock within the declared constraints, for every
