@@ -899,3 +899,36 @@ blas = [{ name = "mkl" }]
         ]
     );
 }
+
+/// A project can keep both a pixi.lock and a uv.lock: it is a target of
+/// each, so an update moves both locks. Without a uv.lock it is Pixi's.
+#[test]
+fn a_pixi_project_with_a_uv_lock_is_also_a_uv_target() {
+    let root = tempfile::tempdir().unwrap();
+    let pixi = "[tool.pixi.workspace]\nchannels = ['conda-forge']\nplatforms = ['linux-64']\n";
+    write(
+        root.path(),
+        &[
+            ("both/pyproject.toml", &project("both", pixi)),
+            ("both/uv.lock", "version = 1\n"),
+            ("both/pixi.lock", "version: 6\n"),
+            ("pixi-only/pyproject.toml", &project("pixi-only", pixi)),
+            ("pixi-only/pixi.lock", "version: 6\n"),
+        ],
+    );
+    let mut ids: Vec<String> = Engine::default()
+        .discover(root.path())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        [
+            "pixi:both/pyproject.toml",
+            "pixi:pixi-only/pyproject.toml",
+            "uv:both/pyproject.toml"
+        ]
+    );
+}
