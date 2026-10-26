@@ -51,26 +51,101 @@ fn strings(value: Option<&toml::Value>) -> Vec<&str> {
 }
 
 /// Member manifests of the workspace whose root manifest is in `dir`, in
-/// order, excluding `workspace.exclude` and the root itself.
+/// order, as cargo decides: the `members` globs, then every path dependency
+/// of a member (or of the root package) that lies inside the workspace,
+/// recursively. An `exclude`d crate is left out unless it lies under a
+/// literal `members` entry, which cargo compares unexpanded.
 fn members(root: &Path, dir: &Path, workspace: &toml::Value) -> Vec<PathBuf> {
-    let excluded: Vec<PathBuf> = strings(workspace.get("exclude"))
-        .into_iter()
-        .map(|e| crate::working_tree::normalize(&dir.join(e)))
-        .collect();
+    let under = |key: &str| -> Vec<PathBuf> {
+        strings(workspace.get(key))
+            .into_iter()
+            .map(|e| crate::working_tree::normalize(&dir.join(e)))
+            .collect()
+    };
+    let (excluded, listed) = (under("exclude"), under("members"));
+    let add = |member: PathBuf, output: &mut Vec<PathBuf>| {
+        let manifest = member.join("Cargo.toml");
+        let shut_out = excluded.iter().any(|e| member.starts_with(e))
+            && !listed.iter().any(|m| member.starts_with(m));
+        if member != dir
+            && member.starts_with(dir)
+            && !shut_out
+            && root.join(&manifest).is_file()
+            && !output.contains(&manifest)
+        {
+            output.push(manifest);
+        }
+    };
     let mut output = vec![];
     for pattern in strings(workspace.get("members")) {
         for member in crate::working_tree::expand(root, dir, pattern) {
-            let manifest = member.join("Cargo.toml");
-            if member != dir
-                && !excluded.iter().any(|e| member.starts_with(e))
-                && root.join(&manifest).is_file()
-                && !output.contains(&manifest)
-            {
-                output.push(manifest);
-            }
+            add(member, &mut output);
+        }
+    }
+    let inherited = workspace.get("dependencies");
+    let path_dependencies = |manifest: &Path| -> Vec<PathBuf> {
+        let Ok(parsed) = read(root, manifest) else {
+            return vec![];
+        };
+        let from = manifest.parent().unwrap_or(Path::new(""));
+        dependency_tables(&parsed)
+            .flat_map(|t| t.iter())
+            .filter_map(
+                |(key, spec)| match spec.get("path").and_then(toml::Value::as_str) {
+                    Some(path) => Some(from.join(path)),
+                    None if spec.get("workspace").and_then(toml::Value::as_bool) == Some(true) => {
+                        let path = inherited?.get(key)?.get("path")?.as_str()?;
+                        Some(dir.join(path))
+                    }
+                    None => None,
+                },
+            )
+            // A path that climbs out of the repository is not one of its crates.
+            .filter_map(|path| inside(&path))
+            .collect()
+    };
+    for dependency in path_dependencies(&dir.join("Cargo.toml")) {
+        add(dependency, &mut output);
+    }
+    let mut next = 0;
+    while let Some(member) = output.get(next).cloned() {
+        next += 1;
+        for dependency in path_dependencies(&member) {
+            add(dependency, &mut output);
         }
     }
     output
+}
+
+/// `path` normalized, or `None` when a `..` climbs above the repository root.
+fn inside(path: &Path) -> Option<PathBuf> {
+    let mut output = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !output.pop() {
+                    return None;
+                }
+            }
+            other => output.push(other),
+        }
+    }
+    Some(output)
+}
+
+/// The dependency tables of a manifest, also under `[target.'cfg(…)']`.
+fn dependency_tables(parsed: &toml::Value) -> impl Iterator<Item = &toml::Table> {
+    let targets = parsed
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(|t| t.values());
+    std::iter::once(parsed).chain(targets).flat_map(|table| {
+        DEPENDENCY_TABLES
+            .iter()
+            .filter_map(move |k| table.get(*k)?.as_table())
+    })
 }
 
 /// The manifests of `target`: its own, then its workspace members.
