@@ -142,9 +142,10 @@ pub struct ScanReport {
 }
 
 /// Build a CycloneDX SBOM from an inventory. Packages get an upstream identity
-/// from a reviewed mapping, a PyPI artifact URL on files.pythonhosted.org, or
-/// an exact GitHub Actions release tag; anything else, and packages without a
-/// version, is returned as unassessed instead of being guessed.
+/// from a reviewed mapping, a PyPI artifact URL on files.pythonhosted.org, a
+/// crates.io or npm registry source, or an exact GitHub Actions release tag;
+/// anything else, and packages without a version, is returned as unassessed
+/// instead of being guessed.
 ///
 /// # Errors
 ///
@@ -154,7 +155,9 @@ pub fn inventory_sbom(
     packages: &[Package],
     mappings: &[IdentityMapping],
 ) -> Result<(Value, Vec<Package>)> {
-    let valid_purl = regex::Regex::new(r"^pkg:[a-z][a-z0-9.+-]*/[A-Za-z0-9._/-]+$").unwrap();
+    // A leading `%40` keeps scoped npm names (`%40scope/name`) assessable.
+    let valid_purl =
+        regex::Regex::new(r"^pkg:[a-z][a-z0-9.+-]*/(?:%40)?[A-Za-z0-9._/-]+$").unwrap();
     let mut components = vec![];
     let mut unknown = vec![];
     let mut keys = BTreeSet::new();
