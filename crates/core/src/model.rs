@@ -200,6 +200,14 @@ impl Package {
             && self.artifact == other.artifact
             && self.platform == other.platform
     }
+
+    /// Whether `other` is a version of the same package: same ecosystem,
+    /// name and platform.
+    pub(crate) fn same_package(&self, other: &Package) -> bool {
+        self.ecosystem == other.ecosystem
+            && self.name == other.name
+            && self.platform == other.platform
+    }
 }
 
 /// A platform a lock names, where a lock lets platforms be named (Pixi
@@ -230,6 +238,74 @@ pub struct DependencyChange {
     /// The shortest dependency path from each introducer to the package.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<Vec<String>>,
+}
+
+impl DependencyChange {
+    /// The packages that moved between two inventories. A lock can hold
+    /// several versions of one package (Python forks, npm nesting, cargo
+    /// majors, Pixi environments), so per package only versions missing from
+    /// the other side are paired (see [`pair_versions`]); the rest are removed
+    /// or added. Changes follow inventory order.
+    pub(crate) fn between(before: &[Package], after: &[Package]) -> Vec<DependencyChange> {
+        let missing = |side: &[Package], other: &[Package]| -> Vec<Package> {
+            side.iter()
+                .filter(|p| !other.iter().any(|o| o.same_resolution(p)))
+                .cloned()
+                .collect()
+        };
+        let (mut gone, mut new) = (missing(before, after), missing(after, before));
+        let mut changes = vec![];
+        for package in before.iter().chain(after) {
+            let olds = gone.extract_if(.., |p| p.same_package(package)).collect();
+            let news = new.extract_if(.., |p| p.same_package(package)).collect();
+            changes.extend(pair_versions(olds, news));
+        }
+        changes
+    }
+}
+
+/// Pair the moved versions of one package: newest first, each old version
+/// with the new one sharing most of its environments, then the rest newest
+/// with newest. Nested npm copies carry no install path, so they pair by
+/// version alone.
+fn pair_versions(mut olds: Vec<Package>, mut news: Vec<Package>) -> Vec<DependencyChange> {
+    let newest_first = |x: &Package, y: &Package| {
+        crate::ecosystem::compare_versions(&x.ecosystem, &y.version, &x.version)
+    };
+    olds.sort_by(newest_first);
+    news.sort_by(newest_first);
+    let shared = |x: &Package, y: &Package| {
+        x.environments
+            .iter()
+            .filter(|e| y.environments.contains(e))
+            .count()
+    };
+    let change = |before, after| DependencyChange {
+        before,
+        after,
+        introducers: vec![],
+        paths: vec![],
+    };
+    let mut changes = vec![];
+    let mut unpaired = vec![];
+    for old in olds {
+        let best = (0..news.len())
+            .filter(|&i| shared(&old, &news[i]) > 0)
+            .fold(None, |best: Option<usize>, i| match best {
+                Some(b) if shared(&old, &news[b]) >= shared(&old, &news[i]) => Some(b),
+                _ => Some(i),
+            });
+        match best {
+            Some(i) => changes.push(change(Some(old), Some(news.remove(i)))),
+            None => unpaired.push(old),
+        }
+    }
+    let mut news = news.into_iter();
+    for old in unpaired {
+        changes.push(change(Some(old), news.next()));
+    }
+    changes.extend(news.map(|new| change(None, Some(new))));
+    changes
 }
 
 /// A target whose candidate could not be prepared.
