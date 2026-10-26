@@ -595,9 +595,17 @@ pub(crate) fn sharded_records(
     Ok(output.into())
 }
 
-/// The platforms the target is locked for: the environment's `platforms:`,
-/// else the existing lock's, else conda-lock's defaults.
+/// The platforms the target is locked for, sorted and without repeats: the
+/// environment's `platforms:`, else the existing lock's, else conda-lock's
+/// defaults.
 fn platforms(root: &Path, target: &Target, parsed: &Value) -> Vec<String> {
+    let mut platforms = locked_platforms(root, target, parsed);
+    platforms.sort();
+    platforms.dedup();
+    platforms
+}
+
+fn locked_platforms(root: &Path, target: &Target, parsed: &Value) -> Vec<String> {
     let declared = strings(parsed.get("platforms"));
     if !declared.is_empty() {
         return declared;
@@ -779,6 +787,14 @@ impl Adapter for Conda {
             "--lockfile".into(),
             stage.join(&lock).to_string_lossy().into(),
         ]);
+        // conda-lock writes its default platform order into a new lock, sorts
+        // it when relocking, and never reads an existing lock's platforms:
+        // name them every time.
+        let text = std::str::from_utf8(&source)
+            .map_err(|e| Error::Invalid(format!("environment file is not UTF-8: {e}")))?;
+        for platform in platforms(stage, target, &parse(text)?) {
+            args.extend(["-p".into(), platform]);
+        }
         if before_text.is_some() {
             for package in &options.packages {
                 args.extend(["--update".into(), package.clone()]);

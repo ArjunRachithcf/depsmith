@@ -134,14 +134,16 @@ mod stand_in {
 
     const LOCK: &str = "version: 1\nmetadata:\n  platforms: [linux-64]\n  sources: [environment.yml]\npackage:\n- name: six\n  version: 1.16.0\n  manager: conda\n  platform: linux-64\n  url: https://conda.anaconda.org/conda-forge/noarch/six-1.16.0-pyhd8ed1ab_1.conda\n  hash: {md5: a, sha256: b}\n";
 
-    /// A conda-lock that writes a fixed lock where `--lockfile` points.
+    /// A conda-lock that writes a fixed lock where `--lockfile` points and
+    /// its arguments to `args`.
     fn conda_lock(dir: &Path) -> String {
         let script = dir.join("conda-lock");
         fs::write(dir.join("lock"), LOCK).unwrap();
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --lockfile ] && cp '{}' \"$2\"; shift; done\n",
+                "#!/bin/sh\necho \"$@\" > '{}'\nwhile [ $# -gt 0 ]; do [ \"$1\" = --lockfile ] && cp '{}' \"$2\"; shift; done\n",
+                dir.join("args").display(),
                 dir.join("lock").display()
             ),
         )
@@ -216,10 +218,20 @@ mod stand_in {
         }
     }
 
-    fn prepare(environment: &str, accept: &[&str]) -> Proposal {
+    /// The conda adapter on `environment`, beside an optional existing
+    /// lock; returns the proposal and the stand-in's directory, which holds
+    /// its recorded `args`.
+    fn run(
+        environment: &str,
+        lock: Option<&str>,
+        accept: &[&str],
+    ) -> (Proposal, tempfile::TempDir) {
         let root = tempfile::tempdir().unwrap();
         let tools = tempfile::tempdir().unwrap();
         fs::write(root.path().join("environment.yml"), environment).unwrap();
+        if let Some(lock) = lock {
+            fs::write(root.path().join("conda-lock.yml"), lock).unwrap();
+        }
         let options = UpdateOptions {
             tools: BTreeMap::from([
                 ("conda-lock".into(), conda_lock(tools.path())),
@@ -228,13 +240,46 @@ mod stand_in {
             accept: accept.iter().map(|a| a.to_string()).collect(),
             ..Default::default()
         };
-        Engine::new(vec![Box::new(Fixed)])
+        let proposal = Engine::new(vec![Box::new(Fixed)])
             .prepare(root.path(), &["conda:environment.yml".into()], options)
-            .unwrap()
+            .unwrap();
+        (proposal, tools)
+    }
+
+    fn prepare(environment: &str, accept: &[&str]) -> Proposal {
+        run(environment, None, accept).0
     }
 
     const SIX: &str =
         "channels: [conda-forge]\ndependencies:\n  - conda-forge::six ==1.16.0  # pinned\n";
+
+    /// The platforms conda-lock is asked to lock for an environment.
+    fn requested_platforms(environment: &str, lock: Option<&str>) -> Vec<String> {
+        let (_, tools) = run(environment, lock, &[]);
+        let args = fs::read_to_string(tools.path().join("args")).unwrap();
+        let words: Vec<&str> = args.split_whitespace().collect();
+        words
+            .windows(2)
+            .filter(|w| w[0] == "-p")
+            .map(|w| w[1].to_owned())
+            .collect()
+    }
+
+    /// conda-lock writes its own default platform order into a new lock and
+    /// sorts it when relocking, so a new lock changed on its first recheck:
+    /// the platforms are always passed, sorted.
+    #[test]
+    fn platforms_are_passed_to_conda_lock_in_sorted_order() {
+        assert_eq!(
+            requested_platforms(SIX, None),
+            ["linux-64", "osx-64", "osx-arm64", "win-64"]
+        );
+        let declared = format!("{SIX}platforms: [win-64, linux-64, win-64]\n");
+        assert_eq!(requested_platforms(&declared, None), ["linux-64", "win-64"]);
+        // conda-lock never reads platforms from an existing lock: without
+        // them it would add its defaults to a linux-64-only lock.
+        assert_eq!(requested_platforms(SIX, Some(LOCK)), ["linux-64"]);
+    }
 
     #[test]
     fn pins_are_suggested_and_accepted_in_place() {
