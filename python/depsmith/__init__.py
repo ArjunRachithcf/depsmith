@@ -110,6 +110,8 @@ class UpdateOptions:
         accept: ``NAME`` or ``NAME=REQUIREMENT`` suggestions to accept.
         upgrade: Allow the selected packages' constraints to change.
         refresh_git: Allow Git pins to move to newer commits.
+        allow_downgrades: Propose resolutions that move a package to an older
+            version; such a target is held back by default.
         cooldown_days: Minimum release age; rejected where not enforceable.
         install: Also install the candidate's default environment on this host.
         scan: Scan the baseline and candidate for known vulnerabilities.
@@ -140,6 +142,7 @@ class UpdateOptions:
     """``NAME`` restyles the pin to the evidenced newest release; ``NAME=REQUIREMENT`` replaces it."""
     upgrade: bool | None = None
     refresh_git: bool | None = None
+    allow_downgrades: bool | None = None
     cooldown_days: int | None = None
     install: bool | None = None
     scan: bool | None = None
@@ -433,6 +436,8 @@ class Proposal:
         dependencies: Packages that change, including transitive ones.
         suggestions: Suggestions about declared constraints.
         unresolved: References left unchanged because they could not be resolved.
+        held_back: Targets held back because their resolution would
+            downgrade a package; each downgrade is also unresolved.
         failures: Targets that could not be prepared.
         validation: Validation levels completed and acceptance notes.
         scans: Vulnerability scan reports, when scanning was requested.
@@ -452,6 +457,7 @@ class Proposal:
             for row in data["suggestions"]
         )
         self.unresolved = tuple(Unresolved(**row) for row in data["unresolved"])
+        self.held_back: tuple[str, ...] = tuple(data.get("held_back", ()))
         self.failures = tuple(Failure(**row) for row in data["failures"])
         self.validation: tuple[str, ...] = tuple(data["validation"])
         self.scans = tuple(ScanReport._from_dict(row) for row in data["scans"])

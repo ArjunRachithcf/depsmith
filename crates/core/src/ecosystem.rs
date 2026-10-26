@@ -10,6 +10,11 @@ use std::cmp::Ordering;
 pub(crate) trait VersionScheme: Sync {
     /// Order two versions.
     fn compare(&self, left: &str, right: &str) -> Ordering;
+    /// Whether `version` is one this scheme reads, rather than ordering it
+    /// as text (a Git commit, a path, an unknown version).
+    fn parses(&self, _version: &str) -> bool {
+        true
+    }
     /// Whether the requirement can exclude a newer release: a pin or upper
     /// bound on every `|` alternative, rather than only lower bounds.
     fn caps_newer(&self, requirement: &str) -> bool {
@@ -71,6 +76,9 @@ impl VersionScheme for Pypi {
         use crate::pep440::Version;
         Version::parse(left).cmp(&Version::parse(right))
     }
+    fn parses(&self, version: &str) -> bool {
+        crate::pep440::Version::parse(version).is_some()
+    }
     fn admits(&self, requirement: &str, version: &str) -> Option<bool> {
         if requirement.trim().is_empty() {
             return Some(true);
@@ -96,6 +104,9 @@ struct GithubActions;
 impl VersionScheme for GithubActions {
     fn compare(&self, left: &str, right: &str) -> Ordering {
         crate::actions::version(left).cmp(&crate::actions::version(right))
+    }
+    fn parses(&self, version: &str) -> bool {
+        crate::actions::version(version).is_some()
     }
     fn caps_newer(&self, _requirement: &str) -> bool {
         false
@@ -131,6 +142,9 @@ impl VersionScheme for CargoSemver {
             (Ok(left), Ok(right)) => left.cmp(&right),
             _ => left.cmp(right),
         }
+    }
+    fn parses(&self, version: &str) -> bool {
+        semver::Version::parse(version).is_ok()
     }
     fn admits(&self, requirement: &str, version: &str) -> Option<bool> {
         if requirement.trim().is_empty() {
@@ -200,6 +214,9 @@ impl VersionScheme for NpmSemver {
             (Ok(left), Ok(right)) => left.cmp(&right),
             _ => left.cmp(right),
         }
+    }
+    fn parses(&self, version: &str) -> bool {
+        nodejs_semver::Version::parse(version).is_ok()
     }
     fn admits(&self, requirement: &str, version: &str) -> Option<bool> {
         if requirement.trim().is_empty() {
@@ -276,6 +293,13 @@ pub(crate) fn major_part(version: &str) -> String {
 /// knows none.
 pub(crate) fn compare_versions(ecosystem: &str, left: &str, right: &str) -> Ordering {
     scheme(ecosystem).map_or_else(|| left.cmp(right), |s| s.compare(left, right))
+}
+
+/// Whether `after` is an older version than `before` under `ecosystem`'s
+/// scheme; versions the scheme cannot read are never older (ADR 0008).
+pub(crate) fn downgrade(ecosystem: &str, before: &str, after: &str) -> bool {
+    scheme(ecosystem)
+        .is_some_and(|s| s.parses(before) && s.parses(after) && s.compare(after, before).is_lt())
 }
 
 /// The version scheme of `ecosystem`, if depsmith knows it.

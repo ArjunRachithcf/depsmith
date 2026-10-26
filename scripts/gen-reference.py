@@ -43,7 +43,7 @@ def cli_reference() -> str:
         "Every option is global: it may be given before or after the command.\n",
         "Exit statuses: 0 success or nothing pending, 1 updates pending (`check`),\n",
         "2 invalid request, 3 tool or scanner failure, 4 policy rejection,\n",
-        "5 partial success, 130 interrupted.\n\n",
+        "5 partial success, 6 a target held back (`check`), 130 interrupted.\n\n",
         "## depsmith\n\n```text\n",
         cli_help(),
         "\n```\n",

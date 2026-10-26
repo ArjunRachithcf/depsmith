@@ -63,6 +63,9 @@ pub struct UpdateOptions {
     pub upgrade: bool,
     /// Allow Git pins to move to newer commits.
     pub refresh_git: bool,
+    /// Propose a resolution that moves a package to an older version; by
+    /// default such a target is held back (ADR 0008).
+    pub allow_downgrades: bool,
     /// Minimum release age in days; rejected where the adapter cannot enforce it.
     pub cooldown_days: Option<u32>,
     /// Also install the candidate's default environment for the current host.
@@ -123,6 +126,7 @@ impl Default for UpdateOptions {
             accept: vec![],
             upgrade: false,
             refresh_git: false,
+            allow_downgrades: false,
             cooldown_days: None,
             install: false,
             scan: false,
@@ -397,6 +401,9 @@ pub struct Proposal {
     pub suggestions: Vec<Suggestion>,
     /// References left unchanged because they could not be resolved.
     pub unresolved: Vec<Unresolved>,
+    /// Targets held back because their resolution would downgrade a package
+    /// (ADR 0008); each downgrade is also an unresolved reference.
+    pub held_back: Vec<String>,
     /// Targets that could not be prepared.
     pub failures: Vec<Failure>,
     /// Validation levels completed and notes such as accepted suggestions.
@@ -483,8 +490,9 @@ impl Proposal {
     ///
     /// With failures: 5 when only some targets failed (partial success),
     /// otherwise 3 if any failure is an operation failure, else 4 if any is a
-    /// policy rejection, else 2. Without failures: 1 for a check with pending
-    /// changes, otherwise 0.
+    /// policy rejection, else 2. Without failures: for a check, 6 when a
+    /// target is held back (even if others have pending changes, so the hold
+    /// is never hidden), else 1 with pending changes; otherwise 0.
     pub fn exit_code(&self, check: bool) -> u8 {
         if !self.failures.is_empty() {
             if self.failures.len() < self.targets.len() {
@@ -498,7 +506,9 @@ impl Proposal {
             }
             return 2;
         }
-        if check && !self.changes.is_empty() {
+        if check && !self.held_back.is_empty() {
+            6
+        } else if check && !self.changes.is_empty() {
             1
         } else {
             0
