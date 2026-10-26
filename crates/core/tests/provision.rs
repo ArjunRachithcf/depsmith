@@ -53,12 +53,20 @@ fn sha256(bytes: &[u8]) -> String {
 const PROGRAM: &[u8] = b"#!/bin/sh\necho 'tool 1.2.3'\n";
 
 fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let entries: Vec<_> = entries
+        .iter()
+        .map(|&(path, data)| (path, data, 0o644))
+        .collect();
+    tar_gz_modes(&entries)
+}
+
+fn tar_gz_modes(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
     let encoder = flate2::write::GzEncoder::new(vec![], flate2::Compression::fast());
     let mut builder = tar::Builder::new(encoder);
-    for (path, data) in entries {
+    for (path, data, mode) in entries {
         let mut header = tar::Header::new_gnu();
         header.set_size(data.len() as u64);
-        header.set_mode(0o644);
+        header.set_mode(*mode);
         // Bypass the builder's path checks to model hostile archives.
         let name = header.as_old_mut().name.as_mut();
         name[..path.len()].copy_from_slice(path.as_bytes());
@@ -425,6 +433,67 @@ fn redirects_to_plain_http_are_refused_even_locally() {
     let cache = tempfile::tempdir().unwrap();
     let error = installed(cache.path(), &d).unwrap_err().to_string();
     assert!(error.contains("redirect"), "{error}");
+}
+
+/// Node's `bin/npm` is a script that runs the `bin/node` beside it.
+#[cfg(unix)]
+fn with_runtime() -> Vec<u8> {
+    tar_gz_modes(&[
+        ("tool-x/bin/tool", PROGRAM, 0o755),
+        ("tool-x/bin/runtime", PROGRAM, 0o755),
+        ("tool-x/README", b"r", 0o644),
+    ])
+}
+
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode()
+}
+
+#[cfg(unix)]
+#[test]
+fn executables_beside_the_tool_keep_their_mode() {
+    let tarball = with_runtime();
+    let (base, _) = serve(vec![("/t.tar.gz", tarball.clone())]);
+    let d = download(
+        &base,
+        "/t.tar.gz",
+        &tarball,
+        Archive::TarGz,
+        "tool-x/bin/tool",
+    );
+    let cache = tempfile::tempdir().unwrap();
+    installed(cache.path(), &d).unwrap();
+    let root = cache.path().join("tool/1.2.3/tool-x");
+    assert_eq!(mode(&root.join("bin/runtime")) & 0o111, 0o111);
+    assert_eq!(mode(&root.join("README")) & 0o111, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_copy_that_lost_its_execute_bits_is_detected_and_repaired() {
+    use std::os::unix::fs::PermissionsExt;
+    let tarball = with_runtime();
+    let (base, _) = serve(vec![("/t.tar.gz", tarball.clone())]);
+    let d = download(
+        &base,
+        "/t.tar.gz",
+        &tarball,
+        Archive::TarGz,
+        "tool-x/bin/tool",
+    );
+    let tool = spec("1.2.3", &d);
+    let (repo, cache) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    provision::reinstall(repo.path(), &tool, cache.path(), 30).unwrap();
+    // As unpacked by a release that dropped archive modes.
+    let runtime = cache.path().join("tool/1.2.3/tool-x/bin/runtime");
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o644)).unwrap();
+    let reason = provision::verify_tree(repo.path(), &tool).unwrap();
+    assert!(reason.contains("changed"), "{reason}");
+    provision::reinstall(repo.path(), &tool, cache.path(), 30).unwrap();
+    assert_eq!(mode(&runtime) & 0o111, 0o111);
+    assert_eq!(provision::verify_tree(repo.path(), &tool), None);
 }
 
 #[test]
