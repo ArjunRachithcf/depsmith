@@ -1,5 +1,6 @@
 //! A lock can hold several versions of one package (Python forks, npm
-//! nesting, cargo majors): only versions that moved are paired, newest with
+//! nesting, cargo majors): only versions that moved are paired, each once,
+//! by shared environments, then within a release line, then newest with
 //! newest.
 use depsmith_core::{
     adapter::{Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles},
@@ -150,5 +151,44 @@ fn conda_and_pypi_entries_of_one_name_pair_separately() {
             vec!["conda:numpy 2.1.0", "numpy 2.0.1", "conda:python 3.12.1"]
         ),
         ["numpy 1.26.4 -> numpy 2.1.0", "numpy 2.0.0 -> numpy 2.0.1"]
+    );
+}
+
+#[test]
+fn moved_versions_pair_within_their_release_line_first() {
+    // Two copies (npm nesting, cargo majors): the 3.x copy moves, the 9.x
+    // copy goes away; 9.0.5 did not become 3.1.5.
+    assert_eq!(
+        moved(vec!["a 3.1.2", "a 9.0.5"], vec!["a 3.1.5"]),
+        ["a 3.1.2 -> a 3.1.5", "a 9.0.5 -> -"]
+    );
+    // Below 1.0 the minor version is the release line.
+    assert_eq!(
+        moved(vec!["a 0.4.4", "a 0.5.1"], vec!["a 0.4.5"]),
+        ["a 0.4.4 -> a 0.4.5", "a 0.5.1 -> -"]
+    );
+    // A single copy that moves to another line is still a change: a
+    // genuine downgrade stays visible.
+    assert_eq!(
+        moved(vec!["a 0.5.1"], vec!["a 0.4.5"]),
+        ["a 0.5.1 -> a 0.4.5"]
+    );
+    // Epochs and a leading v belong to the line.
+    assert_eq!(
+        moved(vec!["a 1!2.0", "a v3.0"], vec!["a 1!2.1"]),
+        ["a 1!2.0 -> a 1!2.1", "a v3.0 -> -"]
+    );
+}
+
+#[test]
+fn copies_of_one_version_pair_once() {
+    // npm lists each installed copy: four copies of 1.0.2 moved to 1.0.4;
+    // none became 0.1.8.
+    assert_eq!(
+        moved(
+            vec!["a 1.0.2", "a 1.0.2", "a 1.0.2", "a 0.1.6"],
+            vec!["a 1.0.4", "a 0.1.8", "a 0.1.8"]
+        ),
+        ["a 0.1.6 -> a 0.1.8", "a 1.0.2 -> a 1.0.4"]
     );
 }
