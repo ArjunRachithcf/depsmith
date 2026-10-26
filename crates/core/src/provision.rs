@@ -232,13 +232,29 @@ fn not_through_links(out: &Path, relative: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_entry(out: &Path, relative: &Path, reader: &mut dyn Read) -> Result<()> {
+/// Write one archive file under `out`; an archive `mode` with any execute bit
+/// makes it 0755 (Node's `bin/npm` runs the `bin/node` beside it).
+fn write_entry(
+    out: &Path,
+    relative: &Path,
+    reader: &mut dyn Read,
+    mode: Option<u32>,
+) -> Result<()> {
     not_through_links(out, relative)?;
     let path = out.join(confined(relative, "archive entry")?);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    std::io::copy(reader, &mut fs::File::create(path)?)?;
+    std::io::copy(reader, &mut fs::File::create(&path)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if mode.is_some_and(|mode| mode & 0o111 != 0) {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
     Ok(())
 }
 
@@ -299,7 +315,7 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
                 Some(Setup::Run { installer, .. }) => Path::new(installer),
                 _ => Path::new(&download.executable),
             };
-            write_entry(out, name, &mut &bytes[..])
+            write_entry(out, name, &mut &bytes[..], None)
         }
         Archive::TarGz => {
             let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
@@ -319,7 +335,8 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
                     continue;
                 }
                 let path = entry.path().map_err(|e| unreadable(&e))?.into_owned();
-                write_entry(out, &path, &mut entry)?;
+                let mode = entry.header().mode().ok();
+                write_entry(out, &path, &mut entry, mode)?;
             }
             Ok(())
         }
@@ -332,7 +349,8 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
                     continue;
                 }
                 let path = PathBuf::from(entry.name());
-                write_entry(out, &path, &mut entry)?;
+                let mode = entry.unix_mode();
+                write_entry(out, &path, &mut entry, mode)?;
             }
             Ok(())
         }
@@ -853,8 +871,20 @@ fn tree_hash(dir: &Path) -> Result<String> {
             } else if kind.is_dir() {
                 walk(&entry.path(), &path, lines)?;
             } else {
+                // The execute bit counts: a copy unpacked without it does not run.
+                #[cfg(unix)]
+                let executable = {
+                    use std::os::unix::fs::PermissionsExt;
+                    if entry.metadata()?.permissions().mode() & 0o111 != 0 {
+                        " x"
+                    } else {
+                        ""
+                    }
+                };
+                #[cfg(not(unix))]
+                let executable = "";
                 lines.push(format!(
-                    "F {} {}",
+                    "F {} {}{executable}",
                     path.display(),
                     file_sha256(&entry.path())?
                 ));
