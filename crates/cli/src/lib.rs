@@ -48,6 +48,9 @@ struct Cli {
     /// Allow Git pins to move to newer commits.
     #[arg(long, global = true)]
     refresh_git: bool,
+    /// Propose resolutions that move a package to an older version (held back by default).
+    #[arg(long, global = true)]
+    allow_downgrades: bool,
     /// Scan the baseline and candidate for known vulnerabilities with Grype.
     #[arg(long, global = true)]
     scan: bool,
@@ -108,7 +111,7 @@ enum Command {
     Discover,
     /// Report adapter capabilities and whether native tools are available.
     Doctor,
-    /// Prepare a proposal without writing; exit 1 when updates are pending.
+    /// Prepare a proposal without writing; exit 1 when updates are pending, 6 when a target is held back.
     Check,
     /// Prepare a proposal, preview it, and apply it when confirmed.
     Update {
@@ -159,6 +162,7 @@ fn overrides(cli: &Cli) -> Result<Value> {
     for (name, enabled) in [
         ("upgrade", cli.upgrade),
         ("refresh_git", cli.refresh_git),
+        ("allow_downgrades", cli.allow_downgrades),
         ("scan", cli.scan),
         ("install", cli.install),
         ("only_new", cli.only_new),
@@ -381,6 +385,7 @@ fn execute(cli: &Cli) -> Result<(Value, u8)> {
             (!cli.accept.is_empty(), "--accept"),
             (cli.upgrade, "--upgrade"),
             (cli.refresh_git, "--refresh-git"),
+            (cli.allow_downgrades, "--allow-downgrades"),
             (cli.install, "--install"),
             (cli.security_only, "--security-only"),
         ] {
@@ -697,6 +702,13 @@ fn render(value: &Value, markdown: bool) -> String {
         for key in ["changes", "suggestions", "unresolved", "failures", "scans"] {
             lines.push(format!("{key}: {}", p[key].as_array().map_or(0, Vec::len)));
         }
+        for target in p["held_back"].as_array().into_iter().flatten() {
+            lines.push(format!(
+                "- HELD BACK {}: no upgrade fix for now, it would downgrade a package \
+                 (--allow-downgrades proposes it)",
+                target.as_str().unwrap_or("?")
+            ));
+        }
         for change in p["changes"].as_array().into_iter().flatten() {
             lines.push(format!("- {}", change["path"].as_str().unwrap_or("?")));
         }
@@ -814,7 +826,7 @@ fn render(value: &Value, markdown: bool) -> String {
 /// Run the CLI with `args` (including the program name) and return the exit
 /// status: 0 success or no pending changes, 1 pending changes found by
 /// `check`, 2 invalid request, 3 tool or scanner failure, 4 policy rejection,
-/// 5 partial success, 130 interrupted.
+/// 5 partial success, 6 a target held back by `check`, 130 interrupted.
 ///
 /// Installs interrupt handlers that cancel running package managers, so call
 /// it only from a process the CLI owns, never from a library host.

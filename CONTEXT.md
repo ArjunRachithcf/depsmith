@@ -117,8 +117,16 @@ _Avoid_: Error (for per-target outcomes)
 A proposal in which some targets succeeded and others failed; applying it requires explicit opt-in.
 
 **Unresolved reference**:
-A workflow reference left unchanged because no release can be matched to it, reported with the reason.
+A reference left unchanged, reported with the reason: a workflow reference no release can be matched to, or a package a held-back target would have downgraded.
 _Avoid_: Unknown action
+
+**Downgrade**:
+A dependency change whose new version is older than its old one, under the ecosystem's version scheme.
+_Avoid_: Rollback
+
+**Held back**:
+A target that proposes no change because its resolution would downgrade a package; its lock stays as it is.
+_Avoid_: Skipped, blocked target
 
 ## Constraints and suggestions
 

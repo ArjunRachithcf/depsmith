@@ -35,6 +35,7 @@ depsmith update --root "$PROJECT_DIR" --all --apply --yes --non-interactive --js
 | 3 | Package manager, validation, scanner or application failure |
 | 4 | Policy rejection (vulnerability gate) |
 | 5 | Partial success |
+| 6 | `check` held a target back: its update would downgrade a package (wins over 1, so the hold is never hidden) |
 | 130 | Interrupted |
 
 ## Examples

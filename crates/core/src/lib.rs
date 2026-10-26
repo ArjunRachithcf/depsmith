@@ -436,6 +436,7 @@ impl Engine {
             dependencies: vec![],
             suggestions: vec![],
             unresolved: vec![],
+            held_back: vec![],
             failures: vec![],
             validation: vec![],
             scans: vec![],
@@ -564,6 +565,51 @@ impl Engine {
                     Ok(candidate)
                 })
                 .and_then(|mut candidate| {
+                    let mut moved = DependencyChange::between(&candidate.before, &candidate.after);
+                    let downgrades = downgrades(&moved);
+                    if !downgrades.is_empty() {
+                        let named = downgrades.join(", ");
+                        if options.allow_downgrades {
+                            proposal
+                                .validation
+                                .push(format!("{}: downgrades allowed: {named}", target.id));
+                        } else {
+                            // A downgrade is no update (ADR 0008): hold the target
+                            // back. Its lock stays as it is, so scans and security
+                            // outcomes describe that lock.
+                            proposal.validation.push(format!(
+                                "{}: held back, no upgrade fix for now: resolving would \
+                                 downgrade {named} (--allow-downgrades proposes it)",
+                                target.id,
+                            ));
+                            proposal
+                                .unresolved
+                                .extend(moved.iter().filter_map(|change| {
+                                    let (before, after) =
+                                        (change.before.as_ref()?, change.after.as_ref()?);
+                                    crate::ecosystem::downgrade(
+                                        &after.ecosystem,
+                                        &before.version,
+                                        &after.version,
+                                    )
+                                    .then(|| Unresolved {
+                                        target: target.id.clone(),
+                                        package: after.name.clone(),
+                                        reference: format!(
+                                            "{} {} -> {}",
+                                            after.name, before.version, after.version
+                                        ),
+                                        reason:
+                                            "no upgrade fix for now: resolving would downgrade it"
+                                                .into(),
+                                    })
+                                }));
+                            proposal.held_back.push(target.id.clone());
+                            candidate.after = candidate.before.clone();
+                            candidate.files.clear();
+                            moved.clear();
+                        }
+                    }
                     if options.scan {
                         let report = scan::scan_pair(
                             &target.id,
@@ -645,10 +691,7 @@ impl Engine {
                         ));
                     }
                     let explained = proposal.dependencies.len();
-                    proposal.dependencies.extend(DependencyChange::between(
-                        &candidate.before,
-                        &candidate.after,
-                    ));
+                    proposal.dependencies.extend(moved);
                     if let Some(chosen) = &security {
                         let untargeted = chosen.untargeted(&proposal.dependencies[explained..]);
                         if !untargeted.is_empty() {
@@ -693,6 +736,19 @@ pub use transaction::{apply, recover};
 pub mod actions;
 /// Repository configuration in `depsmith.toml`.
 pub mod config;
+
+/// The dependency changes that move a package to an older version, as
+/// `NAME OLD -> NEW` (ADR 0008).
+fn downgrades(changes: &[DependencyChange]) -> Vec<String> {
+    changes
+        .iter()
+        .filter_map(|change| {
+            let (before, after) = (change.before.as_ref()?, change.after.as_ref()?);
+            ecosystem::downgrade(&after.ecosystem, &before.version, &after.version)
+                .then(|| format!("{} {} -> {}", after.name, before.version, after.version))
+        })
+        .collect()
+}
 
 /// Name the introducers of each of `changes`, from the candidate's lock
 /// graph in `stage` and the baseline's in `root`. Explaining is advisory:
