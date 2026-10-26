@@ -18,7 +18,14 @@ impl Pep508 {
         let name_end = text[start..]
             .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
             .map_or(text.len(), |i| start + i);
-        if name_end == start {
+        // A PEP 508 name starts with a letter or digit and is followed by
+        // extras, a version, a URL, a marker or nothing: `-e .`, `-r file`
+        // and bare `git+https://…` or wheel URLs are not requirements.
+        let follows = text[name_end..].trim_start();
+        if !text[start..].starts_with(|c: char| c.is_ascii_alphanumeric())
+            || !(follows.is_empty()
+                || follows.starts_with(['[', '(', '@', ';', '<', '>', '=', '!', '~', ',']))
+        {
             return None;
         }
         let mut position =
