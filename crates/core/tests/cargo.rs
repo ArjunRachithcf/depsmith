@@ -39,7 +39,7 @@ fn workspace(root: &Path) {
         &[
             (
                 "Cargo.toml",
-                "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/skip\"]\n\n[workspace.dependencies]\nshared = \"=2.1.0\"\n",
+                "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/skip\", \"tools\"]\n\n[workspace.dependencies]\nshared = \"=2.1.0\"\n",
             ),
             ("crates/a/Cargo.toml", &package("a", MEMBER)),
             ("crates/a/src/lib.rs", ""),
@@ -171,7 +171,7 @@ fn path_dependencies_of_members_inside_the_workspace_are_members() {
         &[
             (
                 "Cargo.toml",
-                "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\ntester = { path = \"testing/tester\" }\n",
+                "[workspace]\nmembers = [\"app\"]\nexclude = [\"solo\"]\n\n[workspace.dependencies]\ntester = { path = \"testing/tester\" }\n",
             ),
             (
                 "app/Cargo.toml",
@@ -199,7 +199,9 @@ fn path_dependencies_of_members_inside_the_workspace_are_members() {
 }
 
 /// The manifests the real cargo treats as workspace roots: each owns a
-/// lock, so each must be a target. `--no-deps` needs no network.
+/// lock, so each must be a target. A crate cargo refuses (inside a
+/// workspace that neither lists nor excludes it) is no root and no target.
+/// `--no-deps` needs no network.
 fn cargo_roots(root: &Path, manifests: &[&str]) -> Vec<String> {
     let mut roots = vec![];
     for manifest in manifests {
@@ -214,6 +216,14 @@ fn cargo_roots(root: &Path, manifests: &[&str]) -> Vec<String> {
             .arg(root.join(manifest))
             .output()
             .unwrap();
+        // Only the fixtures' orphans may be refused; any other failure, or
+        // an orphan cargo accepts, fails the comparison.
+        let refused =
+            String::from_utf8_lossy(&output.stderr).contains("believes it's in a workspace");
+        assert_eq!(refused, manifest.contains("orphan"), "{manifest}");
+        if refused {
+            continue;
+        }
         assert!(
             output.status.success(),
             "{manifest}: {}",
@@ -241,7 +251,7 @@ type Crates = &'static [(&'static str, &'static [&'static str])];
 #[test]
 fn excluded_path_dependencies_follow_cargo() {
     // (workspace table, crates)
-    let cases: [(&str, Crates); 4] = [
+    let cases: [(&str, Crates); 8] = [
         // Under a literal `members` entry an excluded crate stays a member.
         (
             "members = [\"app\"]\nexclude = [\"app/inner\", \"helpers/outer\"]",
@@ -270,6 +280,27 @@ fn excluded_path_dependencies_follow_cargo() {
             "members = [\"crates/*\"]\nexclude = [\"crates/a/inner\"]",
             &[("crates/a", &["inner"]), ("crates/a/inner", &[])],
         ),
+        // Neither listed nor excluded nor depended on: cargo refuses it.
+        (
+            "members = [\"app\"]",
+            &[("app", &[]), ("orphan", &[]), ("nested/orphan", &[])],
+        ),
+        // Excluded and depended on by nobody: its own root.
+        (
+            "members = [\"app\"]\nexclude = [\"tools\"]",
+            &[("app", &[]), ("tools/gen", &[])],
+        ),
+        // A package outside any workspace is its own root.
+        (
+            "members = [\"app\"]\nexclude = [\"free\"]",
+            &[("app", &[]), ("free/deep/pkg", &[])],
+        ),
+        // An excluding nested workspace passes the crate on to the next
+        // workspace up, which lists it.
+        (
+            "members = [\"inner/tools/*\"]",
+            &[("inner", &[]), ("inner/tools/gen", &[])],
+        ),
     ];
     for (workspace, crates) in cases {
         let root = tempfile::tempdir().unwrap();
@@ -283,9 +314,15 @@ fn excluded_path_dependencies_follow_cargo() {
                 .iter()
                 .map(|d| format!("{} = {{ path = \"{d}\" }}\n", d.rsplit('/').next().unwrap()))
                 .collect();
+            // `inner` is a nested workspace that excludes its tools.
+            let nested = if *dir == "inner" {
+                "[workspace]\nexclude = [\"tools/gen\"]\n"
+            } else {
+                ""
+            };
             files.push((
                 format!("{dir}/Cargo.toml"),
-                package(name, &format!("[dependencies]\n{deps}")),
+                package(name, &format!("{nested}[dependencies]\n{deps}")),
             ));
             files.push((format!("{dir}/src/lib.rs"), String::new()));
         }
