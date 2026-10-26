@@ -595,6 +595,118 @@ pub(crate) fn sharded_records(
     Ok(output.into())
 }
 
+/// A pip row of a conda-lock lock, by the fields that identify it.
+#[derive(PartialEq)]
+struct PipRow {
+    name: String,
+    platform: String,
+    url: String,
+    version: String,
+}
+
+/// The pip rows of a lock's text; none when it does not parse.
+fn pip_rows(text: &str) -> Vec<PipRow> {
+    let Ok(parsed) = parse_lock(text) else {
+        return vec![];
+    };
+    lock_rows(&parsed)
+        .filter(|row| scalar(row.get("manager")).as_deref() == Some("pip"))
+        .filter_map(|row| {
+            Some(PipRow {
+                name: scalar(row.get("name"))?,
+                platform: scalar(row.get("platform"))?,
+                url: scalar(row.get("url"))?,
+                version: scalar(row.get("version"))?,
+            })
+        })
+        .collect()
+}
+
+/// The version a wheel's file name states (`NAME-VERSION-...whl`, PEP 427),
+/// percent-decoded.
+fn wheel_version(url: &str) -> Option<String> {
+    let file = url.rsplit('/').next()?.split(['?', '#']).next()?;
+    let version = file.strip_suffix(".whl")?.split('-').nth(1)?;
+    let mut decoded = String::new();
+    let mut rest = version;
+    while let Some(i) = rest.find('%') {
+        decoded.push_str(&rest[..i]);
+        let byte = rest
+            .get(i + 1..i + 3)
+            .and_then(|h| u8::from_str_radix(h, 16).ok())?;
+        decoded.push(char::from(byte));
+        rest = &rest[i + 3..];
+    }
+    decoded.push_str(rest);
+    Some(decoded)
+}
+
+/// conda-lock 4.0.2 relocks a pip package given by a wheel URL as version
+/// 0.0.0. Such a row keeps the version the previous lock gave the same
+/// package, platform and URL, else the version its wheel file name states.
+/// Only the row's version line is rewritten, quoted, so the rest of the
+/// lock keeps conda-lock's formatting.
+fn keep_wheel_versions(before: Option<&str>, after: &str) -> String {
+    let previous = before.map(pip_rows).unwrap_or_default();
+    let fixes: Vec<(PipRow, String)> = pip_rows(after)
+        .into_iter()
+        .filter(|row| row.version == "0.0.0")
+        .filter_map(|row| {
+            let kept = previous
+                .iter()
+                .find(|p| p.name == row.name && p.platform == row.platform && p.url == row.url)
+                .map(|p| p.version.clone())
+                .or_else(|| wheel_version(&row.url))?;
+            Some((row, kept))
+        })
+        .collect();
+    if fixes.is_empty() {
+        return after.to_owned();
+    }
+    // A row is the lines from a `- ` item at the start of a line up to the
+    // next one or the next top-level key; its own fields sit two spaces in.
+    let mut blocks: Vec<String> = vec![];
+    for line in after.split_inclusive('\n') {
+        match blocks.last_mut() {
+            Some(block) if line.starts_with(' ') => block.push_str(line),
+            _ => blocks.push(line.to_owned()),
+        }
+    }
+    let field = |block: &str, key: &str| -> Option<String> {
+        block.lines().find_map(|line| {
+            let line = line
+                .strip_prefix("- ")
+                .or_else(|| line.strip_prefix("  "))?;
+            let value = line.strip_prefix(&format!("{key}: "))?;
+            Some(value.trim().trim_matches(['\'', '"']).to_owned())
+        })
+    };
+    blocks
+        .into_iter()
+        .map(|block| {
+            let fix = fixes.iter().find(|(row, _)| {
+                field(&block, "manager").as_deref() == Some("pip")
+                    && field(&block, "name").as_deref() == Some(&row.name)
+                    && field(&block, "platform").as_deref() == Some(&row.platform)
+                    && field(&block, "url").as_deref() == Some(&row.url)
+            });
+            let Some((_, version)) = fix else {
+                return block;
+            };
+            block
+                .split_inclusive('\n')
+                .map(|line| {
+                    if line.starts_with("  version: ") {
+                        format!("  version: '{version}'\n")
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The platforms the target is locked for, sorted and without repeats: the
 /// environment's `platforms:`, else the existing lock's, else conda-lock's
 /// defaults.
@@ -813,7 +925,12 @@ impl Adapter for Conda {
                 "backend unexpectedly changed the environment file".into(),
             ));
         }
-        let after = lock_inventory(&fs::read_to_string(stage.join(&lock))?)?;
+        let written = fs::read_to_string(stage.join(&lock))?;
+        let kept = keep_wheel_versions(before_text.as_deref(), &written);
+        if kept != written {
+            fs::write(stage.join(&lock), &kept)?;
+        }
+        let after = lock_inventory(&kept)?;
         // Every declared package must be locked for every locked platform.
         let locked: BTreeSet<&str> = after.iter().map(|p| p.platform.as_str()).collect();
         for declaration in self.declarations(stage, target)? {

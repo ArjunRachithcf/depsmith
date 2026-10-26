@@ -226,15 +226,29 @@ mod stand_in {
         lock: Option<&str>,
         accept: &[&str],
     ) -> (Proposal, tempfile::TempDir) {
+        run_writing(environment, lock, None, accept)
+    }
+
+    /// Like [`run`], with the stand-in writing `next` (default [`LOCK`]).
+    fn run_writing(
+        environment: &str,
+        lock: Option<&str>,
+        next: Option<&str>,
+        accept: &[&str],
+    ) -> (Proposal, tempfile::TempDir) {
         let root = tempfile::tempdir().unwrap();
         let tools = tempfile::tempdir().unwrap();
         fs::write(root.path().join("environment.yml"), environment).unwrap();
         if let Some(lock) = lock {
             fs::write(root.path().join("conda-lock.yml"), lock).unwrap();
         }
+        let conda_lock = conda_lock(tools.path());
+        if let Some(next) = next {
+            fs::write(tools.path().join("lock"), next).unwrap();
+        }
         let options = UpdateOptions {
             tools: BTreeMap::from([
-                ("conda-lock".into(), conda_lock(tools.path())),
+                ("conda-lock".into(), conda_lock),
                 ("conda".into(), "micromamba".into()),
             ]),
             accept: accept.iter().map(|a| a.to_string()).collect(),
@@ -252,6 +266,43 @@ mod stand_in {
 
     const SIX: &str =
         "channels: [conda-forge]\ndependencies:\n  - conda-forge::six ==1.16.0  # pinned\n";
+
+    /// A pip entry for `dashi` given by `url`, locked at `version`.
+    fn wheel(version: &str, url: &str) -> String {
+        format!(
+            "{LOCK}- name: dashi\n  version: {version}\n  manager: pip\n  platform: linux-64\n  url: {url}\n  hash: {{sha256: d}}\n"
+        )
+    }
+
+    /// conda-lock 4.0.2 relocks a pip package given by a wheel URL as
+    /// version 0.0.0: an unchanged URL keeps the version it had, and a new
+    /// wheel URL takes the version in its file name.
+    #[test]
+    fn an_unchanged_wheel_url_keeps_its_version() {
+        /// The relocked lock's `dashi` row when the previous lock had
+        /// `before` and conda-lock wrote `written`.
+        fn relocked(before: &str, written: &str) -> String {
+            let (proposal, _) = run_writing(SIX, Some(before), Some(written), &[]);
+            assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+            assert!(proposal.unresolved.is_empty(), "{:?}", proposal.unresolved);
+            let after = proposal
+                .changes
+                .iter()
+                .find(|c| c.path == Path::new("conda-lock.yml"))
+                .map_or_else(|| before.to_owned(), |c| c.after.clone());
+            after[after.find("- name: dashi").unwrap()..].to_owned()
+        }
+        let url = "https://example.org/releases/dashi-2.0.0-py3-none-any.whl";
+        let kept = relocked(&wheel("'2.0.0'", url), &wheel("0.0.0", url));
+        assert!(kept.contains("\n  version: '2.0.0'\n"), "{kept}");
+        // A version that reads as a number stays text: 1.20, not 1.2.
+        let kept = relocked(&wheel("'1.20'", url), &wheel("0.0.0", url));
+        assert!(kept.contains("\n  version: '1.20'\n"), "{kept}");
+        // A new URL to a wheel takes the version its file name states.
+        let moved = "https://example.org/releases/dashi-3.0.0%2Bcpu-py3-none-any.whl";
+        let named = relocked(&wheel("'2.0.0'", url), &wheel("0.0.0", moved));
+        assert!(named.contains("\n  version: '3.0.0+cpu'\n"), "{named}");
+    }
 
     /// The platforms conda-lock is asked to lock for an environment.
     fn requested_platforms(environment: &str, lock: Option<&str>) -> Vec<String> {
