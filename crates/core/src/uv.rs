@@ -537,14 +537,16 @@ impl Adapter for Uv {
             .iter()
             .map(|p| format!("{}=={}", p.package, p.version))
             .collect();
-        let upgrades: Vec<&str> = if !options.packages.is_empty() || !precise.is_empty() {
+        let selected = !options.packages.is_empty() || !precise.is_empty();
+        let keeps_git_pins = !selected && !options.refresh_git && check.has_git_pins();
+        let upgrades: Vec<&str> = if selected {
             options
                 .packages
                 .iter()
                 .chain(&precise)
                 .map(String::as_str)
                 .collect()
-        } else if !options.refresh_git && check.has_git_pins() {
+        } else if keeps_git_pins {
             // `--upgrade` would move Git pins: upgrade every other package.
             let names: BTreeSet<&str> = check
                 .before()
@@ -563,7 +565,17 @@ impl Adapter for Uv {
         for name in upgrades {
             args.extend(["--upgrade-package".into(), name.to_owned()]);
         }
+        let lock_file = stage.join(lock_path(target));
+        let before = fs::read(&lock_file).ok();
         run_env(&uv, &args, &dir, timeout, options.tool_env("uv"))?;
+        // Upgrading every registry package by name around Git pins, uv
+        // reorders resolution-markers on a second run without moving any
+        // version, then stays put: a run that changed the lock runs once
+        // more, so the proposal is already settled.
+        if keeps_git_pins && fs::read(&lock_file).ok() != before {
+            run_env(&uv, &args, &dir, timeout, options.tool_env("uv"))
+                .map_err(|e| Error::Operation(format!("settling pass: {e}")))?;
+        }
         let resolved = check.resolved(stage, options.refresh_git)?;
         run_env(
             &uv,
