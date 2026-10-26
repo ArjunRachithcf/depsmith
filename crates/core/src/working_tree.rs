@@ -201,6 +201,32 @@ fn file_hash(path: &Path) -> Result<String> {
     Ok(format!("{:x}{suffix}", hash.finalize()))
 }
 
+/// A disposable directory to stage into, named like the repository root:
+/// tools name an unnamed project after its directory (npm writes that name
+/// into package-lock.json), so a randomly named stage changed their output.
+pub(crate) struct Stage {
+    _parent: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl Stage {
+    pub(crate) fn new(root: &Path) -> Result<Self> {
+        let parent = tempfile::tempdir()?;
+        // Only a file system root has no name; any name serves there.
+        let name = root.file_name().unwrap_or("repository".as_ref());
+        let path = parent.path().join(name);
+        fs::create_dir(&path)?;
+        Ok(Self {
+            _parent: parent,
+            path,
+        })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 pub(crate) fn stage(
     root: &Path,
     destination: &Path,
