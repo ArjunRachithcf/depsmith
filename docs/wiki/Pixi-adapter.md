@@ -4,7 +4,9 @@
 
 `pixi.toml` files and `pyproject.toml` files with a `[tool.pixi]` table are
 targets (`pixi:pixi.toml`, `pixi:pyproject.toml`). An ordinary Python project
-without `[tool.pixi]` is not a target yet.
+without `[tool.pixi]` is not a target yet. A pixi-build package manifest, one
+with a `[package]` table but no `[workspace]` (or legacy `[project]`), is not
+a target either: Pixi locks it with the workspace above it.
 
 ## Updates and upgrades
 
