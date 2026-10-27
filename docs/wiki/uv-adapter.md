@@ -9,8 +9,10 @@ table, that no enclosing workspace lists as a member. Members of a
 of their own; their manifests are part of the workspace root's target. A
 `pyproject.toml` with a `[tool.pixi]` table belongs to the
 [Pixi adapter](Pixi-adapter), and a plain `pyproject.toml` (Poetry, Hatch,
-PDM) is not claimed. `uv.lock`, `uv.toml` and `.python-version` are staged
-even when ignored by Git, and `.venv/` is never walked.
+PDM) is not claimed, nor is a project marked `[tool.uv] managed = false`,
+which uv refuses to lock; a workspace root stays a target either way.
+`uv.lock`, `uv.toml` and `.python-version` are staged even when ignored by
+Git, and `.venv/` is never walked.
 
 ## Updates
 

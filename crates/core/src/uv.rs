@@ -39,6 +39,16 @@ fn tool<'a>(parsed: &'a toml::Value, name: &str) -> Option<&'a toml::Value> {
     parsed.get("tool")?.get(name)
 }
 
+/// Whether uv refuses to lock this pyproject: it is marked
+/// `managed = false` and declares no workspace (uv still locks a workspace
+/// whose root is unmanaged).
+fn unmanaged(manifest: &toml::Value) -> bool {
+    tool(manifest, "uv").is_some_and(|uv| {
+        uv.get("managed").and_then(toml::Value::as_bool) == Some(false)
+            && uv.get("workspace").is_none()
+    })
+}
+
 fn strings(value: Option<&toml::Value>) -> Vec<&str> {
     value
         .and_then(toml::Value::as_array)
@@ -396,21 +406,21 @@ impl Adapter for Uv {
             },
         }
     }
-    /// A pyproject uv manages: one with a `[tool.uv]` table and no
-    /// `[tool.pixi]` table (that one is Pixi's).
+    /// A pyproject uv manages: one with a `[tool.uv]` table, not marked
+    /// unmanaged, and no `[tool.pixi]` table (that one is Pixi's).
     fn detects(&self, _: &Path, content: &str) -> bool {
         content
             .parse::<toml::Value>()
-            .is_ok_and(|v| tool(&v, "uv").is_some() && tool(&v, "pixi").is_none())
+            .is_ok_and(|v| tool(&v, "uv").is_some() && !unmanaged(&v) && tool(&v, "pixi").is_none())
     }
     /// A pyproject with a `uv.lock` beside it or a `[tool.uv]` table, not
     /// managed by Pixi, and not a member of an enclosing uv workspace:
-    /// exactly the projects that own a `uv.lock`.
+    /// exactly the projects that own a `uv.lock`, unless marked unmanaged.
     fn detects_in(&self, root: &Path, relative: &Path, content: &str) -> bool {
         let Ok(parsed) = content.parse::<toml::Value>() else {
             return false;
         };
-        if tool(&parsed, "pixi").is_some() {
+        if unmanaged(&parsed) || tool(&parsed, "pixi").is_some() {
             return false;
         }
         let dir = relative.parent().unwrap_or(Path::new(""));
