@@ -710,6 +710,9 @@ impl Adapter for Conda {
         }
         Ok(selected)
     }
+    /// Conda match specs in `dependencies:` (a `channel::name` or
+    /// `channel:name` prefix is allowed) and the requirements in the `pip:`
+    /// sub-list, which belong to PyPI.
     fn declarations(&self, root: &Path, target: &Target) -> Result<Vec<Declaration>> {
         let parsed = parse(&fs::read_to_string(root.join(&target.manifest))?)?;
         Ok(declarations_of(&parsed, &target.manifest))
