@@ -1,7 +1,9 @@
 //! The uv adapter: each `uv.lock` owner (a workspace root or a standalone
-//! project) is a target whose declarations are the PEP 508 requirement lists
-//! of its `pyproject.toml` files. uv resolves in the stage; Git pins are kept
-//! unless `--refresh-git` is selected.
+//! project) is a target, except a project marked `[tool.uv] managed = false`
+//! outside a workspace root, which uv refuses to lock. A target's
+//! declarations are the PEP 508 requirement lists of its `pyproject.toml`
+//! files. uv resolves in the stage; Git pins are kept unless `--refresh-git`
+//! is selected.
 use crate::{
     adapter::{
         edits_by_manifest, pypi_key, undeclared, Adapter, AdapterSpec, Candidate, Capabilities,
