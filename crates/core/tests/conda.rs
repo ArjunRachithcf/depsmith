@@ -85,6 +85,32 @@ fn environment_files_are_targets_with_conda_and_pip_declarations() {
     );
 }
 
+/// conda reads the name after the last `:`, so `channel:name` and
+/// `channel:namespace:name` name a package as `channel::name` does.
+#[test]
+fn single_colon_channel_prefixes_name_the_package() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("environment.yml"),
+        "channels: [conda-forge, defaults]\ndependencies:\n  - defaults:python>=3.12.0\n  - conda-forge:sphinx-sitemap=2.2.1\n  - conda-forge:py:click >=8\n  - conda-forge::six\n",
+    )
+    .unwrap();
+    let declared: Vec<(String, String)> = Conda
+        .declarations(root.path(), &target())
+        .unwrap()
+        .into_iter()
+        .map(|d| (d.package, d.requirement))
+        .collect();
+    let expected = [
+        ("python", ">=3.12.0"),
+        ("sphinx-sitemap", "=2.2.1"),
+        ("click", ">=8"),
+        ("six", ""),
+    ]
+    .map(|(p, r)| (p.into(), r.into()));
+    assert_eq!(declared, expected);
+}
+
 #[test]
 fn lock_inventory_reads_conda_and_pip_packages_per_platform() {
     let lock = "version: 1\nmetadata:\n  platforms: [linux-64]\n  sources: [environment.yml]\npackage:\n- name: six\n  version: 1.16.0\n  manager: conda\n  platform: linux-64\n  url: https://conda.anaconda.org/conda-forge/noarch/six-1.16.0-pyhd8ed1ab_1.conda\n  hash: {md5: a, sha256: b}\n- name: idna\n  version: '3.6'\n  manager: pip\n  platform: linux-64\n  url: https://files.pythonhosted.org/packages/c2/e7/x/idna-3.6-py3-none-any.whl\n  hash: {sha256: c}\n";
