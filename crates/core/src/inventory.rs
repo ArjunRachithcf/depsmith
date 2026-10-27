@@ -127,6 +127,22 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
     Ok(result)
 }
 
+/// `artifact` in one spelling: Pixi writes a local PyPI project's path as
+/// `.` or `./`, and `libs/x` or `./libs/x/`, depending on its version.
+fn canonical_artifact(ecosystem: &str, artifact: &str) -> String {
+    if ecosystem != "pypi" || artifact.contains("://") || artifact.starts_with('/') {
+        return artifact.into();
+    }
+    let mut path = artifact.trim_end_matches('/');
+    while let Some(rest) = path.strip_prefix("./") {
+        path = rest;
+    }
+    match path {
+        "" => ".".into(),
+        path => path.into(),
+    }
+}
+
 fn parse(text: &str) -> Result<Value> {
     serde_yaml::from_str(text).map_err(|e| Error::Operation(format!("invalid Pixi lockfile: {e}")))
 }
@@ -148,7 +164,7 @@ pub fn pixi_inventory(text: &str) -> Result<Vec<Package>> {
                 ecosystem: record.ecosystem.into(),
                 name: record.name.into(),
                 version: record.version.into(),
-                artifact: record.artifact.into(),
+                artifact: canonical_artifact(record.ecosystem, record.artifact),
                 platform,
                 environments: environments.into_iter().collect(),
             });
