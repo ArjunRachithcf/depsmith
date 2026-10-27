@@ -126,3 +126,35 @@ fn pixi_packages_record_the_environments_that_lock_them() {
         ]
     );
 }
+
+/// Pixi writes a local project's path as `.` or `./`, and `libs/x` or
+/// `./libs/x/`, depending on its version; each pair names one project, so
+/// relocking does not move it. Other paths and URLs stay as written.
+#[test]
+fn local_pypi_paths_are_read_the_same_however_spelled() {
+    let lock = |locations: &[&str]| {
+        let mut text =
+            "version: 6\nenvironments:\n  default:\n    packages:\n      linux-64:\n".to_owned();
+        for location in locations {
+            text += &format!("      - pypi: {location}\n");
+        }
+        text += "packages:\n";
+        for (i, location) in locations.iter().enumerate() {
+            text += &format!("- pypi: {location}\n  name: p{i}\n");
+        }
+        text
+    };
+    let read = |locations: &[&str]| -> Vec<String> {
+        pixi_inventory(&lock(locations))
+            .unwrap()
+            .into_iter()
+            .map(|p| p.artifact)
+            .collect()
+    };
+    assert_eq!(read(&["./", "./libs/member/"]), [".", "libs/member"]);
+    assert_eq!(read(&[".", "libs/member"]), [".", "libs/member"]);
+    assert_eq!(
+        read(&["libs/other", "../sibling", "/", "https://example.org/x/"]),
+        ["libs/other", "../sibling", "/", "https://example.org/x/"]
+    );
+}
