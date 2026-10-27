@@ -798,17 +798,20 @@ impl Adapter for Conda {
             ));
         }
         let after = lock_inventory(&fs::read_to_string(stage.join(&lock))?)?;
-        // Every declared package must be locked for every locked platform.
+        // Every declared package must be locked for every locked platform. A
+        // pip requirement the conda solution already has is locked from
+        // conda, so any record whose name matches it as pip normalizes names
+        // holds it.
         let locked: BTreeSet<&str> = after.iter().map(|p| p.platform.as_str()).collect();
         for declaration in self.declarations(stage, target)? {
             for platform in &locked {
                 let found = after.iter().any(|p| {
                     p.platform == *platform
-                        && p.ecosystem == declaration.ecosystem
-                        && if p.ecosystem == "pypi" {
+                        && if declaration.ecosystem == "pypi" {
                             pypi_key(&p.name) == pypi_key(&declaration.package)
                         } else {
-                            p.name.eq_ignore_ascii_case(&declaration.package)
+                            p.ecosystem == declaration.ecosystem
+                                && p.name.eq_ignore_ascii_case(&declaration.package)
                         }
                 });
                 if !found {
