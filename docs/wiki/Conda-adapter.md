@@ -32,7 +32,7 @@ change a requirement with `--accept`.
 ## Suggestions
 
 Declarations are the conda match specs in `dependencies:` (channel prefixes
-such as `conda-forge::six` are allowed) and the requirements in the `pip:`
+such as `conda-forge::six` or `defaults:python` are allowed) and the requirements in the `pip:`
 sub-list, which belong to PyPI. Pins and upper bounds that exclude a newer
 final release are suggested with **evidence**:
 

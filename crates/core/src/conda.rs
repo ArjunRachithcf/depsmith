@@ -35,13 +35,16 @@ fn parse(text: &str) -> Result<Value> {
 }
 
 /// The name of a conda match spec and the byte range of its version (and
-/// build) part; `None` when unversioned or in bracket form.
+/// build) part; `None` when unversioned or in bracket form. As in conda,
+/// the name follows the last `:` before it (`channel::name`, `channel:name`).
 fn match_spec(text: &str) -> Option<(String, Option<std::ops::Range<usize>>)> {
     let start = text.len() - text.trim_start().len();
-    let body = text[start..]
-        .find("::")
-        .filter(|i| !text[start..start + i].contains(char::is_whitespace))
-        .map_or(start, |i| start + i + 2);
+    let token_end = text[start..]
+        .find(|c: char| c.is_whitespace() || "=<>!~[".contains(c))
+        .map_or(text.len(), |i| start + i);
+    let body = text[start..token_end]
+        .rfind(':')
+        .map_or(start, |i| start + i + 1);
     let name_end = text[body..]
         .find(|c: char| !(c.is_ascii_alphanumeric() || "-_.".contains(c)))
         .map_or(text.len(), |i| body + i);
@@ -707,6 +710,9 @@ impl Adapter for Conda {
         }
         Ok(selected)
     }
+    /// Conda match specs in `dependencies:` (a `channel::name` or
+    /// `channel:name` prefix is allowed) and the requirements in the `pip:`
+    /// sub-list, which belong to PyPI.
     fn declarations(&self, root: &Path, target: &Target) -> Result<Vec<Declaration>> {
         let parsed = parse(&fs::read_to_string(root.join(&target.manifest))?)?;
         Ok(declarations_of(&parsed, &target.manifest))
@@ -846,6 +852,8 @@ mod tests {
         for (text, name, version) in [
             ("python=3.12", "python", Some("=3.12")),
             ("conda-forge::six ==1.16.0", "six", Some("==1.16.0")),
+            ("defaults:python>=3.12.0", "python", Some(">=3.12.0")),
+            ("conda-forge:py:click >=8", "click", Some(">=8")),
             ("numpy >=1.26,<2", "numpy", Some(">=1.26,<2")),
             ("libblas 3.9.* *mkl", "libblas", Some("3.9.* *mkl")),
             ("pip", "pip", None),
