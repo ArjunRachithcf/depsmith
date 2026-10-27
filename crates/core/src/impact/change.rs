@@ -255,56 +255,14 @@ impl Lock {
     }
 
     /// This lock with its platforms renamed to those of `after` that are the
-    /// same platform under another name. A name both sides give the same
-    /// platform stays; the others pair by subdir and virtual packages, then
-    /// by subdir alone, where each side has only one such platform left.
+    /// same platform under another name (see `LockPlatform::renames`).
     fn renamed_to(&self, after: &Lock) -> Lock {
-        let kept = |p: &LockPlatform, other: &Lock| other.platforms.contains(p);
-        let mut before_left: Vec<&LockPlatform> =
-            self.platforms.iter().filter(|p| !kept(p, after)).collect();
-        let mut after_left: Vec<&LockPlatform> =
-            after.platforms.iter().filter(|p| !kept(p, self)).collect();
-        let mut renames: BTreeMap<String, String> = BTreeMap::new();
-        for with_virtual_packages in [true, false] {
-            let key = |p: &LockPlatform| {
-                let virtual_packages = if with_virtual_packages {
-                    p.virtual_packages.clone()
-                } else {
-                    vec![]
-                };
-                (p.subdir.clone(), virtual_packages)
-            };
-            let pairs: Vec<(&LockPlatform, &LockPlatform)> = before_left
-                .iter()
-                .filter_map(|old| {
-                    let k = key(old);
-                    let mut olds = before_left.iter().filter(|p| key(p) == k);
-                    let mut news = after_left.iter().filter(|p| key(p) == k);
-                    match (olds.next(), olds.next(), news.next(), news.next()) {
-                        (Some(_), None, Some(new), None) => Some((*old, *new)),
-                        _ => None,
-                    }
-                })
-                .collect();
-            for (old, new) in pairs {
-                before_left.retain(|p| *p != old);
-                after_left.retain(|p| *p != new);
-                renames.insert(old.name.clone(), new.name.clone());
-            }
-        }
-        // A platform left unpaired whose name another now takes compares as
-        // a platform of its own.
-        for old in before_left {
-            if renames.values().any(|new| *new == old.name) {
-                renames.insert(old.name.clone(), format!("{} (before)", old.name));
-            }
-        }
+        let renames = LockPlatform::renames(
+            &LockPlatform::of(&self.platforms, &self.inventory),
+            &LockPlatform::of(&after.platforms, &after.inventory),
+        );
         let mut renamed = self.clone();
-        let rename = |platform: &mut String| {
-            if let Some(new) = renames.get(platform.as_str()) {
-                platform.clone_from(new);
-            }
-        };
+        let rename = |platform: &mut String| LockPlatform::rename(&renames, platform);
         renamed
             .inventory
             .iter_mut()

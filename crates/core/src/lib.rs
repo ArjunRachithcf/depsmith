@@ -64,7 +64,7 @@ pub mod uv;
 mod working_tree;
 use adapter::Adapter;
 pub use model::*;
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 /// Discovers targets and prepares proposals with a set of adapters. The
 /// default engine has the Pixi, GitHub Actions, Cargo, conda and uv adapters.
@@ -564,6 +564,22 @@ impl Engine {
                     Ok(candidate)
                 })
                 .and_then(|mut candidate| {
+                    // A relock can rename a platform, as Pixi lock v7 names
+                    // a platform older locks keep under its subdir: compare
+                    // the baseline under the candidate's names.
+                    let renames = LockPlatform::renames(
+                        &LockPlatform::of(
+                            &adapter.lock_platforms(&root, &target)?,
+                            &candidate.before,
+                        ),
+                        &LockPlatform::of(
+                            &adapter.lock_platforms(stage.path(), &target)?,
+                            &candidate.after,
+                        ),
+                    );
+                    for package in &mut candidate.before {
+                        LockPlatform::rename(&renames, &mut package.platform);
+                    }
                     if options.scan {
                         let report = scan::scan_pair(
                             &target.id,
@@ -694,6 +710,7 @@ impl Engine {
                         &root,
                         stage.path(),
                         &target,
+                        &renames,
                     ));
                     proposal.changes.extend(changes);
                     proposal.suggestions.extend(candidate.suggestions);
@@ -724,7 +741,8 @@ pub mod actions;
 pub mod config;
 
 /// Name the introducers of each of `changes`, from the candidate's lock
-/// graph in `stage` and the baseline's in `root`. Explaining is advisory:
+/// graph in `stage` and the baseline's in `root`, its platforms under their
+/// new names in `renames`. Explaining is advisory:
 /// a graph or declarations that cannot be read leave the changes as they
 /// are and return why, for the proposal's validation notes.
 fn explain(
@@ -733,12 +751,16 @@ fn explain(
     root: &Path,
     stage: &Path,
     target: &Target,
+    renames: &BTreeMap<String, String>,
 ) -> Option<String> {
     let mut read = || -> Result<()> {
         let Some(after) = adapter.lock_graph(stage, target)? else {
             return Ok(());
         };
-        let before = adapter.lock_graph(root, target)?.unwrap_or_default();
+        let mut before = adapter.lock_graph(root, target)?.unwrap_or_default();
+        for node in &mut before.nodes {
+            LockPlatform::rename(renames, &mut node.platform);
+        }
         // Declarations of both sides, so a removed declaration still
         // explains what it pulled in.
         let mut declared = adapter.declarations(stage, target)?;

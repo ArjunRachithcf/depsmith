@@ -215,6 +215,78 @@ pub struct LockPlatform {
     pub virtual_packages: Vec<String>,
 }
 
+impl LockPlatform {
+    /// The platforms a lock holding `packages` locks under: those it names,
+    /// or, where it names none (Pixi before v7), each platform of its
+    /// packages as a subdir of that name with no virtual packages recorded.
+    pub(crate) fn of(named: &[Self], packages: &[Package]) -> Vec<Self> {
+        if !named.is_empty() {
+            return named.to_vec();
+        }
+        let subdirs: std::collections::BTreeSet<&str> =
+            packages.iter().map(|p| p.platform.as_str()).collect();
+        subdirs
+            .into_iter()
+            .map(|subdir| Self {
+                name: subdir.into(),
+                subdir: subdir.into(),
+                virtual_packages: vec![],
+            })
+            .collect()
+    }
+
+    /// `platform` under its new name in `renames`, if it has one.
+    pub(crate) fn rename(renames: &BTreeMap<String, String>, platform: &mut String) {
+        if let Some(new) = renames.get(platform.as_str()) {
+            platform.clone_from(new);
+        }
+    }
+
+    /// The new name of each platform of `before` that `after` names
+    /// differently. A name both sides give the same platform stays; the
+    /// others pair by subdir and virtual packages, then by subdir alone,
+    /// where each side has only one such platform left. A platform left
+    /// unpaired whose name another now takes is renamed `NAME (before)`.
+    pub(crate) fn renames(before: &[Self], after: &[Self]) -> BTreeMap<String, String> {
+        let mut before_left: Vec<&Self> = before.iter().filter(|p| !after.contains(p)).collect();
+        let mut after_left: Vec<&Self> = after.iter().filter(|p| !before.contains(p)).collect();
+        let mut renames = BTreeMap::new();
+        for with_virtual_packages in [true, false] {
+            let key = |p: &Self| {
+                let virtual_packages = if with_virtual_packages {
+                    p.virtual_packages.clone()
+                } else {
+                    vec![]
+                };
+                (p.subdir.clone(), virtual_packages)
+            };
+            let pairs: Vec<(&Self, &Self)> = before_left
+                .iter()
+                .filter_map(|old| {
+                    let k = key(old);
+                    let mut olds = before_left.iter().filter(|p| key(p) == k);
+                    let mut news = after_left.iter().filter(|p| key(p) == k);
+                    match (olds.next(), olds.next(), news.next(), news.next()) {
+                        (Some(_), None, Some(new), None) => Some((*old, *new)),
+                        _ => None,
+                    }
+                })
+                .collect();
+            for (old, new) in pairs {
+                before_left.retain(|p| *p != old);
+                after_left.retain(|p| *p != new);
+                renames.insert(old.name.clone(), new.name.clone());
+            }
+        }
+        for old in before_left {
+            if renames.values().any(|new| *new == old.name) {
+                renames.insert(old.name.clone(), format!("{} (before)", old.name));
+            }
+        }
+        renames
+    }
+}
+
 /// A package that differs between the baseline and the candidate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyChange {

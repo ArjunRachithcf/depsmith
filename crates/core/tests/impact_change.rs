@@ -918,3 +918,39 @@ fn swapped_and_chained_platform_names_still_pair_by_what_they_are() {
     assert_eq!(changes, [("zlib", "b"), ("zlib", "c")]);
     assert!(result.full_run.is_empty(), "{:?}", result.full_run);
 }
+
+#[test]
+fn a_lock_moving_to_named_platforms_pairs_them_by_subdir() {
+    let target = Target {
+        id: "pixi:pixi.toml".into(),
+        manager: "pixi".into(),
+        manifest: "pixi.toml".into(),
+    };
+    let read = |lock: &str| {
+        let dir = pixi_side(lock);
+        Lock::read(&Pixi, dir.path(), &target).unwrap()
+    };
+    let url = |name: &str, version: &str| {
+        format!("https://conda.anaconda.org/conda-forge/linux-64/{name}-{version}-h0_0.conda")
+    };
+    // Schema 6 locks under the subdir; schema 7 under a platform name.
+    let before = read(&format!(
+        "version: 6\nenvironments:\n  default:\n    packages:\n      linux-64:\n      - conda: {zlib}\n      - conda: {pillow}\npackages:\n- conda: {zlib}\n- conda: {pillow}\n  depends:\n  - zlib\n",
+        zlib = url("zlib", "1.3.0"),
+        pillow = url("pillow", "11.0.0"),
+    ));
+    let after = read(&format!(
+        "version: 7\nplatforms:\n- name: linux-64-glibc-2-17\n  subdir: linux-64\n  virtual-packages:\n  - __glibc=2.17\nenvironments:\n  default:\n    packages:\n      linux-64-glibc-2-17:\n      - conda: {zlib}\n      - conda: {pillow}\npackages:\n- conda: {zlib}\n- conda: {pillow}\n  depends:\n  - zlib\n",
+        zlib = url("zlib", "1.3.1"),
+        pillow = url("pillow", "11.0.0"),
+    ));
+    let result = affected(&before, &after, &[], &barriers());
+    let changes: Vec<_> = result
+        .changes
+        .iter()
+        .map(|c| (c.name.as_str(), c.platform.as_str()))
+        .collect();
+    assert_eq!(changes, [("zlib", "linux-64-glibc-2-17")]);
+    // Schema 6 records no virtual packages, so none can have changed.
+    assert!(result.full_run.is_empty(), "{:?}", result.full_run);
+}
