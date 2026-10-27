@@ -1017,10 +1017,31 @@ impl Adapter for Npm {
         }
         args.extend(quiet.iter().cloned());
         run_env(&npm, &args, &dir, timeout, env)?;
-        let resolved = check.resolved(stage, options.refresh_git)?;
+        let mut resolved = check.resolved(stage, options.refresh_git)?;
         let mut consistency = vec!["install".to_owned()];
         consistency.extend(quiet);
         run_env(&npm, &consistency, &dir, timeout, env)?;
+        // npm update can write a tree that npm install then completes, such
+        // as a nested copy left out or a stale dev flag. Install's lock is
+        // taken through the same guards when it keeps every package update
+        // locked, and it settles once a second install keeps it.
+        if fs::read_to_string(stage.join(&lock))? != resolved {
+            let updated = lock_inventory(&resolved)?;
+            resolved = check.resolved(stage, options.refresh_git)?;
+            let installed = lock_inventory(&resolved)?;
+            if let Some(moved) = updated.iter().find(|u| {
+                !installed
+                    .iter()
+                    .any(|i| i.name == u.name && i.version == u.version)
+            }) {
+                return Err(Error::Operation(format!(
+                    "npm install moved {} {} that npm update locked",
+                    moved.name, moved.version
+                )));
+            }
+            run_env(&npm, &consistency, &dir, timeout, env)
+                .map_err(|e| Error::Operation(format!("settling install: {e}")))?;
+        }
         let mut candidate = check.candidate(stage, target, &resolved, vec![])?;
         candidate.validation.extend(note);
         Ok(candidate)
