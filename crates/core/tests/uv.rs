@@ -101,6 +101,40 @@ fn lock_owners_are_targets_and_members_are_not() {
 }
 
 #[test]
+fn unmanaged_projects_are_not_targets() {
+    let root = tempfile::tempdir().unwrap();
+    let unmanaged = "[tool.uv]\nmanaged = false\n";
+    let workspace = format!("{unmanaged}[tool.uv.workspace]\nmembers = [\"member\"]\n");
+    write(
+        root.path(),
+        &[
+            ("cli/pyproject.toml", &project("cli", unmanaged)),
+            ("locked/pyproject.toml", &project("locked", unmanaged)),
+            ("locked/uv.lock", "version = 1\n"),
+            (
+                "managed/pyproject.toml",
+                &project("managed", "[tool.uv]\nmanaged = true\n"),
+            ),
+            ("space/pyproject.toml", &project("space", &workspace)),
+            (
+                "space/member/pyproject.toml",
+                &project("member", "[tool.uv]\n"),
+            ),
+        ],
+    );
+    let ids: Vec<String> = Engine::default()
+        .discover(root.path())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(
+        ids,
+        ["uv:managed/pyproject.toml", "uv:space/pyproject.toml"]
+    );
+}
+
+#[test]
 fn registry_requirements_of_the_workspace_are_declarations() {
     let root = tempfile::tempdir().unwrap();
     workspace(root.path());
