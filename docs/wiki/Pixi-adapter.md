@@ -15,6 +15,11 @@ configured platform, and keeps platform targets, features, environments,
 channels, local paths and intentional pins. A failure on any platform blocks
 that target's proposal.
 
+Pixi lock schema 7 locks packages under platform names, and older schemas
+under the subdir. When a relock renames a platform, such as `linux-64`
+becoming `linux-64-glibc-2-17`, the baseline is compared under the new name,
+so only packages that moved are reported.
+
 - `--package NAME` (repeatable) updates only the named **direct dependencies**:
   names in Pixi dependency tables, and for `pyproject.toml` also `[project]`
   dependencies, optional dependencies and dependency groups. Unknown names fail
