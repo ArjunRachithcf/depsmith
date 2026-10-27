@@ -27,7 +27,7 @@ pub struct Uv {
 }
 
 fn parse(text: &str, path: &Path) -> Result<toml::Value> {
-    text.parse()
+    toml::from_str(text)
         .map_err(|e| Error::Invalid(format!("invalid manifest {}: {e}", path.display())))
 }
 
@@ -136,9 +136,8 @@ fn entries(root: &Path, target: &Target) -> Result<Vec<Entry>> {
 }
 
 fn parse_lock(text: &str) -> Result<toml::Value> {
-    let parsed: toml::Value = text
-        .parse()
-        .map_err(|e| Error::Invalid(format!("invalid uv.lock: {e}")))?;
+    let parsed: toml::Value =
+        toml::from_str(text).map_err(|e| Error::Invalid(format!("invalid uv.lock: {e}")))?;
     let version = parsed.get("version").and_then(toml::Value::as_integer);
     if version != Some(1) {
         return Err(Error::Invalid(format!(
@@ -399,15 +398,14 @@ impl Adapter for Uv {
     /// A pyproject uv manages: one with a `[tool.uv]` table and no
     /// `[tool.pixi]` table (that one is Pixi's).
     fn detects(&self, _: &Path, content: &str) -> bool {
-        content
-            .parse::<toml::Value>()
+        toml::from_str::<toml::Value>(content)
             .is_ok_and(|v| tool(&v, "uv").is_some() && tool(&v, "pixi").is_none())
     }
     /// A pyproject with a `uv.lock` beside it or a `[tool.uv]` table, not
     /// managed by Pixi, and not a member of an enclosing uv workspace:
     /// exactly the projects that own a `uv.lock`.
     fn detects_in(&self, root: &Path, relative: &Path, content: &str) -> bool {
-        let Ok(parsed) = content.parse::<toml::Value>() else {
+        let Ok(parsed) = toml::from_str::<toml::Value>(content) else {
             return false;
         };
         if tool(&parsed, "pixi").is_some() {

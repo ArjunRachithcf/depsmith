@@ -63,8 +63,7 @@ impl Adapter for Pixi {
     fn detects(&self, path: &Path, content: &str) -> bool {
         path.file_name().is_some_and(|n| n == "pixi.toml")
             || (path.file_name().is_some_and(|n| n == "pyproject.toml")
-                && content
-                    .parse::<toml::Value>()
+                && toml::from_str::<toml::Value>(content)
                     .ok()
                     .and_then(|v| v.get("tool")?.get("pixi").cloned())
                     .is_some())
@@ -132,8 +131,7 @@ impl Adapter for Pixi {
     /// features and platform targets) that have a `pyproject.toml`, other
     /// than the target's own manifest.
     fn local_projects(&self, root: &Path, target: &Target) -> Result<Vec<PathBuf>> {
-        let parsed: toml::Value = fs::read_to_string(root.join(&target.manifest))?
-            .parse()
+        let parsed: toml::Value = toml::from_str(&fs::read_to_string(root.join(&target.manifest))?)
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
         let mut paths = vec![];
         path_dependencies(&parsed, &mut paths);
@@ -175,8 +173,7 @@ impl Adapter for Pixi {
     /// Conda packages are looked up with `pixi search` against the manifest's
     /// channels, PyPI packages on its indexes, both under its `exclude-newer`.
     fn availability(&self, root: &Path, target: &Target) -> Result<AvailabilityConfig> {
-        let parsed: toml::Value = fs::read_to_string(root.join(&target.manifest))?
-            .parse()
+        let parsed: toml::Value = toml::from_str(&fs::read_to_string(root.join(&target.manifest))?)
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
         let pixi = if is_pyproject(target) {
             parsed
@@ -211,8 +208,7 @@ impl Adapter for Pixi {
     fn prepare(&self, stage: &Path, target: &Target, options: &UpdateOptions) -> Result<Candidate> {
         let manifest = stage.join(&target.manifest);
         let content = fs::read_to_string(&manifest)?;
-        let parsed: toml::Value = content
-            .parse()
+        let parsed: toml::Value = toml::from_str(&content)
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
         validate_paths(&parsed, manifest.parent().unwrap(), stage)?;
         let layout = crate::working_tree::Layout::new([&self.spec()]);
@@ -222,8 +218,7 @@ impl Adapter for Pixi {
                 .is_some_and(|n| n == "pyproject.toml" || n == "pixi.toml")
             {
                 let path = stage.join(relative);
-                let value: toml::Value = fs::read_to_string(&path)?
-                    .parse()
+                let value: toml::Value = toml::from_str(&fs::read_to_string(&path)?)
                     .map_err(|e| Error::Invalid(format!("invalid staged manifest: {e}")))?;
                 validate_paths(&value, path.parent().unwrap(), stage)?;
             }
@@ -385,9 +380,8 @@ fn table_declarations(value: &toml::Value, path: &str, file: &Path, output: &mut
 /// first, then the standard `[project]` and `[dependency-groups]` requirements
 /// of a `pyproject.toml` target. Direct URLs count as unversioned.
 fn manifest_declarations(text: &str, pyproject: bool, file: &Path) -> Result<Vec<Declaration>> {
-    let parsed: toml::Value = text
-        .parse()
-        .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
+    let parsed: toml::Value =
+        toml::from_str(text).map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
     let mut output = vec![];
     if !pyproject {
         table_declarations(&parsed, "", file, &mut output);
@@ -668,13 +662,11 @@ dev = ["six ==1.15.0", { include-group = "extra" }]
         let aliases = tempfile::tempdir().unwrap();
         let alias = aliases.path().join("stage");
         std::os::unix::fs::symlink(real.path(), &alias).unwrap();
-        let manifest: toml::Value = "[pypi-dependencies]\nlocal = { path = \"local\" }\n"
-            .parse()
-            .unwrap();
+        let manifest: toml::Value =
+            toml::from_str("[pypi-dependencies]\nlocal = { path = \"local\" }\n").unwrap();
         validate_paths(&manifest, &alias, &alias).unwrap();
-        let escape: toml::Value = "[pypi-dependencies]\nout = { path = \"..\" }\n"
-            .parse()
-            .unwrap();
+        let escape: toml::Value =
+            toml::from_str("[pypi-dependencies]\nout = { path = \"..\" }\n").unwrap();
         assert!(validate_paths(&escape, &alias, &alias).is_err());
     }
 
