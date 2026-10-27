@@ -33,8 +33,12 @@ made.
   old are chosen, so an already-locked newer release can move back.
   Suggestions apply the same cooldown, so they never cite a release npm would
   refuse.
-- The candidate is checked with `npm install --package-lock-only` (it must not
-  change the lock), and the manifests must not change.
+- The candidate is checked with `npm install --package-lock-only`, and the
+  manifests must not change. `npm update` can write a tree that `npm install`
+  then completes, such as a nested copy left out or a stale `dev` flag.
+  depsmith then takes the lock that install writes, through the same guards,
+  if install kept every package that update locked. A second install must
+  not change it.
 - `--upgrade` and `--install` are not supported: change a range with
   `--accept`.
 - npm has no **precise update**: a package named by a security update moves

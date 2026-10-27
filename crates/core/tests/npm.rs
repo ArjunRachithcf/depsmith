@@ -351,6 +351,7 @@ mod stand_in {
         next: &str,
         options: UpdateOptions,
         after_update: &str,
+        install: &str,
     ) -> Run {
         let root = tempfile::tempdir().unwrap();
         let tools = tempfile::tempdir().unwrap();
@@ -367,10 +368,15 @@ mod stand_in {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n  --version) echo 11.19.0;;\n  update) cp '{next}' package-lock.json; {after};;\n  install) cmp -s '{next}' package-lock.json || exit 1;;\n  *) exit 2;;\nesac\n",
+                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n  --version) echo 11.19.0;;\n  update) cp '{next}' package-lock.json; {after};;\n  install) {install};;\n  *) exit 2;;\nesac\n",
                 log = log.display(),
                 next = next_lock.display(),
                 after = if after_update.is_empty() { ":" } else { after_update },
+                install = if install.is_empty() {
+                    format!("cmp -s '{}' package-lock.json || exit 1", next_lock.display())
+                } else {
+                    install.to_owned()
+                },
             ),
         )
         .unwrap();
@@ -402,11 +408,20 @@ mod stand_in {
     }
 
     fn prepare(baseline: Option<&str>, next: &str, options: UpdateOptions) -> Run {
-        prepare_with(baseline, next, options, "")
+        prepare_with(baseline, next, options, "", "")
     }
 
     fn update_call(run: &Run) -> &str {
         run.calls.iter().find(|c| c.starts_with("update")).unwrap()
+    }
+
+    /// The calls whose first word is `command`.
+    fn calls<'a>(run: &'a Run, command: &str) -> Vec<&'a str> {
+        run.calls
+            .iter()
+            .filter(|c| c.split(' ').next() == Some(command))
+            .map(String::as_str)
+            .collect()
     }
 
     #[test]
@@ -530,11 +545,117 @@ mod stand_in {
             &lock("3.2.7", "aaaa"),
             UpdateOptions::default(),
             "echo ' ' >> package.json",
+            "",
         );
         assert_eq!(run.proposal.failures.len(), 1, "{:?}", run.proposal);
         assert!(run.proposal.failures[0]
             .message
             .contains("unexpectedly changed package.json"));
+    }
+
+    /// `lock`, with debug's own copy of ms at 2.1.3 added.
+    fn with_nested_ms(lock: &str) -> String {
+        lock.replace(
+            ", \"node_modules/forked\"",
+            ", \"node_modules/debug/node_modules/ms\": {\"version\": \"2.1.3\", \"resolved\": \"https://registry.npmjs.org/ms/-/ms-2.1.3.tgz\"}, \"node_modules/forked\"",
+        )
+    }
+
+    #[test]
+    fn a_tree_that_npm_install_completes_is_taken_once_a_second_install_keeps_it() {
+        // npm update leaves out debug's own copy of ms; npm install adds it.
+        let left_out = lock("3.2.7", "aaaa");
+        let completed = with_nested_ms(&left_out);
+        let run = prepare_with(
+            Some(&lock("3.1.0", "aaaa")),
+            &left_out,
+            UpdateOptions::default(),
+            "",
+            &format!("printf '%s' '{completed}' > package-lock.json"),
+        );
+        assert!(
+            run.proposal.failures.is_empty(),
+            "{:?}",
+            run.proposal.failures
+        );
+        assert_eq!(calls(&run, "install").len(), 2, "{:?}", run.calls);
+        let lock_change = run
+            .proposal
+            .changes
+            .iter()
+            .find(|c| c.path == Path::new("package-lock.json"))
+            .unwrap();
+        assert_eq!(lock_change.after, completed);
+    }
+
+    #[test]
+    fn npm_install_moving_a_package_npm_update_locked_is_refused() {
+        let run = prepare_with(
+            Some(&lock("3.1.0", "aaaa")),
+            &lock("3.2.6", "aaaa"),
+            UpdateOptions::default(),
+            "",
+            &format!(
+                "printf '%s' '{}' > package-lock.json",
+                lock("3.2.7", "aaaa")
+            ),
+        );
+        assert_eq!(calls(&run, "install").len(), 1, "{:?}", run.calls);
+        assert_eq!(run.proposal.failures.len(), 1, "{:?}", run.proposal);
+        assert!(
+            run.proposal.failures[0]
+                .message
+                .contains("npm install moved debug 3.2.6 that npm update locked"),
+            "{}",
+            run.proposal.failures[0].message
+        );
+    }
+
+    #[test]
+    fn npm_install_changing_the_manifest_is_refused() {
+        let run = prepare_with(
+            Some(&lock("3.1.0", "aaaa")),
+            &lock("3.2.7", "aaaa"),
+            UpdateOptions::default(),
+            "",
+            "echo ' ' >> package-lock.json; echo ' ' >> package.json",
+        );
+        assert_eq!(calls(&run, "install").len(), 1, "{:?}", run.calls);
+        assert_eq!(run.proposal.failures.len(), 1, "{:?}", run.proposal);
+        assert!(run.proposal.failures[0]
+            .message
+            .contains("unexpectedly changed package.json"));
+    }
+
+    #[test]
+    fn a_tree_npm_install_keeps_changing_is_refused() {
+        let run = prepare_with(
+            Some(&lock("3.1.0", "aaaa")),
+            &lock("3.2.7", "aaaa"),
+            UpdateOptions::default(),
+            "",
+            "echo ' ' >> package-lock.json",
+        );
+        assert_eq!(calls(&run, "install").len(), 2, "{:?}", run.calls);
+        assert_eq!(run.proposal.failures.len(), 1, "{:?}", run.proposal);
+        assert!(run.proposal.failures[0]
+            .message
+            .contains("lock consistency check changed the candidate"));
+    }
+
+    #[test]
+    fn npm_install_moving_a_git_pin_is_refused() {
+        let moved = lock("3.2.7", "bbbb");
+        let run = prepare_with(
+            Some(&lock("3.1.0", "aaaa")),
+            &lock("3.2.7", "aaaa"),
+            UpdateOptions::default(),
+            "",
+            &format!("printf '%s' '{moved}' > package-lock.json"),
+        );
+        assert_eq!(calls(&run, "install").len(), 1, "{:?}", run.calls);
+        assert_eq!(run.proposal.failures.len(), 1, "{:?}", run.proposal);
+        assert!(run.proposal.failures[0].message.contains("--refresh-git"));
     }
 
     #[test]
