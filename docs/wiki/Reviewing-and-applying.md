@@ -64,4 +64,6 @@ together with every process it started: on Unix through its process group, on
 Windows with `taskkill /T`. Interrupting the CLI exits with 130. Failures
 include the last 40 lines of the backend's stderr with credentials redacted
 (URL passwords, token-like parameters, authorization headers, GitHub tokens and
-values of secret-named environment variables); stdout is never echoed.
+values of secret-named environment variables); stdout is never echoed. A
+backend that writes more than 32 MiB to stdout fails rather than having its
+output cut.
