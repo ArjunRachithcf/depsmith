@@ -176,6 +176,8 @@ fn diagnostics(errors: std::fs::File, env: &[(String, String)]) -> String {
 
 /// Execute without a shell. Temporary files avoid pipe deadlocks for verbose tools.
 /// Failures report a bounded, redacted stderr tail; stdout is never echoed.
+/// Stdout past 32 MiB fails the run rather than being cut; stderr is kept
+/// up to 4 MiB, best effort.
 pub fn run(program: &str, args: &[String], cwd: &Path, timeout: u64) -> Result<String> {
     run_env(program, args, cwd, timeout, &[])
 }
@@ -206,13 +208,18 @@ pub(crate) fn run_env_output(
     run_with_env(command, program, cwd, timeout, env)
 }
 
+/// Like [`run`], for a prepared `command`, with no cap on stdout: for
+/// listings that grow with the repository, such as Git's index.
 pub(crate) fn run_command(
     command: Command,
     program: &str,
     cwd: &Path,
     timeout: u64,
 ) -> Result<String> {
-    run_with_env(command, program, cwd, timeout, &[]).map(|(stdout, _)| stdout)
+    let (mut output, _) = spawn(command, program, cwd, timeout, &[], Stdio::null())?;
+    let mut text = String::new();
+    output.read_to_string(&mut text)?;
+    Ok(text)
 }
 
 fn run_with_env(
@@ -222,11 +229,22 @@ fn run_with_env(
     timeout: u64,
     env: &[(String, String)],
 ) -> Result<(String, String)> {
+    const MIB: u64 = 1024 * 1024;
+    const STDOUT: u64 = 32 * MIB;
     let (output, errors) = spawn(command, program, cwd, timeout, env, Stdio::null())?;
-    let mut text = String::new();
-    output.take(32 * 1024 * 1024).read_to_string(&mut text)?;
+    let mut bytes = vec![];
+    output.take(STDOUT + 1).read_to_end(&mut bytes)?;
+    // A cut output could parse as a whole one.
+    if bytes.len() as u64 > STDOUT {
+        return Err(Error::Operation(format!(
+            "{program} wrote more than {} MiB to stdout",
+            STDOUT / MIB
+        )));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let mut raw = vec![];
-    errors.take(4 * 1024 * 1024).read_to_end(&mut raw)?;
+    errors.take(4 * MIB).read_to_end(&mut raw)?;
     Ok((text, String::from_utf8_lossy(&raw).into_owned()))
 }
 

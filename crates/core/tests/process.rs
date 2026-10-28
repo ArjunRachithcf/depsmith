@@ -141,3 +141,22 @@ fn a_briefly_busy_executable_still_starts() {
     release.join().unwrap();
     assert_eq!(result.unwrap().trim(), "started");
 }
+
+/// Output past the cap fails the run, so a cut listing is never parsed as
+/// a whole one.
+#[cfg(unix)]
+#[test]
+fn output_past_the_cap_is_refused_not_cut() {
+    const CAP: usize = 32 * 1024 * 1024;
+    let run = |bytes: usize| {
+        depsmith_core::process::run(
+            "sh",
+            &["-c".into(), format!("head -c {bytes} /dev/zero")],
+            std::path::Path::new("."),
+            30,
+        )
+    };
+    let error = run(CAP + 1).unwrap_err().to_string();
+    assert!(error.contains("sh wrote more than 32 MiB"), "{error}");
+    assert_eq!(run(CAP).unwrap().len(), CAP);
+}

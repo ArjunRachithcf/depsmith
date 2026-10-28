@@ -361,6 +361,10 @@ mod tests {
     use super::*;
 
     fn git(root: &Path, args: &[&str]) -> String {
+        git_with_input(root, args, std::process::Stdio::null())
+    }
+
+    fn git_with_input(root: &Path, args: &[&str], input: std::process::Stdio) -> String {
         let output = std::process::Command::new("git")
             .args([
                 "-c",
@@ -376,6 +380,7 @@ mod tests {
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
             )
             .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(input)
             .output()
             .unwrap();
         assert!(
@@ -429,6 +434,35 @@ mod tests {
             .contains("secret"));
         assert!(!destination.path().join(".git/hooks/private-hook").exists());
         assert_eq!(fs::read(root.path().join(".git/index")).unwrap(), index);
+    }
+
+    /// A large repository's index listing runs past any output cap: a
+    /// tracked file listed last is still an input.
+    #[cfg(unix)]
+    #[test]
+    fn tracked_files_past_a_large_index_listing_are_inputs() {
+        use std::io::{Seek as _, Write as _};
+        let root = git_project();
+        // Listed last and ignored, so only the index listing finds it.
+        fs::write(root.path().join(".gitignore"), "ignored.txt\n").unwrap();
+        fs::create_dir(root.path().join("zz")).unwrap();
+        fs::write(root.path().join("zz/ignored.txt"), "kept\n").unwrap();
+        git(root.path(), &["add", "-f", ".gitignore", "zz/ignored.txt"]);
+        // Index entries for files the checkout lacks, about 36 MB of listing.
+        let blob = git(root.path(), &["hash-object", "-w", "tracked.txt"]);
+        let deep = vec!["a".repeat(250); 14].join("/");
+        let mut entries = tempfile::tempfile().unwrap();
+        for i in 0..10_000 {
+            writeln!(entries, "100644 {}\tdeep/{deep}/f{i}", blob.trim()).unwrap();
+        }
+        entries.seek(std::io::SeekFrom::Start(0)).unwrap();
+        git_with_input(
+            root.path(),
+            &["update-index", "--index-info"],
+            entries.into(),
+        );
+        let inputs = fingerprint(root.path(), &layout()).unwrap();
+        assert!(inputs.contains_key(Path::new("zz/ignored.txt")));
     }
 
     #[test]
