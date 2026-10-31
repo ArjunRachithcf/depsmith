@@ -18,7 +18,8 @@ name). `depsmith doctor` lists both tools.
 An **update** runs `conda-lock lock` inside the stage for the platforms in the
 environment's `platforms:` list, or conda-lock's defaults. Without
 `--package` every package is re-solved; `--package NAME` (repeatable) passes
-`--update NAME` so only those packages move.
+`--update NAME` so only those packages move. Without an existing lock, the
+whole environment is locked even when `--package` is given.
 
 A security update moves a package to the newest release its constraints
 allow (conda-lock has no precise update), and reports a finding in a
@@ -41,8 +42,10 @@ final release are suggested with **evidence**:
   compared with its own subdir plus `noarch`, as a solver sees it.
 - PyPI packages: the JSON Simple API of pypi.org.
 
-Specifications depsmith cannot evaluate (regular expressions, bracket forms,
-build strings) leave availability "not established" instead of guessing.
+Specifications depsmith cannot evaluate (regular expressions, bracket forms
+after a version, build strings) leave availability "not established" instead
+of guessing; a spec written only in bracket form, such as
+`pkg[version='>=1']`, has no version to suggest for.
 
 ## Accepting a suggestion
 

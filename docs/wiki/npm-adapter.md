@@ -3,8 +3,9 @@
 ## Targets
 
 Each `package.json` that owns an npm lock is a target, such as
-`npm:package.json`: a package with a `package-lock.json` (lockfileVersion 2 or
-3, npm 7 or newer) or an `npm-shrinkwrap.json` beside it, that no enclosing
+`npm:package.json`: a package with a `package-lock.json` or an
+`npm-shrinkwrap.json` beside it (lockfileVersion 2 or 3, npm 7 or newer; an
+older lock fails the target), that no enclosing
 workspace lists as a member. Members of `workspaces` (its globs, in either the
 array or the `{ "packages": [...] }` form; `**` matches any depth outside
 `node_modules` and hidden directories, and `!glob` removes members matched by

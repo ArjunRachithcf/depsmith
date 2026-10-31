@@ -21,7 +21,9 @@ that target's proposal.
   case-insensitively only.
 - `--upgrade --package NAME` is an **upgrade**: it lets Pixi change those
   packages' declared constraints.
-- **Git pins** stay at their locked commit unless `--refresh-git` is given.
+- **Git pins** may move only with `--refresh-git`: without it, a candidate in
+  which Pixi moved a locked Git commit fails that target with a policy
+  rejection (exit 4) rather than being proposed.
 - `--install` additionally installs the candidate's default environment on the
   current host; it does not install every platform.
 - Pixi has no **precise update**: a package named by a security update moves

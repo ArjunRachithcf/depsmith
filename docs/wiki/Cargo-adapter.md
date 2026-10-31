@@ -28,8 +28,9 @@ exit 2.
   `cargo update -p NAME --precise VERSION`, and nothing else moves on purpose.
 - A security update moves a transitive crate with a finding the same way
   (or by name with `--security-target newest`); the live tests show both.
-- **Git dependencies** stay at their locked commit unless `--refresh-git` is
-  given.
+- **Git dependencies** may move only with `--refresh-git`: without it, a
+  candidate in which cargo moved a locked Git commit fails that target with a
+  policy rejection (exit 4) rather than being proposed.
 - The candidate lock is checked with `cargo update --workspace --locked`, and
   manifests must not change.
 - `--upgrade` is not supported: change a requirement with `--accept`.
@@ -59,9 +60,9 @@ a valid Cargo requirement.
 
 ## Scanning
 
-Crates from crates.io are scanned as `pkg:cargo/NAME`. Git and path sources
-stay unassessed, and workspace members are the project itself, not
-dependencies.
+Crates from crates.io are scanned as `pkg:cargo/NAME`. Crates from Git or
+other registries stay unassessed, and path crates and workspace members are
+the project itself, not dependencies.
 
 ## Dependency introducers
 
