@@ -277,7 +277,7 @@ impl DependencyChange {
         for package in before.iter().chain(after) {
             let olds = gone.extract_if(.., |p| p.same_package(package)).collect();
             let news = new.extract_if(.., |p| p.same_package(package)).collect();
-            changes.extend(pair_versions(olds, news));
+            changes.extend(pair_versions(olds, news, after));
         }
         changes
     }
@@ -285,10 +285,16 @@ impl DependencyChange {
 
 /// Pair the moved versions of one package: newest first, each old version
 /// with the new one sharing most of its environments (on its own release
-/// line when several share as many), then the rest within their release
-/// line, then newest with newest. Nested npm copies carry no install path, so they pair by
-/// version alone.
-fn pair_versions(mut olds: Vec<Package>, mut news: Vec<Package>) -> Vec<DependencyChange> {
+/// line when several share as many), then with any version of the package
+/// its environments lock `after`, moved or not, so environments that merge
+/// onto one version each move to it; then the rest within their release
+/// line, then newest with newest. Nested npm copies carry no install path,
+/// so they pair by version alone.
+fn pair_versions(
+    mut olds: Vec<Package>,
+    mut news: Vec<Package>,
+    after: &[Package],
+) -> Vec<DependencyChange> {
     let newest_first = |x: &Package, y: &Package| {
         crate::ecosystem::compare_versions(&x.ecosystem, &y.version, &x.version)
     };
@@ -312,18 +318,27 @@ fn pair_versions(mut olds: Vec<Package>, mut news: Vec<Package>) -> Vec<Dependen
         crate::ecosystem::major_part(&x.version) == crate::ecosystem::major_part(&y.version)
     };
     let rank = |x: &Package, y: &Package| (shared(x, y), same_line(x, y));
+    let best = |old: &Package, candidates: &[&Package]| {
+        (0..candidates.len())
+            .filter(|&i| shared(old, candidates[i]) > 0)
+            .fold(None, |chosen: Option<usize>, i| match chosen {
+                Some(c) if rank(old, candidates[c]) >= rank(old, candidates[i]) => Some(c),
+                _ => Some(i),
+            })
+    };
+    let locked: Vec<&Package> = match olds.first() {
+        Some(old) => after.iter().filter(|p| p.same_package(old)).collect(),
+        None => vec![],
+    };
     let mut changes = vec![];
     let mut unpaired = vec![];
     for old in olds {
-        let best = (0..news.len())
-            .filter(|&i| shared(&old, &news[i]) > 0)
-            .fold(None, |best: Option<usize>, i| match best {
-                Some(b) if rank(&old, &news[b]) >= rank(&old, &news[i]) => Some(b),
-                _ => Some(i),
-            });
-        match best {
+        match best(&old, &news.iter().collect::<Vec<_>>()) {
             Some(i) => changes.push(change(Some(old), Some(news.remove(i)))),
-            None => unpaired.push(old),
+            None => match best(&old, &locked) {
+                Some(i) => changes.push(change(Some(old), Some(locked[i].clone()))),
+                None => unpaired.push(old),
+            },
         }
     }
     let mut leftover = vec![];
