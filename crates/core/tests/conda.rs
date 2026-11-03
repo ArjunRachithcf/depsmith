@@ -380,6 +380,61 @@ mod stand_in {
             proposal.failures[0].message
         );
     }
+
+    /// conda-lock keeps a line with a `# [selector]` only on the platforms
+    /// the selector names.
+    #[test]
+    fn a_package_selected_for_other_platforms_is_not_required() {
+        for environment in [
+            "channels: [conda-forge]\ndependencies:\n  - six\n  - numpy  # [osx]\n",
+            "channels: [conda-forge]\ndependencies:\n  - six\n  - numpy  # [win]\n",
+        ] {
+            let proposal = prepare(environment, &[]);
+            assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        }
+        let proposal = prepare(
+            "channels: [conda-forge]\ndependencies:\n  - six\n  - numpy  # [linux64]\n",
+            &[],
+        );
+        assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);
+        assert!(
+            proposal.failures[0]
+                .message
+                .contains("numpy is not locked for linux-64"),
+            "{}",
+            proposal.failures[0].message
+        );
+
+        // Each platform of one lock is held to its own lines, pip ones too.
+        let record = |name: &str, platform: &str| {
+            format!("- name: {name}\n  version: 1.0.0\n  manager: conda\n  platform: {platform}\n  url: https://conda.anaconda.org/conda-forge/{platform}/{name}-1.0.0-0.conda\n  hash: {{md5: a, sha256: b}}\n")
+        };
+        let windows = format!(
+            "{}{}{}{}",
+            LOCK.replace("[linux-64]", "[linux-64, win-64]"),
+            record("six", "win-64"),
+            record("numpy", "win-64"),
+            record("pywin32", "win-64").replace("manager: conda", "manager: pip")
+        );
+        let environment = "channels: [conda-forge]\ndependencies:\n  - six\n  - numpy  # [win]\n  - pip:\n    - pywin32  # [win64]\n";
+        let proposal = run_writing(environment, None, Some(&windows), &[]).0;
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let proposal = run_writing(
+            &environment.replace("[win]", "[unix]"),
+            None,
+            Some(&windows),
+            &[],
+        )
+        .0;
+        assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);
+        assert!(
+            proposal.failures[0]
+                .message
+                .contains("numpy is not locked for linux-64"),
+            "{}",
+            proposal.failures[0].message
+        );
+    }
 }
 
 const GRAPH_LOCK: &str = "version: 1
