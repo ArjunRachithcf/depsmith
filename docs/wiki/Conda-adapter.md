@@ -29,12 +29,14 @@ allow (conda-lock has no precise update), and reports a finding in a
 transitive package as a blocked fix until a live test shows conda-lock moving
 one.
 
-The candidate lock must hold every declared package on every locked platform,
-and the environment file must not change. A pip requirement that the conda
-solution already has is locked from conda, so a conda record of that name, as
-pip normalizes names, holds it. A PyPI name conda-lock maps to another conda
-name (`torch` to `pytorch`) is not matched. `--upgrade` is not supported:
-change a requirement with `--accept`.
+The candidate lock must hold every declared package on every locked platform
+it is declared for, and the environment file must not change. Like
+conda-lock, a line ending in a `# [selector]` comment such as `# [linux64]` or
+`# [osx]` is declared only for the platforms the selector names. A pip
+requirement that the conda solution already has is locked from conda, so a
+conda record of that name, as pip normalizes names, holds it. A PyPI name
+conda-lock maps to another conda name (`torch` to `pytorch`) is not matched.
+`--upgrade` is not supported: change a requirement with `--accept`.
 
 ## Suggestions
 
