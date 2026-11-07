@@ -14,7 +14,10 @@ with the workspace above it.
 depsmith reads `pixi.lock` schemas 5 to 7. Packages pixi-build builds from
 the repository or a Git URL (`conda_source` records, or conda records with a
 path) are the project itself: they stay in the lock graph but are not part
-of the scanned inventory.
+of the scanned inventory. Schema 7 locks packages under platform names, and
+older schemas under the subdir. When a relock renames a platform, such as
+`linux-64` becoming `linux-64-glibc-2-17`, the baseline is compared under the
+new name, so only packages that moved are reported.
 
 ## Updates and upgrades
 
