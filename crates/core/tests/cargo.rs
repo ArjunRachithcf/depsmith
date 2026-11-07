@@ -770,3 +770,45 @@ fn a_crate_locked_at_two_versions_keeps_its_introducers_and_roots() {
 fn lock_graph_rejects_invalid_toml() {
     assert!(depsmith_core::cargo::lock_graph("[").is_err());
 }
+
+/// A cargo-generate template's manifest names its package with a
+/// placeholder, which cargo rejects: it is no target.
+#[test]
+fn template_manifests_with_placeholder_names_are_not_targets() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        &[
+            ("tool/Cargo.toml", &package("tool", "")),
+            (
+                "templates/basic/Cargo.toml",
+                &package("{{project-name}}", ""),
+            ),
+            (
+                "templates/lib/Cargo.toml",
+                &package("{{crate_name}}-core", ""),
+            ),
+            ("bad/digit/Cargo.toml", &package("1st", "")),
+            ("bad/dash/Cargo.toml", &package("-x", "")),
+            (
+                "bad/inherited/Cargo.toml",
+                "[package]\nname.workspace = true\nversion = \"0.1.0\"\n",
+            ),
+            (
+                "templates/root/Cargo.toml",
+                &format!("[workspace]\n{}", package("{{project-name}}", "")),
+            ),
+            ("ok/under_score/Cargo.toml", &package("_private-crate2", "")),
+        ],
+    );
+    let ids: Vec<String> = Engine::default()
+        .discover(root.path())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(
+        ids,
+        ["cargo:ok/under_score/Cargo.toml", "cargo:tool/Cargo.toml"]
+    );
+}
