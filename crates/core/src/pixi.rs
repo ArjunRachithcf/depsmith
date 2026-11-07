@@ -16,8 +16,13 @@ use std::{
 };
 
 /// The Pixi adapter. Targets are `pixi.toml` files and `pyproject.toml` files
-/// with a `[tool.pixi]` table; Pixi itself resolves in the stage.
+/// with a `[tool.pixi]` table, other than pixi-build package manifests; Pixi
+/// itself resolves in the stage.
 pub struct Pixi;
+
+/// The tables that make a Pixi manifest a workspace; `project` is the
+/// legacy name.
+const WORKSPACE_TABLES: [&str; 2] = ["workspace", "project"];
 impl Adapter for Pixi {
     fn spec(&self) -> AdapterSpec {
         AdapterSpec {
@@ -60,13 +65,31 @@ impl Adapter for Pixi {
             },
         }
     }
+    /// Exactly the manifests that own a `pixi.lock`: a `pixi.toml`, or a
+    /// `pyproject.toml` with a `[tool.pixi]` table, unless it only declares
+    /// a pixi-build package, which Pixi locks with the workspace above it.
+    /// A `pixi.toml` that does not parse, or that declares none of these
+    /// tables, stays a target so Pixi reports its error.
     fn detects(&self, path: &Path, content: &str) -> bool {
-        path.file_name().is_some_and(|n| n == "pixi.toml")
-            || (path.file_name().is_some_and(|n| n == "pyproject.toml")
-                && toml::from_str::<toml::Value>(content)
+        let parsed = toml::from_str::<toml::Value>(content);
+        let pixi = match path.file_name().and_then(|n| n.to_str()) {
+            Some("pixi.toml") => {
+                let Ok(value) = &parsed else { return true };
+                value
+            }
+            Some("pyproject.toml") => {
+                let Some(value) = parsed
+                    .as_ref()
                     .ok()
-                    .and_then(|v| v.get("tool")?.get("pixi").cloned())
-                    .is_some())
+                    .and_then(|v| v.get("tool")?.get("pixi"))
+                else {
+                    return false;
+                };
+                value
+            }
+            _ => return false,
+        };
+        pixi.get("package").is_none() || WORKSPACE_TABLES.iter().any(|t| pixi.get(t).is_some())
     }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<crate::Package>> {
         let relative = target.manifest.parent().unwrap().join("pixi.lock");
@@ -199,7 +222,7 @@ impl Adapter for Pixi {
         ]);
         Ok(AvailabilityConfig {
             registries,
-            exclude_newer: ["workspace", "project"]
+            exclude_newer: WORKSPACE_TABLES
                 .iter()
                 .find_map(|table| pixi.get(table)?.get("exclude-newer"))
                 .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned)),
