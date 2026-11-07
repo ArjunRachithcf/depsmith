@@ -20,6 +20,10 @@ _Avoid_: Repository, feed, index (except in an ecosystem's own terms)
 An ecosystem's rules for ordering versions and matching requirements, such as PEP 440, conda version ordering or semantic versioning.
 _Avoid_: Version format
 
+**Release line**:
+The versions expected to stay compatible with each other: those sharing a major version, or below 1.0 a major and minor version, such as 3.x or 0.4.x.
+_Avoid_: Series, branch
+
 **Target**:
 One manifest or workflow file that depsmith updates, identified as `manager:path`, together with the files its package manager owns.
 _Avoid_: Project, manifest (when the whole unit is meant)

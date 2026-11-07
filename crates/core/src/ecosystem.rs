@@ -255,6 +255,23 @@ impl VersionScheme for NpmSemver {
     }
 }
 
+/// The major part of `version`: any epoch, then the first component, or the
+/// first two when the first is `0`: the release line, within which
+/// versions are expected to stay compatible.
+pub(crate) fn major_part(version: &str) -> String {
+    let version = version.trim().trim_start_matches(['v', 'V']);
+    let (epoch, rest) = match version.split_once('!') {
+        Some((epoch, rest)) => (format!("{epoch}!"), rest),
+        None => (String::new(), version),
+    };
+    let mut parts = rest.split(|c: char| !c.is_ascii_alphanumeric());
+    let first = parts.next().unwrap_or_default();
+    match first.trim_start_matches('0') {
+        "" if !first.is_empty() => format!("{epoch}0.{}", parts.next().unwrap_or_default()),
+        _ => format!("{epoch}{first}"),
+    }
+}
+
 /// Order two versions of `ecosystem` by its scheme, or as text when depsmith
 /// knows none.
 pub(crate) fn compare_versions(ecosystem: &str, left: &str, right: &str) -> Ordering {
