@@ -1,8 +1,7 @@
 //! The conda adapter: `environment.yml` targets locked with conda-lock. Conda
-//! match specs and named requirements in the `pip:` sub-list are
-//! declarations; pip options and bare URLs in that sub-list are not.
-//! Availability evidence comes from sharded repodata (CEP 16), falling back
-//! to full repodata for channels without shards.
+//! match specs and the `pip:` sub-list are declarations; availability
+//! evidence comes from sharded repodata (CEP 16), falling back to full
+//! repodata for channels without shards.
 use crate::{
     adapter::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
@@ -831,9 +830,6 @@ impl Adapter for Conda {
         }
         Ok(selected)
     }
-    /// Conda match specs in `dependencies:` (a `channel::name` or
-    /// `channel:name` prefix is allowed) and the requirements in the `pip:`
-    /// sub-list, which belong to PyPI.
     fn declarations(&self, root: &Path, target: &Target) -> Result<Vec<Declaration>> {
         let parsed = parse(&fs::read_to_string(root.join(&target.manifest))?)?;
         Ok(declarations_of(&parsed, &target.manifest))
@@ -938,17 +934,20 @@ impl Adapter for Conda {
             fs::write(stage.join(&lock), &kept)?;
         }
         let after = lock_inventory(&kept)?;
-        // Every declared package must be locked for every locked platform.
+        // Every declared package must be locked for every locked platform. A
+        // pip requirement the conda solution already has is locked from
+        // conda, so any record whose name matches it as pip normalizes names
+        // holds it.
         let locked: BTreeSet<&str> = after.iter().map(|p| p.platform.as_str()).collect();
         for declaration in self.declarations(stage, target)? {
             for platform in &locked {
                 let found = after.iter().any(|p| {
                     p.platform == *platform
-                        && p.ecosystem == declaration.ecosystem
-                        && if p.ecosystem == "pypi" {
+                        && if declaration.ecosystem == "pypi" {
                             pypi_key(&p.name) == pypi_key(&declaration.package)
                         } else {
-                            p.name.eq_ignore_ascii_case(&declaration.package)
+                            p.ecosystem == declaration.ecosystem
+                                && p.name.eq_ignore_ascii_case(&declaration.package)
                         }
                 });
                 if !found {
