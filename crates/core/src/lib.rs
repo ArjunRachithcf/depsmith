@@ -317,8 +317,9 @@ impl Engine {
     /// before any package manager runs. Precise updates may name transitive
     /// packages, so they are not checked against declarations; where an
     /// adapter has no precise update, the proposal notes how far each package
-    /// moves instead. Each target is then resolved in its own
-    /// stage; the repository is not modified. A target that cannot be prepared is
+    /// moves instead. Each target is then resolved in a stage shared by the
+    /// whole run, restored to that target's inputs beforehand; the
+    /// repository is not modified. A target that cannot be prepared is
     /// recorded in [`Proposal::failures`] instead of failing the whole call.
     ///
     /// ```
