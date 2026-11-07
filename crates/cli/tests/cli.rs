@@ -407,7 +407,7 @@ fn security_updates_check_then_fix_only_the_vulnerable_package() {
     let d = dir.display();
     let uv = script(
         "uv",
-        format!("#!/bin/sh\ncase \"$1\" in\n  --version) echo 'uv 0.12.15';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n"),
+        format!("#!/bin/sh\ncase \"$1\" in\n  --version) echo 'uv 0.13.6';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n"),
     );
     let finding = r#"{"artifact":{"purl":"pkg:pypi/idna@3.6"},"matchDetails":[],"vulnerability":{"id":"GHSA-idna","namespace":"github:language:python","severity":"Medium","fix":{"versions":["3.7"],"state":"fixed"}}}"#;
     let grype = script(
