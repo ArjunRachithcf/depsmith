@@ -1,7 +1,8 @@
 //! A lock can hold several versions of one package (Python forks, npm
-//! nesting, cargo majors): only versions that moved are paired, each once,
-//! by shared environments, then within a release line, then newest with
-//! newest.
+//! nesting, cargo majors, Pixi environments): only versions that moved are
+//! paired, each once, by shared environments, then within a release line,
+//! then newest with newest. Environments that merge onto one version each
+//! move to it.
 use depsmith_core::{
     adapter::{Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles},
     Engine, Package, Result, Target, UpdateOptions,
@@ -152,6 +153,71 @@ fn versions_pair_within_the_environments_that_lock_them() {
         moved(vec!["a 2.0 a"], vec!["a 2.1 a", "a 2.5 b"]),
         ["- -> a 2.5", "a 2.0 -> a 2.1"]
     );
+}
+
+#[test]
+fn environments_that_now_share_a_version_each_move_to_it() {
+    // Environments x and y locked their own binutils; both now lock 2.46.1,
+    // so neither version was removed.
+    assert_eq!(
+        moved(
+            vec!["binutils 2.45.1 x", "binutils 2.46.0 y"],
+            vec!["binutils 2.46.1 x,y"]
+        ),
+        [
+            "binutils 2.45.1 -> binutils 2.46.1",
+            "binutils 2.46.0 -> binutils 2.46.1"
+        ]
+    );
+    // y moves to the version x already locked, which itself did not move.
+    assert_eq!(
+        moved(
+            vec!["binutils 2.46.1 x", "binutils 2.45.1 y"],
+            vec!["binutils 2.46.1 x,y"]
+        ),
+        ["binutils 2.45.1 -> binutils 2.46.1"]
+    );
+    // Two environments merge onto a moved version, a third onto one that
+    // did not move.
+    assert_eq!(
+        moved(
+            vec!["a 1.0 x", "a 1.1 y", "a 1.3 z", "a 1.5 w"],
+            vec!["a 1.2 x,y", "a 1.5 z,w"]
+        ),
+        ["a 1.0 -> a 1.2", "a 1.1 -> a 1.2", "a 1.3 -> a 1.5"]
+    );
+    // An environment's own version comes before its release line: y now
+    // locks 1.5, so 1.2 is newly added in z, not 1.0's successor.
+    assert_eq!(
+        moved(vec!["a 1.0 y", "a 1.5 x"], vec!["a 1.5 x,y", "a 1.2 z"]),
+        ["- -> a 1.2", "a 1.0 -> a 1.5"]
+    );
+}
+
+#[test]
+fn an_environment_that_drops_a_package_still_removes_it() {
+    assert_eq!(
+        moved(vec!["a 1.0 x", "a 2.0 y"], vec!["a 2.1 x"]),
+        ["a 1.0 -> a 2.1", "a 2.0 -> -"]
+    );
+}
+
+/// An environment that merges onto an older version another environment
+/// already locks moves back: the target is held back.
+#[test]
+fn merging_onto_an_older_locked_version_holds_the_target_back() {
+    let proposal = prepare_multi(
+        vec!["a 2.0 y", "a 1.0 x"],
+        vec!["a 1.0 x,y"],
+        UpdateOptions::default(),
+    );
+    assert!(proposal.changes.is_empty(), "{:?}", proposal.changes);
+    let held: Vec<_> = proposal
+        .unresolved
+        .iter()
+        .map(|u| u.reference.as_str())
+        .collect();
+    assert_eq!(held, ["a 2.0 -> 1.0"]);
 }
 
 #[test]

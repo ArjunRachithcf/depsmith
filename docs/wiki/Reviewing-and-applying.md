@@ -8,11 +8,12 @@ repository is never modified while preparing. A proposal records:
 - **file changes**: the exact new content of each file, with a diff;
 - **dependency changes**: every package added, removed or changed between the
   current resolution (the **baseline**) and the new one (the **candidate**),
-  including transitive dependencies and every configured platform. A package
-  the target does not declare names its **introducers**, the declared
-  dependencies that pull it in, with the shortest dependency path from each
-  (from the lock graph: Pixi, uv, Cargo, conda and npm). The text report lists
-  these as `pulled in by …`;
+  including transitive dependencies and every configured platform. Pixi
+  environments that now share one version of a package each list a change to
+  it, not a removal. A package the target does not declare names its
+  **introducers**, the declared dependencies that pull it in, with the
+  shortest dependency path from each (from the lock graph: Pixi, uv, Cargo,
+  conda and npm). The text report lists these as `pulled in by …`;
 - **suggestions** about declared constraints, **unresolved references**,
   **validation** levels completed, **scan reports** when requested, and
   **failures** for targets that could not be prepared.
@@ -20,7 +21,8 @@ repository is never modified while preparing. A proposal records:
 A target whose resolution would move a package to an older version is **held
 back**: it proposes no change, each downgrade is listed as an unresolved
 reference (`cpp_demangle 0.5.1 -> 0.4.5`: no upgrade fix for now), and a
-validation note says so. `--allow-downgrades` proposes such a resolution
+validation note says so. That includes a Pixi environment moving to an older
+version another environment already locks. `--allow-downgrades` proposes such a resolution
 anyway and names each downgrade in the validation notes.
 
 ## Applying exactly what was reviewed
