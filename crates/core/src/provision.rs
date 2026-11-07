@@ -362,12 +362,13 @@ fn unpack(bytes: &[u8], download: &ToolDownload, out: &Path) -> Result<()> {
 /// dropped) and the unpacked tree holding the executable.
 fn fetch_verified(
     download: &ToolDownload,
+    cache: &Path,
     target: &Path,
     timeout: u64,
     tools: &BTreeMap<String, String>,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
     if let Some(Setup::UvVenv { lock, python }) = &download.setup {
-        return uv_venv(download, target, timeout, tools, lock, python);
+        return uv_venv(download, cache, target, timeout, tools, lock, python);
     }
     let executable = confined(Path::new(&download.executable), "executable")?;
     let bytes = fetch(&download.url, timeout)?;
@@ -424,6 +425,7 @@ fn fetch_verified(
 /// Build a Python tool's venv in a staging directory beside `target`.
 fn uv_venv(
     download: &ToolDownload,
+    cache: &Path,
     target: &Path,
     timeout: u64,
     tools: &BTreeMap<String, String>,
@@ -444,10 +446,17 @@ fn uv_venv(
     let out = staging.path().join("out");
     fs::create_dir(&out)?;
     let venv: String = out.join("venv").to_string_lossy().into();
+    // The venv links to its interpreter: keep it in the tool cache
+    // (`<cache>/uv-python`, shared by Python tools) rather than in uv's
+    // directory under the user's home, which a cleanup can remove.
+    let env = [(
+        "UV_PYTHON_INSTALL_DIR".to_owned(),
+        cache.join("uv-python").to_string_lossy().into_owned(),
+    )];
     let pinned = out.join("requirements.txt");
     fs::write(&pinned, requirements)?;
     let failed = |e: Error| Error::Operation(format!("installing {lock} with uv failed: {e}"));
-    crate::process::run(
+    crate::process::run_env(
         uv,
         // The user's uv configuration must not pick the interpreter or index.
         &[
@@ -462,9 +471,10 @@ fn uv_venv(
         .map(str::to_owned),
         &out,
         timeout,
+        &env,
     )
     .map_err(failed)?;
-    crate::process::run(
+    crate::process::run_env(
         uv,
         &[
             "pip",
@@ -480,6 +490,7 @@ fn uv_venv(
         .map(str::to_owned),
         &out,
         timeout,
+        &env,
     )
     .map_err(failed)?;
     if !out.join(&executable).is_file() {
@@ -543,7 +554,7 @@ pub fn install_with(
         return Ok(path);
     }
     let target = version_dir(name, version, cache)?;
-    let (_staging, out) = fetch_verified(download, &target, timeout, tools)?;
+    let (_staging, out) = fetch_verified(download, cache, &target, timeout, tools)?;
     match place(&out, &target) {
         // Another process finished the same install first.
         Err(_) if target.join(&executable).is_file() => {}
@@ -1063,7 +1074,7 @@ pub fn reinstall_with(
         .ok_or_else(|| Error::Invalid(format!("{} has no tested version to install", tool.name)))?;
     let executable = confined(Path::new(&download.executable), "executable")?;
     let target = version_dir(&tool.name, version, cache)?;
-    let (_staging, out) = fetch_verified(download, &target, timeout, tools)?;
+    let (_staging, out) = fetch_verified(download, cache, &target, timeout, tools)?;
     // Keep a cached copy only if its whole tree equals the fresh install
     // (other repositories may be running it); a broken one is replaced.
     let identical = target.exists()
