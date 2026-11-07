@@ -17,6 +17,12 @@ repository is never modified while preparing. A proposal records:
   **validation** levels completed, **scan reports** when requested, and
   **failures** for targets that could not be prepared.
 
+A target whose resolution would move a package to an older version is **held
+back**: it proposes no change, each downgrade is listed as an unresolved
+reference (`cpp_demangle 0.5.1 -> 0.4.5`: no upgrade fix for now), and a
+validation note says so. `--allow-downgrades` proposes such a resolution
+anyway and names each downgrade in the validation notes.
+
 ## Applying exactly what was reviewed
 
 Applying writes the reviewed files without resolving again, and only while the

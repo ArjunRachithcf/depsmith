@@ -15,6 +15,9 @@ upgrade = false
 - `[options]` accepts the fields of `UpdateOptions` (see the
   [Python API](Python-API)); unknown fields are an error.
 - Explicit CLI flags and Python options override the file.
+- `allow_downgrades = true` in `[options]` lets every run propose downgrades
+  for this repository; leave it out to keep the default of holding such
+  targets back.
 - Native package-manager configuration stays authoritative for ecosystem
   behaviour. Native Pixi configuration in `.pixi/config.toml` is staged even
   when `.pixi/` is ignored.
