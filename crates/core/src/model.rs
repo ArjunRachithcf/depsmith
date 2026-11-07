@@ -197,10 +197,14 @@ pub struct Package {
 impl Package {
     /// Whether `other` is the same resolution: everything but the
     /// environments that lock it, which change without the package moving.
+    /// A version one lock does not record (a local Pixi project in lock
+    /// schema 7) matches any version of the same artifact.
     pub(crate) fn same_resolution(&self, other: &Package) -> bool {
         self.ecosystem == other.ecosystem
             && self.name == other.name
-            && self.version == other.version
+            && (self.version == other.version
+                || self.version.is_empty()
+                || other.version.is_empty())
             && self.artifact == other.artifact
             && self.platform == other.platform
     }
