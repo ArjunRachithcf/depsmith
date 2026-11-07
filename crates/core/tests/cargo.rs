@@ -164,6 +164,151 @@ fn real_cargo() -> UpdateOptions {
 }
 
 #[test]
+fn path_dependencies_of_members_inside_the_workspace_are_members() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        &[
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\ntester = { path = \"testing/tester\" }\n",
+            ),
+            (
+                "app/Cargo.toml",
+                &package(
+                    "app",
+                    "[dependencies]\nhelper = { path = \"../helpers/helper\" }\n[dev-dependencies]\ntester = { workspace = true }\n",
+                ),
+            ),
+            (
+                "helpers/helper/Cargo.toml",
+                &package("helper", "[dependencies]\ndeep = { path = \"../deep\" }\n"),
+            ),
+            ("helpers/deep/Cargo.toml", &package("deep", "")),
+            ("testing/tester/Cargo.toml", &package("tester", "")),
+            ("solo/Cargo.toml", &package("solo", "")),
+        ],
+    );
+    let ids: Vec<String> = Engine::default()
+        .discover(root.path())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(ids, ["cargo:Cargo.toml", "cargo:solo/Cargo.toml"]);
+}
+
+/// The manifests the real cargo treats as workspace roots: each owns a
+/// lock, so each must be a target. `--no-deps` needs no network.
+fn cargo_roots(root: &Path, manifests: &[&str]) -> Vec<String> {
+    let mut roots = vec![];
+    for manifest in manifests {
+        let output = std::process::Command::new(std::env::var("CARGO").unwrap())
+            .args([
+                "metadata",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+            ])
+            .arg(root.join(manifest))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{manifest}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let workspace_root = Path::new(metadata["workspace_root"].as_str().unwrap());
+        let own = root
+            .join(manifest)
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        if workspace_root.canonicalize().unwrap() == own {
+            roots.push(format!("cargo:{manifest}"));
+        }
+    }
+    roots.sort();
+    roots
+}
+
+/// Crates of a fixture workspace, each as (directory, path dependencies).
+type Crates = &'static [(&'static str, &'static [&'static str])];
+
+#[test]
+fn excluded_path_dependencies_follow_cargo() {
+    // (workspace table, crates)
+    let cases: [(&str, Crates); 4] = [
+        // Under a literal `members` entry an excluded crate stays a member.
+        (
+            "members = [\"app\"]\nexclude = [\"app/inner\", \"helpers/outer\"]",
+            &[
+                ("app", &["inner", "../helpers/outer"]),
+                ("app/inner", &[]),
+                ("helpers/outer", &[]),
+            ],
+        ),
+        // A path dependency of a path dependency, excluded.
+        (
+            "members = [\"app\"]\nexclude = [\"helpers/h/x\"]",
+            &[
+                ("app", &["../helpers/h"]),
+                ("helpers/h", &["x"]),
+                ("helpers/h/x", &[]),
+            ],
+        ),
+        // Excluded, but inside another literal member.
+        (
+            "members = [\"a\", \"b\"]\nexclude = [\"b/inner\"]",
+            &[("a", &["../b/inner"]), ("b", &[]), ("b/inner", &[])],
+        ),
+        // A glob member does not shield what it contains.
+        (
+            "members = [\"crates/*\"]\nexclude = [\"crates/a/inner\"]",
+            &[("crates/a", &["inner"]), ("crates/a/inner", &[])],
+        ),
+    ];
+    for (workspace, crates) in cases {
+        let root = tempfile::tempdir().unwrap();
+        let mut files = vec![(
+            "Cargo.toml".to_owned(),
+            format!("[workspace]\nresolver = \"2\"\n{workspace}\n"),
+        )];
+        for (dir, deps) in crates {
+            let name = dir.rsplit('/').next().unwrap();
+            let deps: String = deps
+                .iter()
+                .map(|d| format!("{} = {{ path = \"{d}\" }}\n", d.rsplit('/').next().unwrap()))
+                .collect();
+            files.push((
+                format!("{dir}/Cargo.toml"),
+                package(name, &format!("[dependencies]\n{deps}")),
+            ));
+            files.push((format!("{dir}/src/lib.rs"), String::new()));
+        }
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
+        write(root.path(), &files);
+        let mut ids: Vec<String> = Engine::default()
+            .discover(root.path())
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        ids.sort();
+        let mut manifests: Vec<String> = vec!["Cargo.toml".into()];
+        manifests.extend(crates.iter().map(|(dir, _)| format!("{dir}/Cargo.toml")));
+        let manifests: Vec<&str> = manifests.iter().map(String::as_str).collect();
+        assert_eq!(ids, cargo_roots(root.path(), &manifests), "{workspace}");
+    }
+}
+
+#[test]
 fn path_only_workspace_resolves_with_the_real_cargo() {
     let root = tempfile::tempdir().unwrap();
     write(
