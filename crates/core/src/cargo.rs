@@ -50,26 +50,28 @@ fn strings(value: Option<&toml::Value>) -> Vec<&str> {
         .collect()
 }
 
+/// Whether the workspace at `dir` shuts the crate at `member` out, as cargo
+/// does: under an `exclude` entry and under no literal `members` entry.
+fn excluded(dir: &Path, workspace: &toml::Value, member: &Path) -> bool {
+    let under = |key: &str| {
+        strings(workspace.get(key))
+            .into_iter()
+            .any(|entry| member.starts_with(crate::working_tree::normalize(&dir.join(entry))))
+    };
+    under("exclude") && !under("members")
+}
+
 /// Member manifests of the workspace whose root manifest is in `dir`, in
 /// order, as cargo decides: the `members` globs, then every path dependency
 /// of a member (or of the root package) that lies inside the workspace,
 /// recursively. An `exclude`d crate is left out unless it lies under a
 /// literal `members` entry, which cargo compares unexpanded.
 fn members(root: &Path, dir: &Path, workspace: &toml::Value) -> Vec<PathBuf> {
-    let under = |key: &str| -> Vec<PathBuf> {
-        strings(workspace.get(key))
-            .into_iter()
-            .map(|e| crate::working_tree::normalize(&dir.join(e)))
-            .collect()
-    };
-    let (excluded, listed) = (under("exclude"), under("members"));
     let add = |member: PathBuf, output: &mut Vec<PathBuf>| {
         let manifest = member.join("Cargo.toml");
-        let shut_out = excluded.iter().any(|e| member.starts_with(e))
-            && !listed.iter().any(|m| member.starts_with(m));
         if member != dir
             && member.starts_with(dir)
-            && !shut_out
+            && !excluded(dir, workspace, &member)
             && root.join(&manifest).is_file()
             && !output.contains(&manifest)
         {
@@ -594,8 +596,10 @@ impl Adapter for Cargo {
             .parse::<toml::Value>()
             .is_ok_and(|v| v.get("workspace").is_some() || v.get("package").is_some())
     }
-    /// A workspace root, or a package that no enclosing workspace lists as a
-    /// member: exactly the manifests that own a `Cargo.lock`.
+    /// A workspace root, or a package every enclosing workspace excludes:
+    /// exactly the manifests that own a `Cargo.lock`. As in cargo, the first
+    /// enclosing workspace that does not exclude a package is its workspace,
+    /// whether it lists the package (a member) or not (cargo refuses it).
     fn detects_in(&self, root: &Path, relative: &Path, content: &str) -> bool {
         let Ok(parsed) = content.parse::<toml::Value>() else {
             return false;
@@ -616,7 +620,9 @@ impl Adapter for Cargo {
             else {
                 continue;
             };
-            return !members(root, ancestor, &workspace).contains(&relative.to_path_buf());
+            if !excluded(ancestor, &workspace, dir) {
+                return false;
+            }
         }
         true
     }
