@@ -671,8 +671,8 @@ fn wheel_version(url: &str) -> Option<String> {
     Some(decoded)
 }
 
-/// conda-lock 4.0.2 relocks a pip package given by a wheel URL as version
-/// 0.0.0. Such a row keeps the version the previous lock gave the same
+/// conda-lock before 4.0.4 relocks a pip package given by a wheel URL as
+/// version 0.0.0. Such a row keeps the version the previous lock gave the same
 /// package, platform and URL, else the version its wheel file name states.
 /// Only the row's version line is rewritten, quoted, so the rest of the
 /// lock keeps conda-lock's formatting.
@@ -779,7 +779,7 @@ impl Adapter for Conda {
                 ToolSpec {
                     name: "conda-lock".into(),
                     default: "conda-lock".into(),
-                    tested_versions: vec!["4.0.2".into()],
+                    tested_versions: vec!["4.0.5".into()],
 
                     downloads: crate::provision::pinned("conda-lock"),
                 },

@@ -16,7 +16,7 @@ use std::{
 };
 
 /// A uv that builds the venv layout and the Python tool's entry point.
-const UV: &[u8] = b"#!/bin/sh\nset -e\nPATH=/usr/bin:/bin\ncase \"$1\" in\n  venv) for a; do last=$a; done; mkdir -p \"$last/bin\";;\n  pip) for a; do case \"$a\" in */venv) venv=$a;; esac; done; printf '#!/bin/sh\\necho conda-lock 4.0.2\\n' > \"$venv/bin/conda-lock\"; chmod 755 \"$venv/bin/conda-lock\";;\nesac\n";
+const UV: &[u8] = b"#!/bin/sh\nset -e\nPATH=/usr/bin:/bin\ncase \"$1\" in\n  venv) for a; do last=$a; done; mkdir -p \"$last/bin\";;\n  pip) for a; do case \"$a\" in */venv) venv=$a;; esac; done; printf '#!/bin/sh\\necho conda-lock 4.0.5\\n' > \"$venv/bin/conda-lock\"; chmod 755 \"$venv/bin/conda-lock\";;\nesac\n";
 
 /// Serve the uv stand-in at `/uv` on 127.0.0.1.
 fn serve() -> String {
@@ -77,7 +77,7 @@ fn a_missing_companion_is_offered_and_installed_first() {
     let base = serve();
     let uv = tool(
         "uv",
-        "0.12.15",
+        "0.13.6",
         vec![ToolDownload {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
@@ -90,7 +90,7 @@ fn a_missing_companion_is_offered_and_installed_first() {
     );
     let conda_lock = tool(
         "conda-lock",
-        "4.0.2",
+        "4.0.5",
         provision::pinned("conda-lock")
             .into_iter()
             .filter(|d| d.os == std::env::consts::OS)

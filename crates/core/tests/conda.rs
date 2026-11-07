@@ -317,7 +317,7 @@ mod stand_in {
         )
     }
 
-    /// conda-lock 4.0.2 relocks a pip package given by a wheel URL as
+    /// conda-lock before 4.0.4 relocks a pip package given by a wheel URL as
     /// version 0.0.0: an unchanged URL keeps the version it had, and a new
     /// wheel URL takes the version in its file name.
     #[test]

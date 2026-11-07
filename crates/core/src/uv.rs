@@ -381,7 +381,7 @@ impl Adapter for Uv {
             tools: vec![ToolSpec {
                 name: "uv".into(),
                 default: "uv".into(),
-                tested_versions: vec!["0.12.15".into()],
+                tested_versions: vec!["0.13.6".into()],
 
                 downloads: crate::provision::pinned("uv"),
             }],
