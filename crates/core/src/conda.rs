@@ -1,7 +1,8 @@
 //! The conda adapter: `environment.yml` targets locked with conda-lock. Conda
-//! match specs and the `pip:` sub-list are declarations; availability
-//! evidence comes from sharded repodata (CEP 16), falling back to full
-//! repodata for channels without shards.
+//! match specs and named requirements in the `pip:` sub-list are
+//! declarations; pip options and bare URLs in that sub-list are not.
+//! Availability evidence comes from sharded repodata (CEP 16), falling back
+//! to full repodata for channels without shards.
 use crate::{
     adapter::{
         pypi_key, Adapter, AdapterSpec, Candidate, Capabilities, ManagedFiles, Support, ToolSpec,
