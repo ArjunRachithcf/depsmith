@@ -1,7 +1,6 @@
-//! The repository's working tree: listing files and in-repository symlinks
-//! while respecting ignore rules, fingerprinting inputs, copying them into a
-//! stage, and leaving out paths the stage cannot safely copy, such as a
-//! symlink that escapes the repository or a nested repository (ADR 0007).
+//! The repository's working tree: listing files while respecting ignore
+//! rules, fingerprinting inputs, copying them into a stage, and rejecting
+//! paths that escape the repository.
 use crate::{adapter::AdapterSpec, Error, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -312,8 +311,6 @@ pub(crate) fn walk(root: &Path, layout: &Layout) -> Result<Tree> {
     Ok(tree)
 }
 
-/// The fingerprint of the working tree's inputs; see [`fingerprint_tree`] to
-/// also keep the [`Tree`] they were read from.
 pub(crate) fn fingerprint(root: &Path, layout: &Layout) -> Result<BTreeMap<PathBuf, String>> {
     Ok(fingerprint_tree(root, layout)?.0)
 }
@@ -393,8 +390,6 @@ impl Stage {
     }
 }
 
-/// Copy `inputs` into `destination`, recreating each kept symlink in place
-/// of a copy, then re-fingerprint the stage to confirm it matches `inputs`.
 pub(crate) fn stage(
     root: &Path,
     destination: &Path,
@@ -566,6 +561,10 @@ mod tests {
     use super::*;
 
     fn git(root: &Path, args: &[&str]) -> String {
+        git_with_input(root, args, std::process::Stdio::null())
+    }
+
+    fn git_with_input(root: &Path, args: &[&str], input: std::process::Stdio) -> String {
         let output = std::process::Command::new("git")
             .args([
                 "-c",
@@ -581,6 +580,7 @@ mod tests {
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
             )
             .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(input)
             .output()
             .unwrap();
         assert!(
@@ -756,6 +756,35 @@ mod tests {
             git(destination.path(), &["describe", "--tags", "--dirty"]).trim(),
             "v1.2.4"
         );
+    }
+
+    /// A large repository's index listing runs past any output cap: a
+    /// tracked file listed last is still an input.
+    #[cfg(unix)]
+    #[test]
+    fn tracked_files_past_a_large_index_listing_are_inputs() {
+        use std::io::{Seek as _, Write as _};
+        let root = git_project();
+        // Listed last and ignored, so only the index listing finds it.
+        fs::write(root.path().join(".gitignore"), "ignored.txt\n").unwrap();
+        fs::create_dir(root.path().join("zz")).unwrap();
+        fs::write(root.path().join("zz/ignored.txt"), "kept\n").unwrap();
+        git(root.path(), &["add", "-f", ".gitignore", "zz/ignored.txt"]);
+        // Index entries for files the checkout lacks, about 36 MB of listing.
+        let blob = git(root.path(), &["hash-object", "-w", "tracked.txt"]);
+        let deep = vec!["a".repeat(250); 14].join("/");
+        let mut entries = tempfile::tempfile().unwrap();
+        for i in 0..10_000 {
+            writeln!(entries, "100644 {}\tdeep/{deep}/f{i}", blob.trim()).unwrap();
+        }
+        entries.seek(std::io::SeekFrom::Start(0)).unwrap();
+        git_with_input(
+            root.path(),
+            &["update-index", "--index-info"],
+            entries.into(),
+        );
+        let inputs = fingerprint(root.path(), &layout()).unwrap();
+        assert!(inputs.contains_key(Path::new("zz/ignored.txt")));
     }
 
     /// With core.symlinks=false Git checks a tracked link out as a file
