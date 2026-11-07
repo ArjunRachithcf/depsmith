@@ -368,7 +368,7 @@ fn file_hash(path: &Path) -> Result<String> {
 /// tools name an unnamed project after its directory (npm writes that name
 /// into package-lock.json), so a randomly named stage changed their output.
 pub(crate) struct Stage {
-    _parent: tempfile::TempDir,
+    parent: tempfile::TempDir,
     path: PathBuf,
 }
 
@@ -379,28 +379,70 @@ impl Stage {
         let name = root.file_name().unwrap_or("repository".as_ref());
         let path = parent.path().join(name);
         fs::create_dir(&path)?;
-        Ok(Self {
-            _parent: parent,
-            path,
-        })
+        Ok(Self { parent, path })
     }
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Remove whatever a tool wrote beside the stage, such as a build
+    /// directory configured as `../target`.
+    pub(crate) fn clear_beside(&self) -> Result<()> {
+        for entry in fs::read_dir(self.parent.path())? {
+            let path = entry?.path();
+            if path == self.path {
+                continue;
+            }
+            if fs::symlink_metadata(&path)?.is_dir() {
+                fs::remove_dir_all(path)?;
+            } else {
+                fs::remove_file(path)?;
+            }
+        }
+        Ok(())
+    }
 }
 
+/// Make `destination` hold exactly `inputs`, copied from `root` and its Git
+/// metadata, then re-fingerprint it to confirm. One stage serves every
+/// target of a run: whatever an earlier target added, changed or removed is
+/// undone, and an input it left as staged is not copied again.
 pub(crate) fn stage(
     root: &Path,
     destination: &Path,
     inputs: &BTreeMap<PathBuf, String>,
     layout: &Layout,
 ) -> Result<()> {
+    let snapshot = crate::scm::Snapshot::read(root)?;
+    let mut dirs: BTreeSet<PathBuf> = inputs
+        .keys()
+        .flat_map(|path| path.ancestors().skip(1))
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .collect();
+    if snapshot.is_some() {
+        dirs.extend([".git", ".git/objects", ".git/refs"].map(PathBuf::from));
+    }
+    writable(destination)?;
+    prune(destination, Path::new(""), inputs, &dirs)?;
     for (path, hash) in inputs {
-        if path.starts_with(".git") {
+        let dest = destination.join(path);
+        if staged(&dest, path, hash)? {
             continue;
         }
-        let dest = destination.join(path);
+        // Copying onto a link a target left would write through it, outside
+        // the stage: remove whatever is there first.
+        if fs::symlink_metadata(&dest).is_ok() {
+            fs::remove_file(&dest)?;
+        }
+        if path.starts_with(".git") {
+            snapshot
+                .as_ref()
+                .ok_or_else(|| Error::Stale("inputs changed during staging".into()))?
+                .copy_file(path, destination)?;
+            continue;
+        }
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -414,8 +456,10 @@ pub(crate) fn stage(
             }
         }
     }
-    if let Some(snapshot) = crate::scm::Snapshot::read(root)? {
-        snapshot.copy(destination)?;
+    if snapshot.is_some() {
+        for dir in [".git/objects", ".git/refs"] {
+            fs::create_dir_all(destination.join(dir))?;
+        }
     }
     if fingerprint(destination, layout)? != *inputs {
         return Err(Error::Stale("inputs changed during staging".into()));
@@ -424,6 +468,71 @@ pub(crate) fn stage(
         crate::scm::Snapshot::keep_missing_unchanged(destination)?;
     }
     Ok(())
+}
+
+/// Remove from `root`'s `dir` every file and link that is not an input and
+/// every directory that holds none, without following links.
+fn prune(
+    root: &Path,
+    dir: &Path,
+    inputs: &BTreeMap<PathBuf, String>,
+    dirs: &BTreeSet<PathBuf>,
+) -> Result<()> {
+    let entries = match fs::read_dir(root.join(dir)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = dir.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            if dirs.contains(&path) {
+                writable(&root.join(&path))?;
+                prune(root, &path, inputs, dirs)?;
+            } else {
+                fs::remove_dir_all(root.join(&path))?;
+            }
+        } else if !inputs.contains_key(&path) {
+            fs::remove_file(root.join(&path))?;
+        }
+    }
+    Ok(())
+}
+
+/// Give the owner back full access to `dir`, which a target may have made
+/// read-only; a fresh stage's directories are always writable.
+fn writable(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(dir)?.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            fs::set_permissions(dir, fs::Permissions::from_mode(mode | 0o700))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
+/// Whether `dest` already is the input `path` with fingerprint `hash`.
+fn staged(dest: &Path, path: &Path, hash: &str) -> Result<bool> {
+    let Ok(meta) = fs::symlink_metadata(dest) else {
+        return Ok(false);
+    };
+    if let Some(target) = hash.strip_prefix(LINK) {
+        return Ok(meta.file_type().is_symlink() && fs::read_link(dest)? == Path::new(target));
+    }
+    // A read-only copy is copied again, as a target may have made it so.
+    if !meta.is_file() || meta.permissions().readonly() {
+        return Ok(false);
+    }
+    // The fingerprint holds the sanitized config's digest, without a mode.
+    if path == Path::new(".git/config") {
+        return Ok(format!("{:x}", Sha256::digest(fs::read(dest)?)) == hash);
+    }
+    Ok(file_hash(dest)? == hash)
 }
 
 /// Validate output ownership before reading or replacing any candidate bytes.
