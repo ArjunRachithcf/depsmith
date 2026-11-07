@@ -234,6 +234,7 @@ preparation and application must occur in the same process.
 - `dependencies`: Packages that change, including transitive ones.
 - `suggestions`: Suggestions about declared constraints.
 - `unresolved`: References left unchanged because they could not be resolved.
+- `held_back`: Targets held back because their resolution would downgrade a package; each downgrade is also unresolved.
 - `failures`: Targets that could not be prepared.
 - `validation`: Validation levels completed and acceptance notes.
 - `scans`: Vulnerability scan reports, when scanning was requested.
@@ -362,7 +363,7 @@ A reference left unchanged because it could not be resolved.
 - `reference`: The reference as written, such as `org/repo@main`.
 - `reason`: Why no release could be matched.
 
-### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None, min_severity: str | None, security_target: str | None, precise: Sequence[PreciseUpdate] | None, security_only: bool | None)`
+### `UpdateOptions(packages: Sequence[str] | None, accept: Sequence[str] | None, upgrade: bool | None, refresh_git: bool | None, allow_downgrades: bool | None, cooldown_days: int | None, install: bool | None, scan: bool | None, fail_on: str | None, only_new: bool | None, tools: Mapping[str, str] | None, pixi: str | None, grype: str | None, timeout_seconds: int | None, identity_mappings: Sequence[IdentityMapping] | None, suppressions: Sequence[Suppression] | None, min_severity: str | None, security_target: str | None, precise: Sequence[PreciseUpdate] | None, security_only: bool | None)`
 
 Options for preparing, scanning and applying updates.
 
@@ -375,6 +376,7 @@ explicit values override them.
 - `accept`: `NAME` or `NAME=REQUIREMENT` suggestions to accept.
 - `upgrade`: Allow the selected packages' constraints to change.
 - `refresh_git`: Allow Git pins to move to newer commits.
+- `allow_downgrades`: Propose resolutions that move a package to an older version; such a target is held back by default.
 - `cooldown_days`: Minimum release age; rejected where not enforceable.
 - `install`: Also install the candidate's default environment on this host.
 - `scan`: Scan the baseline and candidate for known vulnerabilities.

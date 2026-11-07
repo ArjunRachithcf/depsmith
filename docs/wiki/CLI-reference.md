@@ -5,7 +5,7 @@
 Every option is global: it may be given before or after the command.
 Exit statuses: 0 success or nothing pending, 1 updates pending (`check`),
 2 invalid request, 3 tool or scanner failure, 4 policy rejection,
-5 partial success, 130 interrupted.
+5 partial success, 6 a target held back (`check`), 130 interrupted.
 
 ## depsmith
 
@@ -18,7 +18,7 @@ Commands:
   init      Choose targets and save them to depsmith.toml, offer to install each missing native tool they use (pinned, sha256-verified) into the tool cache, and report what their adapters support; exit 3 when a used tool is still missing
   discover  List the targets found under the root
   doctor    Report adapter capabilities and whether native tools are available
-  check     Prepare a proposal without writing; exit 1 when updates are pending
+  check     Prepare a proposal without writing; exit 1 when updates are pending, 6 when a target is held back
   update    Prepare a proposal, preview it, and apply it when confirmed
   fix       A security update: `update --security-only`, which moves only packages with actionable findings, each toward its fix version, and reports blocked fixes as suggestions
   scan      Scan the current locks for known vulnerabilities without updating
@@ -46,6 +46,8 @@ Options:
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
           Allow Git pins to move to newer commits
+      --allow-downgrades
+          Propose resolutions that move a package to an older version (held back by default)
       --scan
           Scan the baseline and candidate for known vulnerabilities with Grype
       --install
@@ -104,6 +106,8 @@ Options:
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
           Allow Git pins to move to newer commits
+      --allow-downgrades
+          Propose resolutions that move a package to an older version (held back by default)
       --scan
           Scan the baseline and candidate for known vulnerabilities with Grype
       --install
@@ -160,6 +164,8 @@ Options:
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
           Allow Git pins to move to newer commits
+      --allow-downgrades
+          Propose resolutions that move a package to an older version (held back by default)
       --scan
           Scan the baseline and candidate for known vulnerabilities with Grype
       --install
@@ -191,7 +197,7 @@ Options:
 ## depsmith check
 
 ```text
-Prepare a proposal without writing; exit 1 when updates are pending
+Prepare a proposal without writing; exit 1 when updates are pending, 6 when a target is held back
 
 Usage: depsmith check [OPTIONS]
 
@@ -216,6 +222,8 @@ Options:
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
           Allow Git pins to move to newer commits
+      --allow-downgrades
+          Propose resolutions that move a package to an older version (held back by default)
       --scan
           Scan the baseline and candidate for known vulnerabilities with Grype
       --install
@@ -278,6 +286,8 @@ Options:
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
           Allow Git pins to move to newer commits
+      --allow-downgrades
+          Propose resolutions that move a package to an older version (held back by default)
       --scan
           Scan the baseline and candidate for known vulnerabilities with Grype
       --install
@@ -334,6 +344,8 @@ Options:
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
           Allow Git pins to move to newer commits
+      --allow-downgrades
+          Propose resolutions that move a package to an older version (held back by default)
       --scan
           Scan the baseline and candidate for known vulnerabilities with Grype
       --install
@@ -390,6 +402,8 @@ Options:
           Allow the selected packages' declared constraints to change (requires --package)
       --refresh-git
           Allow Git pins to move to newer commits
+      --allow-downgrades
+          Propose resolutions that move a package to an older version (held back by default)
       --scan
           Scan the baseline and candidate for known vulnerabilities with Grype
       --install
