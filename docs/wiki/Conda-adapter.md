@@ -16,7 +16,9 @@ name). `depsmith doctor` lists both tools.
 ## Updates
 
 An **update** runs `conda-lock lock` inside the stage for the platforms in the
-environment's `platforms:` list, or conda-lock's defaults. Without
+environment's `platforms:` list, else the existing lock's, else conda-lock's
+defaults. They are always passed to conda-lock, sorted, so a new lock matches
+its relock and an existing lock keeps its platforms. Without
 `--package` every package is re-solved; `--package NAME` (repeatable) passes
 `--update NAME` so only those packages move.
 
