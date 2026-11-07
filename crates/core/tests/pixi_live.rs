@@ -133,7 +133,7 @@ build-backend = "setuptools.build_meta"
     for platform in ["linux-64", "win-64"] {
         assert!(
             inventory.iter().any(|p| p.name == "updater-local-fixture"
-                && p.version == "unknown"
+                && p.version.is_empty()
                 && p.platform == platform),
             "{inventory:?}"
         );

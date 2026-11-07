@@ -12,7 +12,8 @@ use std::{fs, path::Path};
 mod support;
 
 /// Resolves `multi.json` to fixed inventories, one `[ecosystem:]name version
-/// [environment,...]` per entry; the ecosystem defaults to pypi.
+/// [environment,...] [@artifact]` per entry; the ecosystem defaults to pypi,
+/// `""` is an empty version, and the artifact defaults to a sdist URL.
 struct Multi {
     before: Vec<&'static str>,
     after: Vec<&'static str>,
@@ -27,16 +28,21 @@ fn packages(entries: &[&str]) -> Vec<Package> {
                 Some((ecosystem, name)) => (ecosystem, name),
                 None => ("pypi", entry.split(' ').next().unwrap()),
             };
-            let version = fields.next().unwrap();
-            let environments = fields
-                .next()
+            let version = match fields.next().unwrap() {
+                "\"\"" => "",
+                version => version,
+            };
+            let (artifacts, rest): (Vec<_>, Vec<_>) = fields.partition(|f| f.starts_with('@'));
+            let environments = rest
+                .first()
                 .map_or(vec![], |e| e.split(',').map(Into::into).collect());
             Package {
                 ecosystem: ecosystem.into(),
                 name: name.into(),
                 version: version.into(),
-                artifact: format!(
-                    "https://files.pythonhosted.org/packages/{name}-{version}.tar.gz"
+                artifact: artifacts.first().map_or_else(
+                    || format!("https://files.pythonhosted.org/packages/{name}-{version}.tar.gz"),
+                    |a| a[1..].to_owned(),
                 ),
                 platform: "any".into(),
                 environments,
@@ -228,6 +234,18 @@ fn conda_and_pypi_entries_of_one_name_pair_separately() {
             vec!["conda:numpy 2.1.0", "numpy 2.0.1", "conda:python 3.12.1"]
         ),
         ["numpy 1.26.4 -> numpy 2.1.0", "numpy 2.0.0 -> numpy 2.0.1"]
+    );
+}
+
+/// Pixi lock schema 7 records no version for a local PyPI project: the
+/// same project, at the same path, has not moved.
+#[test]
+fn a_version_the_lock_stops_recording_is_no_change() {
+    assert!(moved(vec!["a 0.1.0 @./"], vec![r#"a "" @./"#]).is_empty());
+    assert!(moved(vec![r#"a "" @./"#], vec!["a 0.1.0 @./"]).is_empty());
+    assert_eq!(
+        moved(vec!["a 0.1.0 @./"], vec![r#"a "" @./libs/a"#]),
+        ["a 0.1.0 -> a "]
     );
 }
 
