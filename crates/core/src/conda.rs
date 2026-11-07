@@ -107,6 +107,33 @@ fn slot<'a>(value: &'a mut Value, location: &str) -> Option<&'a mut Value> {
     Some(current)
 }
 
+/// The environment as conda-lock reads it for `platform`: a line ending in a
+/// `# [selector]` comment is kept only where the selector names the
+/// platform (none, for a platform conda-lock does not know), and comment
+/// lines are dropped.
+fn select_platform(source: &str, platform: &str) -> String {
+    let names: &[&str] = match platform {
+        "linux-64" => &["linux64", "unix", "linux"],
+        "linux-aarch64" => &["aarch64", "unix", "linux"],
+        "linux-ppc64le" => &["ppc64le", "unix", "linux"],
+        "osx-64" => &["osx64", "osx", "unix"],
+        "osx-arm64" => &["arm64", "osx", "unix"],
+        "win-64" => &["win", "win64"],
+        _ => &[],
+    };
+    let selector = Regex::new(r"^(.+?)\s*(#.*)\[([^\[\]]+)\][^()]*$").unwrap();
+    source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter(|line| {
+            selector
+                .captures(line)
+                .is_none_or(|c| names.contains(&&c[3]))
+        })
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
 fn declarations_of(parsed: &Value, file: &Path) -> Vec<Declaration> {
     let mut items = vec![];
     if let Some(dependencies) = parsed.get("dependencies") {
@@ -934,13 +961,14 @@ impl Adapter for Conda {
             fs::write(stage.join(&lock), &kept)?;
         }
         let after = lock_inventory(&kept)?;
-        // Every declared package must be locked for every locked platform. A
+        // Every package declared for a platform must be locked for it. A
         // pip requirement the conda solution already has is locked from
         // conda, so any record whose name matches it as pip normalizes names
         // holds it.
         let locked: BTreeSet<&str> = after.iter().map(|p| p.platform.as_str()).collect();
-        for declaration in self.declarations(stage, target)? {
-            for platform in &locked {
+        for platform in &locked {
+            let selected = parse(&select_platform(text, platform))?;
+            for declaration in declarations_of(&selected, &target.manifest) {
                 let found = after.iter().any(|p| {
                     p.platform == *platform
                         && if declaration.ecosystem == "pypi" {
@@ -966,7 +994,7 @@ impl Adapter for Conda {
             baseline_available: before_text.is_some(),
             after,
             validation: vec![format!(
-                "{}: locked; every declared package is locked on every platform",
+                "{}: locked; every declared package is locked on each platform it is declared for",
                 target.id
             )],
         })
