@@ -6,7 +6,10 @@
 targets (`pixi:pixi.toml`, `pixi:pyproject.toml`). When a `uv.lock` sits
 beside such a `pyproject.toml`, it is also a [uv target](uv-adapter), so an
 update moves both locks; the same edit of the shared file counts once. An
-ordinary Python project without `[tool.pixi]` is not a target yet.
+ordinary Python project without `[tool.pixi]` is not a target yet. A
+pixi-build package manifest, one with a `[package]` table but no
+`[workspace]` (or legacy `[project]`), is not a target either: Pixi locks it
+with the workspace above it.
 
 depsmith reads `pixi.lock` schemas 5 to 7. Packages pixi-build builds from
 the repository or a Git URL (`conda_source` records, or conda records with a
