@@ -213,11 +213,16 @@ impl Snapshot {
                 tracked.submodules.push(PathBuf::from(path));
                 continue;
             }
-            if entry.starts_with("120000 ") {
-                tracked.links.push(PathBuf::from(path));
+            let path = PathBuf::from(path);
+            // The index can list a link the checkout no longer has, or a
+            // left-out path (ADR 0007) when `root` is the stage. With
+            // core.symlinks=false the link is checked out as a file.
+            if entry.starts_with("120000 ")
+                && fs::symlink_metadata(root.join(&path)).is_ok_and(|m| m.is_symlink())
+            {
+                tracked.links.push(path);
                 continue;
             }
-            let path = PathBuf::from(path);
             crate::working_tree::relative(&path)?;
             crate::working_tree::output_path(root, &path)?;
             if root.join(&path).try_exists()? {
@@ -225,6 +230,20 @@ impl Snapshot {
             }
         }
         Ok(tracked)
+    }
+
+    /// Marks the index entries `destination` lacks (left-out paths, ADR
+    /// 0007) as unchanged, so Git in the stage reports the repository's
+    /// dirty state instead of those paths as deleted.
+    pub(crate) fn keep_missing_unchanged(destination: &Path) -> Result<()> {
+        let missing = git(destination, &["ls-files", "--deleted", "-z"])?;
+        let missing: Vec<&str> = missing.split('\0').filter(|p| !p.is_empty()).collect();
+        for paths in missing.chunks(100) {
+            let mut args = vec!["update-index", "--assume-unchanged", "--"];
+            args.extend(paths);
+            git(destination, &args)?;
+        }
+        Ok(())
     }
 
     pub fn copy(&self, destination: &Path) -> Result<()> {
