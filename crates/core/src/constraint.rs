@@ -42,19 +42,25 @@ pub(crate) struct Acceptance {
 }
 
 /// `NAME` or `NAME=REQUIREMENT`; the first `=` after the name separates them,
-/// so `six===1.17.0` requests `==1.17.0`.
+/// so `six===1.17.0` requests `==1.17.0`. A scoped npm name is `@SCOPE/NAME`.
 pub(crate) fn parse_accept(text: &str) -> Result<Acceptance> {
     let text = text.trim();
-    let end = text
+    let at = usize::from(text.starts_with('@'));
+    let end = text[at..]
         .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/')))
-        .unwrap_or(text.len());
+        .map_or(text.len(), |end| end + at);
     let (name, rest) = text.split_at(end);
     let invalid = || {
         Error::Invalid(format!(
             "--accept expects NAME or NAME=REQUIREMENT, got {text:?}"
         ))
     };
-    if name.is_empty() {
+    let scoped = |name: &str| {
+        name.split_once('/').is_some_and(|(scope, rest)| {
+            !scope.is_empty() && !rest.is_empty() && !rest.contains('/')
+        })
+    };
+    if name.len() == at || (at == 1 && !scoped(&name[1..])) {
         return Err(invalid());
     }
     let requirement = match rest.strip_prefix('=') {
@@ -132,6 +138,33 @@ mod tests {
             accept("sysroot_linux-64", Some("=2.39"))
         );
         for invalid in ["", "=1.0", "ruff=", ">=1", "ruff >=1"] {
+            assert!(parse_accept(invalid).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn parses_scoped_npm_names() {
+        let accept = |name: &str, requirement: Option<&str>| Acceptance {
+            name: name.into(),
+            requirement: requirement.map(Into::into),
+        };
+        assert_eq!(
+            parse_accept("@acme/widget").unwrap(),
+            accept("@acme/widget", None)
+        );
+        assert_eq!(
+            parse_accept("@acme/widget=^2.0.0").unwrap(),
+            accept("@acme/widget", Some("^2.0.0"))
+        );
+        for invalid in [
+            "@",
+            "@=1.0",
+            "acme@widget",
+            "@acme",
+            "@/x",
+            "@acme/",
+            "@acme/a/b",
+        ] {
             assert!(parse_accept(invalid).is_err(), "{invalid:?}");
         }
     }
