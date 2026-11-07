@@ -22,7 +22,9 @@ The CLI and Python API are thin layers; all behaviour lives in the core.
    adapter lacks the capability (npm, Pixi, conda-lock), the package moves to
    the newest release its constraints allow and the proposal says so.
 3. **Stage:** copy the repository's inputs (and Git data, for SCM versions)
-   into a disposable **stage** and fingerprint them.
+   into a disposable **stage** and fingerprint them. The stage directory has
+   the repository directory's name, because tools such as npm name an unnamed
+   project after its directory.
 4. **Prepare:** the adapter resolves the target in the stage with its native
    package manager and returns a **candidate**: produced files, baseline and
    candidate inventories, suggestions, unresolved references and validation
