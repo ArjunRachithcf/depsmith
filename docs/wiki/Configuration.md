@@ -43,8 +43,9 @@ deprecated aliases.
 `depsmith init` chooses targets and saves them as `targets`: it offers the
 discovered targets a package manager at a time (then file by file when a
 group is declined), or takes `--all` / `--target`, and appends the choice.
-Saved targets are never removed; a saved target that is no longer found is
-reported and skipped. `--no-save` leaves the file alone. The rest of the file
+Saved targets are never removed; `init` reports a saved target that is no
+longer found and skips it, while `check`, `update` and `scan` reject it as an
+unknown target (exit 2). `--no-save` leaves the file alone. The rest of the file
 and its comments are kept.
 
 When no targets are configured, an interactive `check` or `update` asks in the
