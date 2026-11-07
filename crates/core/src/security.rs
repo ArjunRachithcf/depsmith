@@ -60,9 +60,7 @@ pub(crate) fn same_name(ecosystem: &str, left: &str, right: &str) -> bool {
     }
 }
 
-fn compare(ecosystem: &str, left: &str, right: &str) -> Ordering {
-    crate::ecosystem::scheme(ecosystem).map_or_else(|| left.cmp(right), |s| s.compare(left, right))
-}
+use crate::ecosystem::compare_versions as compare;
 
 /// The major.minor line of `version`.
 fn line(version: &str) -> Vec<&str> {
