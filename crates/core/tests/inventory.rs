@@ -1,10 +1,13 @@
 //! Reading inventories and lock graphs from Pixi lockfiles.
 use depsmith_core::inventory::pixi_inventory;
+
+/// Pixi records no version for a local PyPI project (lock schema 7): it is
+/// kept with an empty version, as for any record without one.
 #[test]
-fn local_editables_with_dynamic_versions_are_retained_as_unknown() {
+fn local_editables_with_dynamic_versions_keep_an_empty_version() {
     let packages = pixi_inventory("version: 7\npackages:\n- pypi: ./\n  name: demo\n- conda: https://conda.anaconda.org/conda-forge/linux-64/lib-blas-1.2.3-h123_0.conda\n").unwrap();
     assert_eq!(packages[0].name, "demo");
-    assert_eq!(packages[0].version, "unknown");
+    assert_eq!(packages[0].version, "");
     assert_eq!(packages[1].name, "lib-blas");
     assert_eq!(packages[1].version, "1.2.3");
 }

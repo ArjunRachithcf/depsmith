@@ -123,7 +123,7 @@ fn records(value: &Value) -> Result<Vec<Record<'_>>> {
                     None
                 }
             })
-            .unwrap_or("unknown");
+            .unwrap_or_default();
         let platform = item
             .get("subdir")
             .and_then(Value::as_str)
