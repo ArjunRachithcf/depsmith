@@ -247,11 +247,26 @@ impl DependencyChange {
     /// the other side are paired (see [`pair_versions`]); the rest are removed
     /// or added. Changes follow inventory order.
     pub(crate) fn between(before: &[Package], after: &[Package]) -> Vec<DependencyChange> {
+        // npm lists each installed copy: copies of one resolution move as
+        // one, locked in all their environments.
         let missing = |side: &[Package], other: &[Package]| -> Vec<Package> {
-            side.iter()
+            let mut output: Vec<Package> = vec![];
+            for p in side
+                .iter()
                 .filter(|p| !other.iter().any(|o| o.same_resolution(p)))
-                .cloned()
-                .collect()
+            {
+                match output.iter_mut().find(|o| o.same_resolution(p)) {
+                    Some(copy) => {
+                        for e in &p.environments {
+                            if !copy.environments.contains(e) {
+                                copy.environments.push(e.clone());
+                            }
+                        }
+                    }
+                    None => output.push(p.clone()),
+                }
+            }
+            output
         };
         let (mut gone, mut new) = (missing(before, after), missing(after, before));
         let mut changes = vec![];
@@ -265,8 +280,9 @@ impl DependencyChange {
 }
 
 /// Pair the moved versions of one package: newest first, each old version
-/// with the new one sharing most of its environments, then the rest newest
-/// with newest. Nested npm copies carry no install path, so they pair by
+/// with the new one sharing most of its environments (on its own release
+/// line when several share as many), then the rest within their release
+/// line, then newest with newest. Nested npm copies carry no install path, so they pair by
 /// version alone.
 fn pair_versions(mut olds: Vec<Package>, mut news: Vec<Package>) -> Vec<DependencyChange> {
     let newest_first = |x: &Package, y: &Package| {
@@ -286,13 +302,19 @@ fn pair_versions(mut olds: Vec<Package>, mut news: Vec<Package>) -> Vec<Dependen
         introducers: vec![],
         paths: vec![],
     };
+    // Copies on different release lines (npm nesting, cargo majors) move
+    // independently, so a version prefers a successor on its own line.
+    let same_line = |x: &Package, y: &Package| {
+        crate::ecosystem::major_part(&x.version) == crate::ecosystem::major_part(&y.version)
+    };
+    let rank = |x: &Package, y: &Package| (shared(x, y), same_line(x, y));
     let mut changes = vec![];
     let mut unpaired = vec![];
     for old in olds {
         let best = (0..news.len())
             .filter(|&i| shared(&old, &news[i]) > 0)
             .fold(None, |best: Option<usize>, i| match best {
-                Some(b) if shared(&old, &news[b]) >= shared(&old, &news[i]) => Some(b),
+                Some(b) if rank(&old, &news[b]) >= rank(&old, &news[i]) => Some(b),
                 _ => Some(i),
             });
         match best {
@@ -300,8 +322,15 @@ fn pair_versions(mut olds: Vec<Package>, mut news: Vec<Package>) -> Vec<Dependen
             None => unpaired.push(old),
         }
     }
-    let mut news = news.into_iter();
+    let mut leftover = vec![];
     for old in unpaired {
+        match news.iter().position(|new| same_line(new, &old)) {
+            Some(i) => changes.push(change(Some(old), Some(news.remove(i)))),
+            None => leftover.push(old),
+        }
+    }
+    let mut news = news.into_iter();
+    for old in leftover {
         changes.push(change(Some(old), news.next()));
     }
     changes.extend(news.map(|new| change(None, Some(new))));
