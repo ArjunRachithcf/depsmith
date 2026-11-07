@@ -60,6 +60,14 @@ fn no_symlinks(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What the index tracks, by kind.
+#[derive(Debug, Default)]
+pub(crate) struct Tracked {
+    pub(crate) files: Vec<PathBuf>,
+    pub(crate) links: Vec<PathBuf>,
+    pub(crate) submodules: Vec<PathBuf>,
+}
+
 impl Snapshot {
     pub fn read(root: &Path) -> Result<Option<Self>> {
         Self::read_canonical(&crate::working_tree::canonical(root)?)
@@ -177,7 +185,9 @@ impl Snapshot {
         Ok(())
     }
 
-    pub fn tracked(&self, root: &Path) -> Result<Vec<PathBuf>> {
+    /// The tracked files, symlinks and submodules; staging decides what
+    /// links and submodules become (ADR 0007).
+    pub fn tracked(&self, root: &Path) -> Result<Tracked> {
         let output = git(
             root,
             &[
@@ -194,24 +204,27 @@ impl Snapshot {
                 "-z",
             ],
         )?;
-        let mut paths = vec![];
+        let mut tracked = Tracked::default();
         for record in output.split('\0').filter(|s| !s.is_empty()) {
             let (entry, path) = record
                 .split_once('\t')
                 .ok_or_else(|| Error::Operation("invalid Git index listing".into()))?;
             if entry.starts_with("160000 ") {
-                return Err(Error::Invalid(
-                    "Git submodules are not supported for isolated staging".into(),
-                ));
+                tracked.submodules.push(PathBuf::from(path));
+                continue;
+            }
+            if entry.starts_with("120000 ") {
+                tracked.links.push(PathBuf::from(path));
+                continue;
             }
             let path = PathBuf::from(path);
             crate::working_tree::relative(&path)?;
             crate::working_tree::output_path(root, &path)?;
             if root.join(&path).try_exists()? {
-                paths.push(path);
+                tracked.files.push(path);
             }
         }
-        Ok(paths)
+        Ok(tracked)
     }
 
     pub fn copy(&self, destination: &Path) -> Result<()> {

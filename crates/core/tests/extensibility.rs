@@ -147,6 +147,53 @@ fn managed_files_are_staged_and_guard_against_stale_proposals() {
     assert!(matches!(apply(&proposal, false), Err(Error::Stale(_))));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_left_out_path_fails_every_target_whose_directory_holds_it() {
+    let root = repo();
+    let outside = tempfile::tempdir().unwrap();
+    for dir in ["a", "b"] {
+        fs::create_dir(root.path().join(dir)).unwrap();
+        fs::write(
+            root.path().join(dir).join("demo.json"),
+            "{\"demo\": [\"Alpha\"]}",
+        )
+        .unwrap();
+    }
+    std::os::unix::fs::symlink(outside.path(), root.path().join("b/data")).unwrap();
+    // An in-repository link is staged as a link and fails nothing.
+    std::os::unix::fs::symlink("demo.json", root.path().join("a/AGENTS.json")).unwrap();
+    let engine = Engine::new(vec![Box::new(Demo)]);
+    let ids: Vec<String> = engine
+        .discover(root.path())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(
+        ids,
+        ["demo:a/demo.json", "demo:b/demo.json", "demo:demo.json"]
+    );
+    let proposal = engine.prepare(root.path(), &ids, options()).unwrap();
+    let failed: Vec<&str> = proposal
+        .failures
+        .iter()
+        .map(|f| f.target.as_str())
+        .collect();
+    assert_eq!(failed, ["demo:b/demo.json", "demo:demo.json"]);
+    for failure in &proposal.failures {
+        assert!(
+            failure
+                .message
+                .contains("b/data (symlink outside the repository)"),
+            "{}",
+            failure.message
+        );
+    }
+    let changed: Vec<&str> = proposal.changes.iter().map(|c| c.target.as_str()).collect();
+    assert_eq!(changed, ["demo:a/demo.json"]);
+}
+
 #[test]
 fn legacy_tool_options_remain_aliases() {
     let options = UpdateOptions {

@@ -216,7 +216,7 @@ impl Adapter for Pixi {
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
         validate_paths(&parsed, manifest.parent().unwrap(), stage)?;
         let layout = crate::working_tree::Layout::new([&self.spec()]);
-        for relative in crate::working_tree::files(stage, &layout)? {
+        for relative in crate::working_tree::walk(stage, &layout)?.files {
             if relative
                 .file_name()
                 .is_some_and(|n| n == "pyproject.toml" || n == "pixi.toml")

@@ -90,6 +90,10 @@ _Avoid_: Fixable vulnerability
 A disposable copy of the repository in which package managers resolve, so the original checkout is never modified while preparing.
 _Avoid_: Sandbox, temp dir, workspace (Pixi's word for a project)
 
+**Left-out path**:
+A path the stage does not copy: a symlink that points outside the repository, or a nested repository or submodule. It fails every target whose directory holds it.
+_Avoid_: Excluded path, skipped dir (directories the walk never enters, such as `node_modules`)
+
 **Candidate**:
 The proposed state of a target after resolution in the stage: its new files and resolved packages.
 _Avoid_: Result, output
