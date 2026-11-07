@@ -24,7 +24,11 @@ The CLI and Python API are thin layers; all behaviour lives in the core.
 3. **Stage:** copy the repository's inputs (and Git data, for SCM versions)
    into a disposable **stage** and fingerprint them. The stage directory has
    the repository directory's name, because tools such as npm name an unnamed
-   project after its directory.
+   project after its directory. One stage serves the whole run: before each
+   target it is restored to the inputs, removing whatever the last target
+   added (installs, caches, edits, files beside the stage) and copying again
+   only what changed, then fingerprinted as before. A target that leaves
+   something staging cannot delete gets a fresh stage instead.
 4. **Prepare:** the adapter resolves the target in the stage with its native
    package manager and returns a **candidate**: produced files, baseline and
    candidate inventories, suggestions, unresolved references and validation
