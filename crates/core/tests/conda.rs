@@ -423,6 +423,66 @@ mod stand_in {
             proposal.failures[0].message
         );
     }
+
+    /// conda-lock installs a pip requirement from conda when the conda
+    /// solution already has the package, and then locks no pip record.
+    #[test]
+    fn a_pip_requirement_locked_from_conda_is_locked() {
+        for environment in [
+            "channels: [conda-forge]\ndependencies:\n  - pip:\n    - Six\n",
+            "channels: [conda-forge]\ndependencies:\n  - six\n  - pip:\n    - six\n",
+        ] {
+            let proposal = prepare(environment, &[]);
+            assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        }
+        // Names compare as pip normalizes them.
+        let typing = LOCK
+            .replace("name: six", "name: typing-extensions")
+            .replace("six-1.16.0", "typing-extensions-1.16.0");
+        let proposal = run_writing(
+            "channels: [conda-forge]\ndependencies:\n  - pip:\n    - typing_extensions\n",
+            None,
+            Some(&typing),
+            &[],
+        )
+        .0;
+        assert!(proposal.failures.is_empty(), "{:?}", proposal.failures);
+        let proposal = prepare(
+            "channels: [conda-forge]\ndependencies:\n  - six\n  - pip:\n    - numpy\n",
+            &[],
+        );
+        assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);
+        assert!(
+            proposal.failures[0]
+                .message
+                .contains("numpy is not locked for linux-64"),
+            "{}",
+            proposal.failures[0].message
+        );
+    }
+
+    #[test]
+    fn a_conda_requirement_locked_only_from_pip_is_rejected() {
+        let pip = LOCK.replace("manager: conda", "manager: pip").replace(
+            "https://conda.anaconda.org/conda-forge/noarch/six-1.16.0-pyhd8ed1ab_1.conda",
+            "https://files.pythonhosted.org/packages/six-1.16.0-py2.py3-none-any.whl",
+        );
+        let proposal = run_writing(
+            "channels: [conda-forge]\ndependencies:\n  - six\n",
+            None,
+            Some(&pip),
+            &[],
+        )
+        .0;
+        assert_eq!(proposal.failures.len(), 1, "{:?}", proposal.failures);
+        assert!(
+            proposal.failures[0]
+                .message
+                .contains("six is not locked for linux-64"),
+            "{}",
+            proposal.failures[0].message
+        );
+    }
 }
 
 const GRAPH_LOCK: &str = "version: 1
