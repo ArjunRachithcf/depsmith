@@ -97,7 +97,7 @@ fn prepare_with_releases(
     let uv = script(
         "uv",
         format!(
-            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'uv 0.12.15';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'uv 0.13.6';;\n  lock) echo \"$*\" >> '{d}/locks'; case \"$*\" in *--locked*) cmp -s '{d}/next.lock' uv.lock || exit 1;; *) cp '{d}/next.lock' uv.lock;; esac;;\n  *) exit 2;;\nesac\n",
             d = dir.display()
         ),
     );

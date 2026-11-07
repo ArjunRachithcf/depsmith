@@ -574,12 +574,12 @@ type Asset = (
 );
 
 const UV: &[Asset] = &[
-    ("linux", "x86_64", "https://github.com/astral-sh/uv/releases/download/0.12.15/uv-x86_64-unknown-linux-musl.tar.gz", "999c0c3da986953e508985c3932d283d2c62eb167b4f8d81e79f565e34104959", Archive::TarGz, "uv-x86_64-unknown-linux-musl/uv"),
-    ("linux", "aarch64", "https://github.com/astral-sh/uv/releases/download/0.12.15/uv-aarch64-unknown-linux-musl.tar.gz", "93b801abb146e6431fb0434346a0162e65d3f0d1cd7360144d04c43488fd7f7d", Archive::TarGz, "uv-aarch64-unknown-linux-musl/uv"),
-    ("macos", "x86_64", "https://github.com/astral-sh/uv/releases/download/0.12.15/uv-x86_64-apple-darwin.tar.gz", "e9ca61775532368fe518ab03e7a354c7ecab8ccb3c7d941c775fcc4a362b801b", Archive::TarGz, "uv-x86_64-apple-darwin/uv"),
-    ("macos", "aarch64", "https://github.com/astral-sh/uv/releases/download/0.12.15/uv-aarch64-apple-darwin.tar.gz", "dc304b9ed1b24174572290fba60ac3f6fe63c73a671f0439e62a91375841964d", Archive::TarGz, "uv-aarch64-apple-darwin/uv"),
-    ("windows", "x86_64", "https://github.com/astral-sh/uv/releases/download/0.12.15/uv-x86_64-pc-windows-msvc.zip", "477bd99a84e34891f2bd4c9152ddeb74e971accccbc59c0f0301f11f08a32d46", Archive::Zip, "uv.exe"),
-    ("windows", "aarch64", "https://github.com/astral-sh/uv/releases/download/0.12.15/uv-aarch64-pc-windows-msvc.zip", "a37c8e96cb1260488c8510b64c848533a3a82a2fdf9e905de7c2700ceebf6437", Archive::Zip, "uv.exe"),
+    ("linux", "x86_64", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-unknown-linux-musl.tar.gz", "5d61f26b6c7213779eda90edc6971ea6b0b796bfb8d49a574c8ad69b59838548", Archive::TarGz, "uv-x86_64-unknown-linux-musl/uv"),
+    ("linux", "aarch64", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-aarch64-unknown-linux-musl.tar.gz", "819692e404d23e5aae6bc44c0e260f1f5492fd1910ab4693b2c650f926dbe800", Archive::TarGz, "uv-aarch64-unknown-linux-musl/uv"),
+    ("macos", "x86_64", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-apple-darwin.tar.gz", "63ba17fdda55ad1a230d4b37fc6017ffa10c23688c83818bd3bfdf914c652a02", Archive::TarGz, "uv-x86_64-apple-darwin/uv"),
+    ("macos", "aarch64", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-aarch64-apple-darwin.tar.gz", "60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472", Archive::TarGz, "uv-aarch64-apple-darwin/uv"),
+    ("windows", "x86_64", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-pc-windows-msvc.zip", "a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f", Archive::Zip, "uv.exe"),
+    ("windows", "aarch64", "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-aarch64-pc-windows-msvc.zip", "c2426c0c8e28b53d8c440e47a18d96ad4db51e159866c0e81435b196d7f0081c", Archive::Zip, "uv.exe"),
 ];
 
 const PIXI: &[Asset] = &[

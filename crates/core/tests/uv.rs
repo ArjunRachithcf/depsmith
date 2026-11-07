@@ -488,7 +488,7 @@ mod stand_in {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n  --version) echo 'uv 0.12.15';;\n  lock) case \"$*\" in *--locked*) cmp -s '{next}' uv.lock || exit 1; {after_locked};; *) cp '{next}' uv.lock; {after_lock};; esac;;\n  *) exit 2;;\nesac\n",
+                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n  --version) echo 'uv 0.13.6';;\n  lock) case \"$*\" in *--locked*) cmp -s '{next}' uv.lock || exit 1; {after_locked};; *) cp '{next}' uv.lock; {after_lock};; esac;;\n  *) exit 2;;\nesac\n",
                 log = log.display(),
                 next = next_lock.display(),
                 after_lock = if after_lock.is_empty() { ":" } else { after_lock },
