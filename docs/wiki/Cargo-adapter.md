@@ -9,7 +9,10 @@ enclosing workspace excludes, such as `cargo:Cargo.toml` or
 own; their manifests are part of the workspace's target. Member globs in
 `workspace.members` and `workspace.exclude` are honoured as cargo does: a package belongs to the
 first enclosing workspace that does not exclude it. If that workspace does
-not list it either, it is not a target, because cargo refuses to work on it. The `target/` directory is
+not list it either, it is not a target, because cargo refuses to work on it. Neither is a manifest whose
+package name cargo rejects (it must start with a letter or `_` and go on
+with letters, digits, `-` and `_`), such as a cargo-generate template's
+`{{project-name}}`, even at a workspace root. The `target/` directory is
 never walked.
 
 ## Updates

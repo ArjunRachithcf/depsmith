@@ -50,6 +50,15 @@ fn strings(value: Option<&toml::Value>) -> Vec<&str> {
         .collect()
 }
 
+/// Whether cargo accepts `name` as a package name: it starts with a letter or
+/// `_` and goes on with letters, digits, `-` and `_`. Cargo's rule is
+/// Unicode XID; Rust's alphabetic and alphanumeric classes approximate it.
+fn valid_package_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Whether the workspace at `dir` shuts the crate at `member` out, as cargo
 /// does: under an `exclude` entry and under no literal `members` entry.
 fn excluded(dir: &Path, workspace: &toml::Value, member: &Path) -> bool {
@@ -604,6 +613,14 @@ impl Adapter for Cargo {
         let Ok(parsed) = content.parse::<toml::Value>() else {
             return false;
         };
+        // A package cargo would reject by name, such as a cargo-generate
+        // template's `{{project-name}}`, is no crate, even at a workspace root.
+        if let Some(package) = parsed.get("package") {
+            let name = package.get("name").and_then(toml::Value::as_str);
+            if !name.is_some_and(valid_package_name) {
+                return false;
+            }
+        }
         if parsed.get("workspace").is_some() {
             return true;
         }
