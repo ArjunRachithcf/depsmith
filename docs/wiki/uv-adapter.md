@@ -10,8 +10,10 @@ of their own; their manifests are part of the workspace root's target. A
 `pyproject.toml` with a `[tool.pixi]` table belongs to the
 [Pixi adapter](Pixi-adapter); when a `uv.lock` sits beside it too, it is
 also a uv target, so an update moves both locks. A plain `pyproject.toml`
-(Poetry, Hatch, PDM) is not claimed. `uv.lock`, `uv.toml` and `.python-version` are staged
-even when ignored by Git, and `.venv/` is never walked.
+(Poetry, Hatch, PDM) is not claimed, nor is a project marked
+`[tool.uv] managed = false`, which uv refuses to lock; a workspace root
+stays a target either way. `uv.lock`, `uv.toml` and `.python-version` are
+staged even when ignored by Git, and `.venv/` is never walked.
 
 ## Updates
 
