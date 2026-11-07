@@ -246,16 +246,21 @@ impl Snapshot {
         Ok(())
     }
 
-    pub fn copy(&self, destination: &Path) -> Result<()> {
-        fs::create_dir_all(destination.join(".git/objects"))?;
-        fs::create_dir_all(destination.join(".git/refs"))?;
-        for (relative, source) in &self.files {
-            no_symlinks(source)?;
-            let dest = destination.join(relative);
-            fs::create_dir_all(dest.parent().unwrap())?;
-            fs::copy(source, dest)?;
+    /// Copy one file of the snapshot, such as `.git/index`, or the sanitized
+    /// `.git/config`, into `destination`.
+    pub(crate) fn copy_file(&self, relative: &Path, destination: &Path) -> Result<()> {
+        let dest = destination.join(relative);
+        fs::create_dir_all(dest.parent().unwrap())?;
+        if relative == Path::new(".git/config") {
+            fs::write(dest, &self.config)?;
+            return Ok(());
         }
-        fs::write(destination.join(".git/config"), &self.config)?;
+        let source = self
+            .files
+            .get(relative)
+            .ok_or_else(|| Error::Stale("Git metadata changed during staging".into()))?;
+        no_symlinks(source)?;
+        fs::copy(source, dest)?;
         Ok(())
     }
 }
