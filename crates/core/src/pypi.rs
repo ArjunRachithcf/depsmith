@@ -257,13 +257,14 @@ mod tests {
 
     #[test]
     fn collects_index_urls_without_credentials() {
-        let manifest: toml::Value = r#"
+        let manifest: toml::Value = toml::from_str(
+            r#"
 [pypi-options]
 extra-index-urls = ["https://user:token@private.example/simple/"]
 [feature.gpu.pypi-options]
 extra-index-urls = ["https://gpu.example/simple"]
-"#
-        .parse()
+"#,
+        )
         .unwrap();
         assert_eq!(
             index_urls(&manifest),
@@ -273,9 +274,9 @@ extra-index-urls = ["https://gpu.example/simple"]
                 "https://gpu.example/simple"
             ]
         );
-        let replaced: toml::Value = "[pypi-options]\nindex-url = 'https://mirror.example/simple'\n"
-            .parse()
-            .unwrap();
+        let replaced: toml::Value =
+            toml::from_str("[pypi-options]\nindex-url = 'https://mirror.example/simple'\n")
+                .unwrap();
         assert_eq!(index_urls(&replaced), ["https://mirror.example/simple"]);
     }
 

@@ -33,7 +33,7 @@ pub struct Cargo {
 }
 
 fn parse(text: &str, path: &Path) -> Result<toml::Value> {
-    text.parse()
+    toml::from_str(text)
         .map_err(|e| Error::Invalid(format!("invalid manifest {}: {e}", path.display())))
 }
 
@@ -374,8 +374,7 @@ fn dependency_entry(entry: &str) -> (&str, Option<&str>) {
 
 /// A parsed `Cargo.lock`.
 fn parse_lock(text: &str) -> Result<toml::Value> {
-    text.parse()
-        .map_err(|e| Error::Invalid(format!("invalid Cargo.lock: {e}")))
+    toml::from_str(text).map_err(|e| Error::Invalid(format!("invalid Cargo.lock: {e}")))
 }
 
 /// The `[[package]]` rows of a parsed `Cargo.lock`.
@@ -601,8 +600,7 @@ impl Adapter for Cargo {
         }
     }
     fn detects(&self, _: &Path, content: &str) -> bool {
-        content
-            .parse::<toml::Value>()
+        toml::from_str::<toml::Value>(content)
             .is_ok_and(|v| v.get("workspace").is_some() || v.get("package").is_some())
     }
     /// A workspace root, or a package every enclosing workspace excludes:
@@ -610,7 +608,7 @@ impl Adapter for Cargo {
     /// enclosing workspace that does not exclude a package is its workspace,
     /// whether it lists the package (a member) or not (cargo refuses it).
     fn detects_in(&self, root: &Path, relative: &Path, content: &str) -> bool {
-        let Ok(parsed) = content.parse::<toml::Value>() else {
+        let Ok(parsed) = toml::from_str::<toml::Value>(content) else {
             return false;
         };
         // A package cargo would reject by name, such as a cargo-generate
