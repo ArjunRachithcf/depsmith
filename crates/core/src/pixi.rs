@@ -89,7 +89,7 @@ impl Adapter for Pixi {
             }
             _ => return false,
         };
-        pixi.get("package").is_none() || WORKSPACE_TABLES.iter().any(|t| pixi.get(t).is_some())
+        pixi.get("package").is_none() || has_workspace(pixi)
     }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<crate::Package>> {
         let relative = target.manifest.parent().unwrap().join("pixi.lock");
@@ -233,17 +233,14 @@ impl Adapter for Pixi {
         let content = fs::read_to_string(&manifest)?;
         let parsed: toml::Value = toml::from_str(&content)
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-        // A pixi.toml without pixi tables stays a target so Pixi reports it
-        // (see `detects`); its `path` keys are some other tool's.
-        let declares_pixi = is_pyproject(target)
-            || WORKSPACE_TABLES
-                .iter()
-                .chain(&["package"])
-                .any(|t| parsed.get(t).is_some());
-        if declares_pixi {
+        // A pixi.toml without a workspace is some other tool's file that stays
+        // a target so Pixi reports it (see `detects`); its `path` keys are not
+        // dependencies.
+        let pyproject = is_pyproject(target);
+        if pyproject || has_workspace(&parsed) {
             validate_dependency_paths(
                 &parsed,
-                is_pyproject(target),
+                pyproject,
                 manifest.parent().unwrap(),
                 stage,
                 false,
@@ -261,15 +258,13 @@ impl Adapter for Pixi {
                 }
                 let value: toml::Value = toml::from_str(&fs::read_to_string(&path)?)
                     .map_err(|e| Error::Invalid(format!("invalid staged manifest: {e}")))?;
+                let pyproject = relative.file_name().is_some_and(|n| n == "pyproject.toml");
+                if !pyproject && !has_workspace(&value) {
+                    continue;
+                }
                 // Other manifests can name paths the stage lacks, such as an
                 // uninitialised submodule; Pixi reports them if it needs them.
-                validate_dependency_paths(
-                    &value,
-                    relative.file_name().is_some_and(|n| n == "pyproject.toml"),
-                    path.parent().unwrap(),
-                    stage,
-                    true,
-                )?;
+                validate_dependency_paths(&value, pyproject, path.parent().unwrap(), stage, true)?;
             }
         }
         if options.upgrade && options.packages.is_empty() {
@@ -509,6 +504,11 @@ fn rewrite_manifest(text: &str, pyproject: bool, edits: &[Edit]) -> Result<Strin
         return Err(crate::adapter::undeclared(&edit.declaration));
     }
     Ok(document.to_string())
+}
+
+/// Whether a pixi table set declares a workspace, under either name.
+fn has_workspace(pixi: &toml::Value) -> bool {
+    WORKSPACE_TABLES.iter().any(|t| pixi.get(t).is_some())
 }
 
 /// Checks the local dependency paths of a manifest. Tables for other tools
