@@ -815,8 +815,12 @@ impl Adapter for Conda {
         }
     }
     fn detects(&self, _: &Path, content: &str) -> bool {
-        serde_yaml::from_str::<Value>(content)
-            .is_ok_and(|v| v.get("dependencies").is_some_and(Value::is_sequence))
+        // A name that is no string, such as a cookiecutter template's
+        // `{{cookiecutter.project_name}}`, is no environment conda can read.
+        serde_yaml::from_str::<Value>(content).is_ok_and(|v| {
+            v.get("dependencies").is_some_and(Value::is_sequence)
+                && v.get("name").is_none_or(Value::is_string)
+        })
     }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<Package>> {
         let lock = lock_path(root, &target.manifest);

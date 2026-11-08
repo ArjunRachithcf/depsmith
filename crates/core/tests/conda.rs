@@ -32,6 +32,17 @@ fn target() -> Target {
     }
 }
 
+/// A cookiecutter template's `name: {{cookiecutter.project_name}}` is a YAML
+/// mapping, which conda-lock cannot read, so the file is no environment.
+#[test]
+fn template_environment_files_are_not_targets() {
+    let template = ENVIRONMENT.replace("name: demo", "name: {{cookiecutter.project_name}}");
+    let path = std::path::Path::new("environment.yml");
+    assert!(!Conda.detects(path, &template));
+    assert!(Conda.detects(path, ENVIRONMENT));
+    assert!(Conda.detects(path, &ENVIRONMENT.replace("name: demo\n", "")));
+}
+
 #[test]
 fn environment_files_are_targets_with_conda_and_pip_declarations() {
     let root = tempfile::tempdir().unwrap();
