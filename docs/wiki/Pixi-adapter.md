@@ -33,7 +33,9 @@ submodule, but none may leave the repository: a missing path's longest existing
 prefix must lie inside it, and the rest may hold no `..`. Only
 dependency tables count: Pixi's own tables and, in a `pyproject.toml`,
 `[project]`, `[dependency-groups]` and `[build-system]`. `path` keys in other
-tools' `[tool.*]` tables, such as a build's version file, are not checked.
+tools' `[tool.*]` tables, such as a build's version file, are not checked, nor
+are those of a `pixi.toml` without a `[workspace]` or `[project]` table, which
+is another tool's file; as a target, it goes to Pixi, which reports it.
 
 - `--package NAME` (repeatable) updates only the named **direct dependencies**:
   names in Pixi dependency tables, and for `pyproject.toml` also `[project]`
