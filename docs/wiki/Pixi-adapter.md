@@ -26,8 +26,11 @@ configured platform, and keeps platform targets, features, environments,
 channels, local paths and intentional pins. A failure on any platform blocks
 that target's proposal.
 
-Before resolving, every local dependency path in the repository's Pixi
-manifests must exist in the stage and stay inside the repository. Only
+Before resolving, every local dependency path in the target's manifest must
+exist in the stage and stay inside the repository. The repository's other Pixi
+manifests may name paths the stage lacks, such as one in an uninitialised
+submodule, but none may leave the repository: a missing path's longest existing
+prefix must lie inside it, and the rest may hold no `..`. Only
 dependency tables count: Pixi's own tables and, in a `pyproject.toml`,
 `[project]`, `[dependency-groups]` and `[build-system]`. `path` keys in other
 tools' `[tool.*]` tables, such as a build's version file, are not checked.
