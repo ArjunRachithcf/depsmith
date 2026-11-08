@@ -118,3 +118,17 @@ fn missing_or_escaping_dependency_paths_are_still_reported() {
         assert!(message.contains(needle), "{target} {manifest}: {message}");
     }
 }
+
+/// Another workspace's manifest can name a path the stage lacks, such as an
+/// uninitialised submodule, without stopping this target; escapes still count.
+#[test]
+fn other_manifests_may_name_missing_paths_but_not_escape() {
+    let target = ("tools/pixi.toml", PIXI);
+    let missing = format!("{PIXI}[pypi-dependencies]\nsub = {{ path = 'vendor/sub' }}\n");
+    let message = failure("pixi:tools/pixi.toml", &[("pixi.toml", &missing), target]);
+    assert!(!message.contains("unavailable in stage"), "{message}");
+
+    let escaping = format!("{PIXI}[pypi-dependencies]\nout = {{ path = '../../gone' }}\n");
+    let message = failure("pixi:tools/pixi.toml", &[("pixi.toml", &escaping), target]);
+    assert!(message.contains("escapes the repository"), "{message}");
+}
