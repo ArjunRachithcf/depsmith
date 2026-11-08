@@ -189,3 +189,15 @@ fn missing_paths_through_dangling_links_escape() {
     let message = &proposal.failures[0].message;
     assert!(message.contains("escapes the repository"), "{message}");
 }
+
+/// A `pixi.toml` with no pixi tables, such as another tool's registry entry,
+/// stays a target so Pixi reports it; its `path` keys are not dependencies.
+#[test]
+fn a_pixi_toml_without_pixi_tables_reaches_pixi() {
+    let entry = "backends = ['aqua:x/y']\n[[idiomatic_files]]\npath = 'pyproject.toml'\n";
+    let message = failure("pixi:registry/pixi.toml", &[("registry/pixi.toml", entry)]);
+    assert!(
+        message.contains("depsmith-nonexistent-executable"),
+        "{message}"
+    );
+}

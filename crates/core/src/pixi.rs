@@ -233,13 +233,22 @@ impl Adapter for Pixi {
         let content = fs::read_to_string(&manifest)?;
         let parsed: toml::Value = toml::from_str(&content)
             .map_err(|e| Error::Invalid(format!("invalid manifest: {e}")))?;
-        validate_dependency_paths(
-            &parsed,
-            is_pyproject(target),
-            manifest.parent().unwrap(),
-            stage,
-            false,
-        )?;
+        // A pixi.toml without pixi tables stays a target so Pixi reports it
+        // (see `detects`); its `path` keys are some other tool's.
+        let declares_pixi = is_pyproject(target)
+            || WORKSPACE_TABLES
+                .iter()
+                .chain(&["package"])
+                .any(|t| parsed.get(t).is_some());
+        if declares_pixi {
+            validate_dependency_paths(
+                &parsed,
+                is_pyproject(target),
+                manifest.parent().unwrap(),
+                stage,
+                false,
+            )?;
+        }
         let layout = crate::working_tree::Layout::new([&self.spec()]);
         for relative in crate::working_tree::walk(stage, &layout)?.files {
             if relative
