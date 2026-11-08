@@ -247,16 +247,19 @@ impl Adapter for Pixi {
                 .is_some_and(|n| n == "pyproject.toml" || n == "pixi.toml")
             {
                 let path = stage.join(&relative);
+                if path == manifest {
+                    continue;
+                }
                 let value: toml::Value = toml::from_str(&fs::read_to_string(&path)?)
                     .map_err(|e| Error::Invalid(format!("invalid staged manifest: {e}")))?;
-                // Other workspaces can name paths the stage lacks, such as an
+                // Other manifests can name paths the stage lacks, such as an
                 // uninitialised submodule; Pixi reports them if it needs them.
                 validate_dependency_paths(
                     &value,
                     relative.file_name().is_some_and(|n| n == "pyproject.toml"),
                     path.parent().unwrap(),
                     stage,
-                    path != manifest,
+                    true,
                 )?;
             }
         }
@@ -528,6 +531,7 @@ fn validate_dependency_paths(
         .try_for_each(|v| validate_paths(v, base, stage, missing_ok))
 }
 
+/// Where a local dependency location falls relative to the stage.
 enum Place {
     Inside,
     Missing,
@@ -535,20 +539,35 @@ enum Place {
 }
 
 /// Where a local `location` resolves from `base`, relative to the canonical
-/// `stage`. An absent location escapes when its spelling leaves the stage.
+/// `stage`. An absent location is missing only when its longest existing
+/// prefix resolves inside the stage and the rest is plain names: a `..` after
+/// a dangling link could leave the stage once a tool creates the link's target.
 fn place(location: &str, base: &Path, stage: &Path) -> Result<Place> {
-    let inside = |path: &Path| path.starts_with(stage);
-    Ok(match crate::working_tree::canonical(&base.join(location)) {
-        Ok(resolved) if inside(&resolved) => Place::Inside,
-        Ok(_) => Place::Escapes,
-        Err(_) => {
-            let spelled = crate::working_tree::canonical(base)?.join(location);
-            if inside(&crate::working_tree::normalize(&spelled)) {
-                Place::Missing
-            } else {
-                Place::Escapes
-            }
+    let full = base.join(location);
+    if let Ok(resolved) = crate::working_tree::canonical(&full) {
+        return Ok(if resolved.starts_with(stage) {
+            Place::Inside
+        } else {
+            Place::Escapes
+        });
+    }
+    if location.starts_with('~') {
+        return Ok(Place::Escapes);
+    }
+    let existing = full
+        .ancestors()
+        .skip(1)
+        .find_map(|a| Some((a, crate::working_tree::canonical(a).ok()?)));
+    Ok(match existing {
+        Some((prefix, resolved))
+            if resolved.starts_with(stage)
+                && full
+                    .strip_prefix(prefix)
+                    .is_ok_and(crate::working_tree::contained) =>
+        {
+            Place::Missing
         }
+        _ => Place::Escapes,
     })
 }
 
@@ -571,7 +590,7 @@ fn validate_paths(value: &toml::Value, base: &Path, stage: &Path, missing_ok: bo
                                     "local dependency escapes the repository: {p}"
                                 )));
                             }
-                            _ => {}
+                            Place::Inside | Place::Missing => {}
                         }
                     }
                 }
@@ -603,7 +622,7 @@ fn validate_paths(value: &toml::Value, base: &Path, stage: &Path, missing_ok: bo
                                 "dependency reference escapes stage".into(),
                             ));
                         }
-                        _ => {}
+                        Place::Inside | Place::Missing => {}
                     }
                 }
             }
