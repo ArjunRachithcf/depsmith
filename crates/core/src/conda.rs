@@ -764,6 +764,18 @@ fn locked_platforms(root: &Path, target: &Target, parsed: &Value) -> Vec<String>
     }
 }
 
+/// Whether every mapping key in `value` is a scalar, as PyYAML requires.
+fn hashable_keys(value: &Value) -> bool {
+    match value {
+        Value::Mapping(m) => m
+            .iter()
+            .all(|(k, v)| !matches!(k, Value::Mapping(_) | Value::Sequence(_)) && hashable_keys(v)),
+        Value::Sequence(s) => s.iter().all(hashable_keys),
+        Value::Tagged(t) => hashable_keys(&t.value),
+        _ => true,
+    }
+}
+
 impl Adapter for Conda {
     fn spec(&self) -> AdapterSpec {
         AdapterSpec {
@@ -815,11 +827,10 @@ impl Adapter for Conda {
         }
     }
     fn detects(&self, _: &Path, content: &str) -> bool {
-        // A name that is no string, such as a cookiecutter template's
-        // `{{cookiecutter.project_name}}`, is no environment conda can read.
+        // A cookiecutter template's `{{cookiecutter.project_name}}` is a
+        // mapping used as a key, which conda-lock's YAML loader refuses.
         serde_yaml::from_str::<Value>(content).is_ok_and(|v| {
-            v.get("dependencies").is_some_and(Value::is_sequence)
-                && v.get("name").is_none_or(Value::is_string)
+            v.get("dependencies").is_some_and(Value::is_sequence) && hashable_keys(&v)
         })
     }
     fn inventory(&self, root: &Path, target: &Target) -> Result<Vec<Package>> {

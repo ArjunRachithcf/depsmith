@@ -32,15 +32,25 @@ fn target() -> Target {
     }
 }
 
-/// A cookiecutter template's `name: {{cookiecutter.project_name}}` is a YAML
-/// mapping, which conda-lock cannot read, so the file is no environment.
+/// A cookiecutter placeholder such as `{{cookiecutter.project_name}}` is a
+/// mapping used as a key, which conda-lock cannot read, so the file is no
+/// environment. Names of any scalar kind are fine.
 #[test]
 fn template_environment_files_are_not_targets() {
-    let template = ENVIRONMENT.replace("name: demo", "name: {{cookiecutter.project_name}}");
     let path = std::path::Path::new("environment.yml");
-    assert!(!Conda.detects(path, &template));
-    assert!(Conda.detects(path, ENVIRONMENT));
-    assert!(Conda.detects(path, &ENVIRONMENT.replace("name: demo\n", "")));
+    for (from, to) in [
+        ("name: demo", "name: {{cookiecutter.project_name}}"),
+        ("  - python=3.12", "  - {{cookiecutter.python}}"),
+        ("  - conda-forge\n", "  - {{cookiecutter.channel}}\n"),
+    ] {
+        assert!(!Conda.detects(path, &ENVIRONMENT.replace(from, to)), "{to}");
+    }
+    for name in ["name: demo", "name: 2024", "name:", "name: \"{{ x }}\"", ""] {
+        assert!(
+            Conda.detects(path, &ENVIRONMENT.replace("name: demo", name)),
+            "{name}"
+        );
+    }
 }
 
 #[test]
