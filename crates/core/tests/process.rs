@@ -86,6 +86,34 @@ exit 1
     );
 }
 
+/// A resolver's explanation can push the tool's error line out of the tail,
+/// so the first error line is kept above it.
+#[cfg(unix)]
+#[test]
+fn failures_keep_the_error_line_above_a_long_tail() {
+    let script = r#"
+echo "Updating lock file" >&2
+echo "Error:   x failed to solve the pypi requirements of environment 'default'" >&2
+i=1; while [ $i -le 60 ]; do echo "    because demo==$i depends on other" >&2; i=$((i+1)); done
+exit 1
+"#;
+    let error = depsmith_core::process::run(
+        "sh",
+        &["-c".into(), script.into()],
+        std::path::Path::new("."),
+        10,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Error:   x failed to solve the pypi requirements"),
+        "{error}"
+    );
+    assert!(error.contains("demo==60 depends"), "{error}");
+    assert!(!error.contains("demo==1 depends"), "{error}");
+    assert!(!error.contains("Updating lock file"), "{error}");
+}
+
 /// Some tools color their output despite `NO_COLOR` (Pixi relays uv's
 /// resolver hints with ANSI styling), so the tail is reported as plain text.
 #[cfg(unix)]
