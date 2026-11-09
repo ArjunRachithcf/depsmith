@@ -19,7 +19,7 @@ versions have been tested, and what each adapter supports.
 | "local path unavailable in stage" | A local dependency path is missing from the stage: it does not exist, or it is ignored and untracked. Commit it or remove the dependency. |
 | A backend "not found", or `init` exits 3 | The tool is not installed. Run `depsmith init` (or `init --fetch-tools` in CI) to install the tested release, install it yourself, or pass `--tool NAME=PATH`. cargo comes with a pinned rustup toolchain and conda-lock is installed with uv (offered first when missing). |
 | Validation note "… changed since depsmith installed it" or "… now uses …" | A tool `init` installed was modified, or depsmith now pins another version. It is not used; run `depsmith init` to install it again. |
-| Exit 3 with a backend's error | The last 40 stderr lines are shown with credentials redacted. Timeouts: raise `--timeout-seconds`. |
+| Exit 3 with a backend's error | The last 40 stderr lines are shown with credentials redacted, under the backend's error line when they hold none. Timeouts: raise `--timeout-seconds`. |
 | Exit 5 | Some targets failed; others can be applied with `--allow-partial`. |
 | An apply was interrupted | Run `depsmith recover --root PATH`. |
 | Suggestion "not established" | The availability lookup failed (network, authenticated or non-JSON index, unrecognised `exclude-newer`). The suggestion is kept, not dropped. |
