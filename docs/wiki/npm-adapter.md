@@ -4,7 +4,8 @@
 
 Each `package.json` that owns an npm lock is a target, such as
 `npm:package.json`: a package with a `package-lock.json` (lockfileVersion 2 or
-3, npm 7 or newer) or an `npm-shrinkwrap.json` beside it, that no enclosing
+3, npm 7 or newer, or one npm rewrites, see [Updates](#updates)) or an
+`npm-shrinkwrap.json` beside it, that no enclosing
 workspace lists as a member. Members of `workspaces` (its globs, in either the
 array or the `{ "packages": [...] }` form; `**` matches any depth outside
 `node_modules` and hidden directories, and `!glob` removes members matched by
@@ -39,6 +40,15 @@ made.
   depsmith then takes the lock that install writes, through the same guards,
   if install kept every package that update locked. A second install must
   not change it.
+- A lock that is not JSON (empty, or left with merge conflict markers) or not
+  a JSON object is handed to npm as it stands. npm rewrites it in place: it
+  merges conflict markers whose sides are JSON and otherwise resolves afresh.
+  With no baseline to compare, Git pins are not held, and the proposal says
+  the lock was unreadable. Change explanations and the impact comparison
+  take such a lock as an empty one, as if locking for the first time. A lock
+  that is not UTF-8 text, or a readable one with an unsupported or missing
+  lockfileVersion, is still refused. Scans and `--security-only` need a
+  readable lock.
 - `--upgrade` and `--install` are not supported: change a range with
   `--accept`.
 - npm has no **precise update**: a package named by a security update moves

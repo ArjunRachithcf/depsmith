@@ -5,6 +5,7 @@ use depsmith_core::{
     adapter::Adapter,
     conformance,
     constraints::{Edit, RegistryConfig},
+    impact::Lock,
     npm::{lock_inventory, Npm},
     Engine, Target,
 };
@@ -353,11 +354,32 @@ mod stand_in {
         after_update: &str,
         install: &str,
     ) -> Run {
+        prepare_lock(
+            "package-lock.json",
+            baseline.map(str::as_bytes),
+            next,
+            options,
+            after_update,
+            install,
+        )
+    }
+
+    /// As [`prepare_with`], with the `baseline` bytes in the lock `name`;
+    /// the stand-in's `update` writes the lock npm would: the shrinkwrap
+    /// when one exists.
+    fn prepare_lock(
+        name: &str,
+        baseline: Option<&[u8]>,
+        next: &str,
+        options: UpdateOptions,
+        after_update: &str,
+        install: &str,
+    ) -> Run {
         let root = tempfile::tempdir().unwrap();
         let tools = tempfile::tempdir().unwrap();
         write(root.path(), &[("package.json", PACKAGE)]);
         if let Some(baseline) = baseline {
-            write(root.path(), &[("package-lock.json", baseline)]);
+            fs::write(root.path().join(name), baseline).unwrap();
         }
         let (script, log, next_lock) = (
             tools.path().join("npm"),
@@ -368,7 +390,7 @@ mod stand_in {
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n  --version) echo 11.19.0;;\n  update) cp '{next}' package-lock.json; {after};;\n  install) {install};;\n  *) exit 2;;\nesac\n",
+                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n  --version) echo 11.19.0;;\n  update) if [ -f npm-shrinkwrap.json ]; then cp '{next}' npm-shrinkwrap.json; else cp '{next}' package-lock.json; fi; {after};;\n  install) {install};;\n  *) exit 2;;\nesac\n",
                 log = log.display(),
                 next = next_lock.display(),
                 after = if after_update.is_empty() { ":" } else { after_update },
@@ -656,6 +678,99 @@ mod stand_in {
         assert_eq!(calls(&run, "install").len(), 1, "{:?}", run.calls);
         assert_eq!(run.proposal.failures.len(), 1, "{:?}", run.proposal);
         assert!(run.proposal.failures[0].message.contains("--refresh-git"));
+    }
+
+    #[test]
+    fn a_lock_npm_cannot_read_is_rewritten_by_npm_in_place() {
+        let fresh = lock("3.2.7", "aaaa");
+        let conflict = format!(
+            "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> other\n",
+            lock("3.1.0", "aaaa"),
+            lock("3.2.0", "aaaa")
+        );
+        let cases = [
+            ("package-lock.json", ""),
+            ("package-lock.json", " \n"),
+            (
+                "package-lock.json",
+                "{\"lockfileVersion\": 3,\n<<<<<<< HEAD\n",
+            ),
+            ("package-lock.json", conflict.as_str()),
+            ("package-lock.json", "[]"),
+            ("npm-shrinkwrap.json", ""),
+        ];
+        for (name, broken) in cases {
+            // npm reads the lock as it stands and rewrites that file.
+            let run = prepare_lock(
+                name,
+                Some(broken.as_bytes()),
+                &fresh,
+                UpdateOptions::default(),
+                "",
+                ":",
+            );
+            assert!(
+                run.proposal.failures.is_empty(),
+                "{name} {broken:?}: {:?}",
+                run.proposal.failures
+            );
+            assert!(
+                update_call(&run).starts_with("update --package-lock-only"),
+                "{:?}",
+                run.calls
+            );
+            let lock_change = run
+                .proposal
+                .changes
+                .iter()
+                .find(|c| c.path == Path::new(name))
+                .unwrap();
+            assert_eq!(lock_change.before.as_deref(), Some(broken), "{name}");
+            assert_eq!(lock_change.after, fresh, "{name} {broken:?}");
+            assert!(
+                run.proposal
+                    .validation
+                    .iter()
+                    .any(|v| v.contains(&format!("{name} was unreadable"))
+                        && v.contains("Git pins were not held")),
+                "{name} {broken:?}: {:?}",
+                run.proposal.validation
+            );
+            // The unreadable side is compared as an empty lock.
+            assert!(
+                !run.proposal
+                    .validation
+                    .iter()
+                    .any(|v| v.contains("not explained")),
+                "{name} {broken:?}: {:?}",
+                run.proposal.validation
+            );
+        }
+        // A readable lock of an unsupported version, and one that is not
+        // text, stay refused.
+        let refused: [(&[u8], &str); 2] = [
+            (
+                b"{\"lockfileVersion\": 1}",
+                "unsupported package-lock.json lockfileVersion 1",
+            ),
+            (b"\xff\xfe{}", "package-lock.json is not UTF-8 text"),
+        ];
+        for (bytes, message) in refused {
+            let run = prepare_lock(
+                "package-lock.json",
+                Some(bytes),
+                &fresh,
+                UpdateOptions::default(),
+                "",
+                "",
+            );
+            assert_eq!(run.proposal.failures.len(), 1, "{:?}", run.proposal);
+            assert!(
+                run.proposal.failures[0].message.contains(message),
+                "{}",
+                run.proposal.failures[0].message
+            );
+        }
     }
 
     #[test]
@@ -961,6 +1076,26 @@ fn lock_graph_reads_nodes_edges_and_paths_from_package_lock() {
         graph.paths_to("any", &roots, "npm", "ms"),
         [["left-pad", "wrap", "ms"]]
     );
+}
+
+#[test]
+fn impact_compares_a_lock_npm_cannot_read_as_an_empty_lock() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        &[
+            ("package.json", r#"{"name": "p"}"#),
+            ("package-lock.json", "<<<<<<< HEAD\n"),
+        ],
+    );
+    let lock = Lock::read(&Npm::default(), root.path(), &target("package.json")).unwrap();
+    assert_eq!(lock, Lock::default());
+    // A readable lock of an unsupported version is still an error.
+    write(
+        root.path(),
+        &[("package-lock.json", r#"{"lockfileVersion": 1}"#)],
+    );
+    assert!(Lock::read(&Npm::default(), root.path(), &target("package.json")).is_err());
 }
 
 #[test]

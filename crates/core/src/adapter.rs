@@ -259,6 +259,12 @@ pub trait Adapter: Send + Sync {
     fn lock_platforms(&self, _root: &Path, _target: &Target) -> Result<Vec<crate::LockPlatform>> {
         Ok(vec![])
     }
+    /// Whether the target's lock in `root` is one the backend cannot read
+    /// and rewrites, so a comparison takes it as an empty lock. The default
+    /// reads every lock.
+    fn lock_unreadable(&self, _root: &Path, _target: &Target) -> Result<bool> {
+        Ok(false)
+    }
     /// The `pyproject.toml` files, relative to `root`, of other local
     /// projects the target installs from a path, whose own dependencies are
     /// resolved with the target. The default installs none.
@@ -391,6 +397,19 @@ impl LockCheck {
             baseline,
             before,
         })
+    }
+    /// As [`LockCheck::take`], for a `lock` the backend cannot read and
+    /// rewrites: there is no baseline to compare.
+    pub(crate) fn take_unreadable(
+        stage: &Path,
+        manifests: Vec<PathBuf>,
+        lock: PathBuf,
+        inventory: fn(&str) -> Result<Vec<Package>>,
+    ) -> Result<Self> {
+        let mut check = Self::take(stage, manifests, lock, |_| Ok(vec![]))?;
+        check.inventory = inventory;
+        check.baseline = None;
+        Ok(check)
     }
     /// The baseline inventory, empty without a lock.
     pub(crate) fn before(&self) -> &[Package] {

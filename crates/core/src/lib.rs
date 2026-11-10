@@ -822,7 +822,11 @@ fn explain(
         let Some(after) = adapter.lock_graph(stage, target)? else {
             return Ok(());
         };
-        let mut before = adapter.lock_graph(root, target)?.unwrap_or_default();
+        let mut before = if adapter.lock_unreadable(root, target)? {
+            Default::default()
+        } else {
+            adapter.lock_graph(root, target)?.unwrap_or_default()
+        };
         for node in &mut before.nodes {
             LockPlatform::rename(renames, &mut node.platform);
         }

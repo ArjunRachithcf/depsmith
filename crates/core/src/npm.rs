@@ -228,6 +228,17 @@ fn rewrite_manifest(text: &str, edits: &[&Edit]) -> Result<String> {
     Ok(text)
 }
 
+/// Why npm cannot read the lock `text` as it stands (not JSON, or not an
+/// object), which makes npm rewrite it; `None` for a lock [`parse_lock`]
+/// should judge.
+fn unreadable_lock(text: &str) -> Option<String> {
+    match serde_json::from_str::<Value>(without_bom(text)) {
+        Ok(value) if value.is_object() => None,
+        Ok(_) => Some("not a JSON object".into()),
+        Err(e) => Some(e.to_string()),
+    }
+}
+
 /// A `package-lock.json` of a supported `lockfileVersion` (2 or 3).
 fn parse_lock(text: &str) -> Result<Value> {
     let parsed: Value = serde_json::from_str(without_bom(text))
@@ -913,6 +924,13 @@ impl Adapter for Npm {
             result => lock_graph(&result?).map(Some),
         }
     }
+    fn lock_unreadable(&self, root: &Path, target: &Target) -> Result<bool> {
+        let Some(lock) = lock_path(root, target) else {
+            return Ok(false);
+        };
+        let bytes = fs::read(root.join(lock))?;
+        Ok(std::str::from_utf8(&bytes).is_ok_and(|text| unreadable_lock(text).is_some()))
+    }
     fn select(
         &self,
         root: &Path,
@@ -973,7 +991,21 @@ impl Adapter for Npm {
             .map(|l| dir_relative.join(l))
             .find(|l| stage.join(l).is_file())
             .unwrap_or_else(|| dir_relative.join("package-lock.json"));
-        let check = LockCheck::take(
+        // npm rewrites a lock it cannot read in place (merging conflict
+        // markers it can), so that lock leaves no baseline to compare.
+        let unreadable = match fs::read(stage.join(&lock)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            read => unreadable_lock(
+                std::str::from_utf8(&read?)
+                    .map_err(|_| Error::Invalid(format!("{} is not UTF-8 text", lock.display())))?,
+            ),
+        };
+        let take = if unreadable.is_some() {
+            LockCheck::take_unreadable
+        } else {
+            LockCheck::take
+        };
+        let check = take(
             stage,
             manifests(stage, target)?,
             lock.clone(),
@@ -1043,6 +1075,14 @@ impl Adapter for Npm {
                 .map_err(|e| Error::Operation(format!("settling install: {e}")))?;
         }
         let mut candidate = check.candidate(stage, target, &resolved, vec![])?;
+        candidate.validation.extend(unreadable.map(|why| {
+            format!(
+                "{}: {} was unreadable ({why}); npm rewrote it with no baseline \
+                 to compare, so Git pins were not held",
+                target.id,
+                lock.display()
+            )
+        }));
         candidate.validation.extend(note);
         Ok(candidate)
     }

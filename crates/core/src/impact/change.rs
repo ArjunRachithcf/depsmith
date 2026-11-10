@@ -223,15 +223,17 @@ pub struct Lock {
 impl Lock {
     /// One side of a comparison: `target`'s inventory and lock graph under
     /// `root`, as `adapter` reads them. A side with none of the target's
-    /// lock files is an empty lock, so locking for the first time adds every
-    /// package.
+    /// lock files, or with one the backend cannot read and rewrites, is an
+    /// empty lock, so locking for the first time adds every package.
     ///
     /// # Errors
     ///
     /// Returns the adapter's error when a lock exists but cannot be read.
     pub fn read(adapter: &dyn Adapter, root: &Path, target: &Target) -> Result<Self> {
         let locks = super::compare::lock_files(adapter, target);
-        if !locks.is_empty() && !locks.iter().any(|lock| root.join(lock).is_file()) {
+        if !locks.is_empty() && !locks.iter().any(|lock| root.join(lock).is_file())
+            || adapter.lock_unreadable(root, target)?
+        {
             return Ok(Self::default());
         }
         Ok(Self {
