@@ -144,7 +144,8 @@ fn strip_styling(text: &str) -> std::borrow::Cow<'_, str> {
         .replace_all(text, "")
 }
 
-/// The last lines of captured stderr, redacted, for failure diagnostics.
+/// The last lines of captured stderr, redacted, for failure diagnostics,
+/// under the last error line before them when they hold none.
 fn tail(mut errors: std::fs::File, env: &[(String, String)]) -> String {
     const LINES: usize = 40;
     const BYTES: u64 = 64 * 1024;
@@ -161,8 +162,24 @@ fn tail(mut errors: std::fs::File, env: &[(String, String)]) -> String {
     let text = String::from_utf8_lossy(&bytes);
     let text = strip_styling(&text);
     let lines: Vec<&str> = text.lines().collect();
-    let kept = lines[lines.len().saturating_sub(LINES)..].join("\n");
-    redact(&kept, env)
+    let start = lines.len().saturating_sub(LINES);
+    let mut kept = lines[start..].to_vec();
+    // A resolver's explanation can push the error line itself out of the tail.
+    if !kept.iter().any(|l| is_error_line(l)) {
+        if let Some(error) = lines[..start].iter().rfind(|l| is_error_line(l)) {
+            kept.splice(0..0, [*error, "[...]"]);
+        }
+    }
+    redact(&kept.join("\n"), env)
+}
+
+/// Whether `line` opens a tool's error report: `Error:` for Pixi, `error:` and
+/// `error[` for cargo and uv, `ERROR:` for pip.
+fn is_error_line(line: &str) -> bool {
+    let line = line.trim_start();
+    ["Error:", "error:", "ERROR:", "error["]
+        .iter()
+        .any(|p| line.starts_with(p))
 }
 
 fn diagnostics(errors: std::fs::File, env: &[(String, String)]) -> String {
