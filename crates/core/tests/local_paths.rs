@@ -43,6 +43,9 @@ fn nested_local_manifest_cannot_escape_the_stage() {
     assert_eq!(proposal.failures[0].code, 2);
 }
 
+/// A pixi executable that does not exist, so a failure naming it reached Pixi.
+const MISSING_PIXI: &str = "depsmith-nonexistent-executable";
+
 const PIXI: &str = "[workspace]\nname='a'\nchannels=['conda-forge']\nplatforms=['linux-64']\n";
 
 /// The failure message of the only target, with pixi itself unavailable.
@@ -54,7 +57,7 @@ fn failure(target: &str, files: &[(&str, &str)]) -> String {
         fs::write(path, text).unwrap();
     }
     let options = UpdateOptions {
-        pixi: "depsmith-nonexistent-executable".into(),
+        pixi: MISSING_PIXI.into(),
         ..Default::default()
     };
     let proposal = Engine::default()
@@ -132,10 +135,7 @@ fn other_manifests_may_name_missing_paths_but_not_escape() {
         ("b/pyproject.toml", pyproject("'sub @ ./vendor/sub'")),
     ] {
         let message = failure("pixi:tools/pixi.toml", &[(other, &text), target]);
-        assert!(
-            message.contains("depsmith-nonexistent-executable"),
-            "{message}"
-        );
+        assert!(message.contains(MISSING_PIXI), "{message}");
     }
     for (other, text, needle) in [
         (
@@ -180,7 +180,7 @@ fn missing_paths_through_dangling_links_escape() {
     fs::create_dir_all(root.path().join("tools")).unwrap();
     fs::write(root.path().join("tools/pixi.toml"), PIXI).unwrap();
     let options = UpdateOptions {
-        pixi: "depsmith-nonexistent-executable".into(),
+        pixi: MISSING_PIXI.into(),
         ..Default::default()
     };
     let proposal = Engine::default()
@@ -188,4 +188,19 @@ fn missing_paths_through_dangling_links_escape() {
         .unwrap();
     let message = &proposal.failures[0].message;
     assert!(message.contains("escapes the repository"), "{message}");
+}
+
+/// A `pixi.toml` without a workspace, such as another tool's registry entry,
+/// stays a target so Pixi reports it; its `path` keys are not dependencies,
+/// there or when another target is updated.
+#[test]
+fn a_pixi_toml_without_a_workspace_is_left_to_pixi() {
+    for path in ["pyproject.toml", "../../outside"] {
+        let entry = format!("backends = ['aqua:x/y']\n[[idiomatic_files]]\npath = '{path}'\n");
+        let message = failure("pixi:registry/pixi.toml", &[("registry/pixi.toml", &entry)]);
+        assert!(message.contains(MISSING_PIXI), "{message}");
+        let files = [("registry/pixi.toml", &*entry), ("tools/pixi.toml", PIXI)];
+        let message = failure("pixi:tools/pixi.toml", &files);
+        assert!(message.contains(MISSING_PIXI), "{message}");
+    }
 }
