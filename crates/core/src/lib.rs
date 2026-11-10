@@ -806,10 +806,11 @@ fn downgrades(changes: &[DependencyChange]) -> Vec<String> {
 }
 
 /// Name the introducers of each of `changes`, from the candidate's lock
-/// graph in `stage` and the baseline's in `root`, its platforms under their
-/// new names in `renames`. Explaining is advisory:
-/// a graph or declarations that cannot be read leave the changes as they
-/// are and return why, for the proposal's validation notes.
+/// graph in `stage` and the baseline's in `root` (empty when the backend
+/// cannot read that lock), its platforms under their new names in `renames`.
+/// Explaining is advisory: a graph or declarations that cannot be read leave
+/// the changes as they are and return why, for the proposal's validation
+/// notes.
 fn explain(
     changes: &mut [DependencyChange],
     adapter: &dyn Adapter,

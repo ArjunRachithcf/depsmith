@@ -1,8 +1,8 @@
 //! The npm adapter: each `package-lock.json` owner (a workspace root or a
 //! standalone package) is a target whose declarations are the dependency
 //! objects of its `package.json` files. npm resolves in the stage without
-//! running scripts; Git pins are kept unless `--refresh-git` is selected, and
-//! `--cooldown-days` becomes npm's `--before`.
+//! running scripts; Git pins are kept unless `--refresh-git` is selected or
+//! the lock was unreadable, and `--cooldown-days` becomes npm's `--before`.
 use crate::{
     adapter::{
         edits_by_manifest, undeclared, Adapter, AdapterSpec, Candidate, Capabilities, LockCheck,
