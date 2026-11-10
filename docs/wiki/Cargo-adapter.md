@@ -6,7 +6,10 @@ Each manifest that owns a `Cargo.lock` is a target: a workspace root
 (`[workspace]`), a package outside any workspace, or a package every
 enclosing workspace excludes, such as `cargo:Cargo.toml` or
 `cargo:tools/xtask/Cargo.toml`. Workspace members are not targets of their
-own; their manifests are part of the workspace's target. Member globs in
+own; their manifests are part of the workspace's target. As in cargo, a path
+dependency of a member (or of the root package) inside the workspace is a
+member too, unless `workspace.exclude` covers it and no literal
+`workspace.members` entry does. Member globs in
 `workspace.members` and `workspace.exclude` are honoured as cargo does: a package belongs to the
 first enclosing workspace that does not exclude it. If that workspace does
 not list it either, it is not a target, because cargo refuses to work on it. Neither is a manifest whose

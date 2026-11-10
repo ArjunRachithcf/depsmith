@@ -55,14 +55,18 @@ concurrent edits are never overwritten.
 For Git repository roots and ordinary linked worktrees, the stage keeps Git
 history, tags, the index and dirty source files, so SCM-derived package
 versions are calculated normally. Hooks, remotes and credentials are not
-copied. Select the repository root, not a subdirectory. Nested repositories,
-submodules, external object stores, sparse checkouts, external attributes,
-configuration includes or filters, and worktree-specific configuration are
-rejected with a configuration error. Large histories add copying and hashing
-cost.
+copied. Select the repository root, not a subdirectory. External object
+stores, sparse checkouts, external attributes, configuration includes or
+filters, and worktree-specific configuration are rejected with a
+configuration error. Large histories add copying and hashing cost.
 
-Repository symlinks and local dependencies outside the repository are
-rejected.
+Symlinks that stay inside the repository are recreated in the stage as the
+same links. A symlink that points outside the repository (or uses an absolute
+target, or points into another left-out path), a nested repository and a
+submodule are **left out** of the stage. Discovery still lists the other
+targets, but a left-out path fails every target whose directory holds it,
+naming each such path and why; a target at the repository root holds them
+all. Local dependencies outside the repository are rejected.
 
 ## Backend processes
 

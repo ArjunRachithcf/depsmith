@@ -2,7 +2,7 @@
 
 Start with `depsmith init`: it checks the native tools your targets use and
 offers to install the missing ones. `depsmith doctor` shows every native tool
-(Pixi, uv, cargo, conda-lock and its solver, Grype), where it was found, which
+(Pixi, uv, cargo, conda-lock and its solver, npm, Grype), where it was found, which
 versions have been tested, and what each adapter supports.
 
 | Message or symptom | Cause and fix |
@@ -14,7 +14,8 @@ versions have been tested, and what each adapter supports.
 | "no pixi.lock to scan" | `scan` needs an existing lock. Create it with `pixi lock` or `depsmith update`. |
 | "The workspace does not support '<platform>' on this machine" | Editable or source PyPI packages are built for the machine running the update; add its platform to Pixi's `platforms`. |
 | "the selected root is inside a Git repository" | Select the repository root, not a subdirectory. |
-| Git layout rejected (submodules, sparse checkout, includes, …) | These layouts cannot be staged reproducibly yet. |
+| Git layout rejected (sparse checkout, external object stores, includes, …) | These layouts cannot be staged reproducibly yet. |
+| "the target's directory holds paths left out of the stage" | A symlink pointing outside the repository, a nested repository or a submodule lies in the target's directory, so the stage cannot hold everything the native tool might read. Move it out of the target's directory or replace an outside symlink; targets elsewhere are unaffected. |
 | "local dependency escapes the repository" | Local path dependencies must be inside the repository. |
 | "local path unavailable in stage" | A local dependency path is missing from the stage: it does not exist, or it is ignored and untracked. Commit it or remove the dependency. |
 | A backend "not found", or `init` exits 3 | The tool is not installed. Run `depsmith init` (or `init --fetch-tools` in CI) to install the tested release, install it yourself, or pass `--tool NAME=PATH`. cargo comes with a pinned rustup toolchain and conda-lock is installed with uv (offered first when missing). |

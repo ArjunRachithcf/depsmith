@@ -119,6 +119,9 @@ adapter can speak the same contract over a subprocess bridge of JSON lines
 | `scm` | Data-only Git staging for SCM-derived versions |
 | `transaction` | Applying proposals: stale checks, locking, journal, recovery |
 | `scan`, `inventory` | Inventories, identities, Grype scanning and policy |
+| `security` | Security updates: the packages actionable findings move, their fix versions, and whether the candidate fixed them |
+| `graph` | Lock graphs and the dependency paths from direct dependencies |
+| `impact` | Impact analysis of a lock change: affected packages, usage sites and affected files |
 | `process` | Running backends: timeouts, process-tree cancellation, redaction |
 | `constraint`, `pep440`, `conda_version`, `cutoff`, `pypi` | Constraint acceptance, version ordering, release-age cutoffs and PyPI evidence |
 | `config` | `depsmith.toml` |
