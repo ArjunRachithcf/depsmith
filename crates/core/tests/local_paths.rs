@@ -118,3 +118,74 @@ fn missing_or_escaping_dependency_paths_are_still_reported() {
         assert!(message.contains(needle), "{target} {manifest}: {message}");
     }
 }
+
+/// Another workspace's manifest can name a path the stage lacks, such as an
+/// uninitialised submodule, without stopping this target; escapes still count.
+#[test]
+fn other_manifests_may_name_missing_paths_but_not_escape() {
+    let target = ("tools/pixi.toml", PIXI);
+    let pixi = |deps: &str| format!("{PIXI}[pypi-dependencies]\n{deps}\n");
+    let pyproject =
+        |deps: &str| format!("[project]\nname='b'\nversion='1'\ndependencies=[{deps}]\n");
+    for (other, text) in [
+        ("pixi.toml", pixi("sub = { path = 'vendor/sub' }")),
+        ("b/pyproject.toml", pyproject("'sub @ ./vendor/sub'")),
+    ] {
+        let message = failure("pixi:tools/pixi.toml", &[(other, &text), target]);
+        assert!(
+            message.contains("depsmith-nonexistent-executable"),
+            "{message}"
+        );
+    }
+    for (other, text, needle) in [
+        (
+            "pixi.toml",
+            pixi("out = { path = '../../gone' }"),
+            "escapes the repository",
+        ),
+        (
+            "pixi.toml",
+            pixi("out = { path = '/depsmith/gone' }"),
+            "escapes the repository",
+        ),
+        (
+            "pixi.toml",
+            pixi("out = { path = '~/gone' }"),
+            "escapes the repository",
+        ),
+        (
+            "b/pyproject.toml",
+            pyproject("'out @ ../../gone'"),
+            "escapes stage",
+        ),
+    ] {
+        let message = failure("pixi:tools/pixi.toml", &[(other, &text), target]);
+        assert!(message.contains(needle), "{other} {text}: {message}");
+    }
+}
+
+/// A `..` after a link whose target is absent could leave the stage once a
+/// tool creates that target, so it counts as an escape.
+#[cfg(unix)]
+#[test]
+fn missing_paths_through_dangling_links_escape() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("a/b")).unwrap();
+    std::os::unix::fs::symlink("../envs", root.path().join("a/b/link")).unwrap();
+    fs::write(
+        root.path().join("pixi.toml"),
+        format!("{PIXI}[pypi-dependencies]\nout = {{ path = 'a/b/link/../../../x' }}\n"),
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("tools")).unwrap();
+    fs::write(root.path().join("tools/pixi.toml"), PIXI).unwrap();
+    let options = UpdateOptions {
+        pixi: "depsmith-nonexistent-executable".into(),
+        ..Default::default()
+    };
+    let proposal = Engine::default()
+        .prepare(root.path(), &["pixi:tools/pixi.toml".into()], options)
+        .unwrap();
+    let message = &proposal.failures[0].message;
+    assert!(message.contains("escapes the repository"), "{message}");
+}

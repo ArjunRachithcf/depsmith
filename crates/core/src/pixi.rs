@@ -238,6 +238,7 @@ impl Adapter for Pixi {
             is_pyproject(target),
             manifest.parent().unwrap(),
             stage,
+            false,
         )?;
         let layout = crate::working_tree::Layout::new([&self.spec()]);
         for relative in crate::working_tree::walk(stage, &layout)?.files {
@@ -246,13 +247,19 @@ impl Adapter for Pixi {
                 .is_some_and(|n| n == "pyproject.toml" || n == "pixi.toml")
             {
                 let path = stage.join(&relative);
+                if path == manifest {
+                    continue;
+                }
                 let value: toml::Value = toml::from_str(&fs::read_to_string(&path)?)
                     .map_err(|e| Error::Invalid(format!("invalid staged manifest: {e}")))?;
+                // Other manifests can name paths the stage lacks, such as an
+                // uninitialised submodule; Pixi reports them if it needs them.
                 validate_dependency_paths(
                     &value,
                     relative.file_name().is_some_and(|n| n == "pyproject.toml"),
                     path.parent().unwrap(),
                     stage,
+                    true,
                 )?;
             }
         }
@@ -499,11 +506,13 @@ fn rewrite_manifest(text: &str, pyproject: bool, edits: &[Edit]) -> Result<Strin
 /// (`[tool.*]` in either manifest kind) can hold `path` keys that are not
 /// dependencies, such as a build's version file, so only pixi's own tables
 /// and, in a pyproject.toml, the standard dependency tables are checked.
+/// With `missing_ok`, a path absent from the stage passes unless it escapes.
 fn validate_dependency_paths(
     value: &toml::Value,
     pyproject: bool,
     base: &Path,
     stage: &Path,
+    missing_ok: bool,
 ) -> Result<()> {
     let Some(table) = value.as_table() else {
         return Ok(());
@@ -512,17 +521,57 @@ fn validate_dependency_paths(
         return table
             .iter()
             .filter(|(key, _)| *key != "tool")
-            .try_for_each(|(_, v)| validate_paths(v, base, stage));
+            .try_for_each(|(_, v)| validate_paths(v, base, stage, missing_ok));
     }
     let pixi = value.get("tool").and_then(|t| t.get("pixi"));
     ["project", "dependency-groups", "build-system"]
         .iter()
         .filter_map(|key| table.get(*key))
         .chain(pixi)
-        .try_for_each(|v| validate_paths(v, base, stage))
+        .try_for_each(|v| validate_paths(v, base, stage, missing_ok))
 }
 
-fn validate_paths(value: &toml::Value, base: &Path, stage: &Path) -> Result<()> {
+/// Where a local dependency location falls relative to the stage.
+enum Place {
+    Inside,
+    Missing,
+    Escapes,
+}
+
+/// Where a local `location` resolves from `base`, relative to the canonical
+/// `stage`. An absent location is missing only when its longest existing
+/// prefix resolves inside the stage and the rest is plain names: a `..` after
+/// a dangling link could leave the stage once a tool creates the link's target.
+fn place(location: &str, base: &Path, stage: &Path) -> Result<Place> {
+    let full = base.join(location);
+    if let Ok(resolved) = crate::working_tree::canonical(&full) {
+        return Ok(if resolved.starts_with(stage) {
+            Place::Inside
+        } else {
+            Place::Escapes
+        });
+    }
+    if location.starts_with('~') {
+        return Ok(Place::Escapes);
+    }
+    let existing = full
+        .ancestors()
+        .skip(1)
+        .find_map(|a| Some((a, crate::working_tree::canonical(a).ok()?)));
+    Ok(match existing {
+        Some((prefix, resolved))
+            if resolved.starts_with(stage)
+                && full
+                    .strip_prefix(prefix)
+                    .is_ok_and(crate::working_tree::contained) =>
+        {
+            Place::Missing
+        }
+        _ => Place::Escapes,
+    })
+}
+
+fn validate_paths(value: &toml::Value, base: &Path, stage: &Path, missing_ok: bool) -> Result<()> {
     // Compare canonical spellings on both sides (e.g. macOS /var -> /private/var).
     let stage = &crate::working_tree::canonical(stage)?;
     match value {
@@ -530,23 +579,27 @@ fn validate_paths(value: &toml::Value, base: &Path, stage: &Path) -> Result<()> 
             for (key, v) in t {
                 if key == "path" {
                     if let Some(p) = v.as_str() {
-                        let resolved =
-                            crate::working_tree::canonical(&base.join(p)).map_err(|_| {
-                                Error::Invalid(format!("local path unavailable in stage: {p}"))
-                            })?;
-                        if !resolved.starts_with(stage) {
-                            return Err(Error::Invalid(format!(
-                                "local dependency escapes the repository: {p}"
-                            )));
+                        match place(p, base, stage)? {
+                            Place::Missing if !missing_ok => {
+                                return Err(Error::Invalid(format!(
+                                    "local path unavailable in stage: {p}"
+                                )));
+                            }
+                            Place::Escapes => {
+                                return Err(Error::Invalid(format!(
+                                    "local dependency escapes the repository: {p}"
+                                )));
+                            }
+                            Place::Inside | Place::Missing => {}
                         }
                     }
                 }
-                validate_paths(v, base, stage)?;
+                validate_paths(v, base, stage, missing_ok)?;
             }
         }
         toml::Value::Array(a) => {
             for v in a {
-                validate_paths(v, base, stage)?;
+                validate_paths(v, base, stage, missing_ok)?;
             }
         }
         toml::Value::String(s) if s.contains("file:") => {
@@ -558,12 +611,18 @@ fn validate_paths(value: &toml::Value, base: &Path, stage: &Path) -> Result<()> 
                     || location.starts_with('/')
                     || location.as_bytes().get(1) == Some(&b':')
                 {
-                    let resolved =
-                        crate::working_tree::canonical(&base.join(location)).map_err(|_| {
-                            Error::Invalid("dependency reference is unavailable in stage".into())
-                        })?;
-                    if !resolved.starts_with(stage) {
-                        return Err(Error::Invalid("dependency reference escapes stage".into()));
+                    match place(location, base, stage)? {
+                        Place::Missing if !missing_ok => {
+                            return Err(Error::Invalid(
+                                "dependency reference is unavailable in stage".into(),
+                            ));
+                        }
+                        Place::Escapes => {
+                            return Err(Error::Invalid(
+                                "dependency reference escapes stage".into(),
+                            ));
+                        }
+                        Place::Inside | Place::Missing => {}
                     }
                 }
             }
@@ -724,10 +783,10 @@ dev = ["six ==1.15.0", { include-group = "extra" }]
         std::os::unix::fs::symlink(real.path(), &alias).unwrap();
         let manifest: toml::Value =
             toml::from_str("[pypi-dependencies]\nlocal = { path = \"local\" }\n").unwrap();
-        validate_paths(&manifest, &alias, &alias).unwrap();
+        validate_paths(&manifest, &alias, &alias, false).unwrap();
         let escape: toml::Value =
             toml::from_str("[pypi-dependencies]\nout = { path = \"..\" }\n").unwrap();
-        assert!(validate_paths(&escape, &alias, &alias).is_err());
+        assert!(validate_paths(&escape, &alias, &alias, false).is_err());
     }
 
     #[test]
