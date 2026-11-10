@@ -3,7 +3,9 @@
 ## Targets
 
 `environment.yml` and `environment.yaml` files with a `dependencies:` list are
-targets (`conda:environment.yml`), locked with
+targets (`conda:environment.yml`), unless they use a mapping as a key, which
+conda-lock cannot read; a cookiecutter placeholder such as
+`{{cookiecutter.project_name}}` is one. Targets are locked with
 [conda-lock](https://github.com/conda/conda-lock). The lock is
 `<name>.conda-lock.yml` when it exists next to the environment file (so
 `environment.conda-lock.yml` is recognised), otherwise conda-lock's default
