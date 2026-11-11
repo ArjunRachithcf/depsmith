@@ -1,5 +1,5 @@
 //! The JavaScript and TypeScript import scanner.
-use super::imports::{Import, ImportKind, Scan};
+use super::imports::{launched, scan, unreadable, Found, Import, ImportKind, Literal, Scan};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
 
@@ -35,6 +35,17 @@ impl Dialect {
 /// know, the first line of the region is listed in [`Scan::unparsed`], and
 /// the imports it can still recognize are reported.
 pub fn js_imports(source: &str, dialect: Dialect) -> Scan {
+    js_scan(source, dialect).scan
+}
+
+/// Every string literal, and array of them, in `source`, a file in
+/// `dialect`, by line. A template with substitutions is not one.
+pub fn js_strings(source: &str, dialect: Dialect) -> Vec<Literal> {
+    js_scan(source, dialect).literals
+}
+
+/// The imports and literals of `source`.
+pub(super) fn js_scan(source: &str, dialect: Dialect) -> Found {
     let language = match dialect {
         Dialect::JavaScript => tree_sitter_javascript::LANGUAGE,
         Dialect::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
@@ -44,58 +55,21 @@ pub fn js_imports(source: &str, dialect: Dialect) -> Scan {
     parser
         .set_language(&language.into())
         .expect("the bundled grammars match tree-sitter");
-    let mut scan = Scan::default();
-    region(&mut parser, source, 0, RECOVERIES, &mut scan);
-    // Regions read again report after the rest of the file.
-    scan.imports.sort_by_key(|import| import.line);
-    scan.unparsed.sort_unstable();
-    scan.unparsed.dedup();
-    scan
+    scan(&mut parser, source, visit)
 }
 
-/// How many times a region the parser could not read is parsed again from
-/// its second line.
-const RECOVERIES: usize = 8;
-
-/// Scans `text`, which starts on the 0-based line `offset` of the file.
-fn region(parser: &mut Parser, text: &str, offset: usize, recoveries: usize, scan: &mut Scan) {
-    let Some(tree) = parser.parse(text, None) else {
-        return;
-    };
-    let mut retry = None;
-    visit(tree.root_node(), text.as_bytes(), offset, &mut retry, scan);
-    // A region the parser could not read can swallow the statements after
-    // it, so the rest of it is read again on its own.
-    if let Some((start, end)) = retry.filter(|_| recoveries > 0) {
-        if let Some(next) = text[start..end].find('\n') {
-            let from = start + next + 1;
-            let line = offset + text[..from].matches('\n').count();
-            region(parser, &text[from..end], line, recoveries - 1, scan);
-        }
-    }
-}
-
-/// Visits `node` of a region starting on line `offset`, recording in
-/// `retry` the bytes of the first region it could not read that spans
-/// several lines.
 fn visit(
     node: Node,
     source: &[u8],
     offset: usize,
     retry: &mut Option<(usize, usize)>,
-    scan: &mut Scan,
+    found: &mut Found,
 ) {
     let line = offset + node.start_position().row + 1;
-    if node.is_error() || node.is_missing() {
-        scan.unparsed.push(line);
-        if node.is_error() && node.end_position().row > node.start_position().row {
-            retry.get_or_insert((node.start_byte(), node.end_byte()));
-            return;
-        }
-        if node.is_missing() {
-            return;
-        }
+    if unreadable(node, offset, retry, found) {
+        return;
     }
+    let scan = &mut found.scan;
     match node.kind() {
         "import_statement" | "export_statement" => {
             let kind = if node.kind() == "import_statement" {
@@ -129,11 +103,50 @@ fn visit(
                 scan.imports.push(import);
             }
         }
+        // A literal type names a value, not a package.
+        "literal_type" => return,
+        "string" | "template_string" if !is_specifier(node, source) => {
+            if let Some(value) = literal(node, source) {
+                found.literals.push(Literal {
+                    values: vec![Some(value)],
+                    line,
+                    command: launched(node, source),
+                });
+            }
+        }
+        "array" => {
+            let mut cursor = node.walk();
+            let values = node
+                .named_children(&mut cursor)
+                .map(|element| literal(element, source))
+                .collect();
+            found.literals.push(Literal {
+                values,
+                line,
+                command: launched(node, source),
+            });
+        }
         _ => {}
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        visit(child, source, offset, retry, scan);
+        visit(child, source, offset, retry, found);
+    }
+}
+
+/// Whether string `node` is the specifier of an import, which is a usage
+/// site already: of an `import` or `export … from` statement, or the first
+/// argument of `require`, `import()` or a mock.
+fn is_specifier(node: Node, source: &[u8]) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        "import_statement" | "export_statement" | "import_require_clause" => true,
+        "arguments" => parent.parent().is_some_and(|expression| {
+            expression.kind() == "call_expression" && call(expression, source, 0).is_some()
+        }),
+        _ => false,
     }
 }
 

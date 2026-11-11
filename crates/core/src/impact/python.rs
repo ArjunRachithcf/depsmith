@@ -1,30 +1,44 @@
 //! The Python import scanner.
-use super::imports::{Import, ImportKind, Scan};
+use super::imports::{launched, scan, unreadable, Found, Import, ImportKind, Literal, Scan};
 use tree_sitter::{Node, Parser};
 
 /// Every module `source`, a Python file, imports.
 ///
-/// Syntax the parser does not know is skipped: imports outside it are still
-/// reported, and the region's first line is listed in [`Scan::unparsed`].
+/// Where the parser meets syntax it does not know, the first line of the
+/// region is listed in [`Scan::unparsed`], and the imports it can still
+/// recognize are reported.
 pub fn python_imports(source: &str) -> Scan {
+    python_scan(source).scan
+}
+
+/// Every string literal, and list or tuple of them, in `source`, a Python
+/// file, by line. Docstrings and interpolated strings are not literals.
+pub fn python_strings(source: &str) -> Vec<Literal> {
+    python_scan(source).literals
+}
+
+/// The imports and literals of `source`.
+pub(super) fn python_scan(source: &str) -> Found {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_python::LANGUAGE.into())
         .expect("the bundled Python grammar matches tree-sitter");
-    let mut scan = Scan::default();
-    if let Some(tree) = parser.parse(source, None) {
-        visit(tree.root_node(), source.as_bytes(), &mut scan);
-    }
-    scan
+    scan(&mut parser, source, visit)
 }
 
-fn visit(node: Node, source: &[u8], scan: &mut Scan) {
-    let line = node.start_position().row + 1;
+fn visit(
+    node: Node,
+    source: &[u8],
+    offset: usize,
+    retry: &mut Option<(usize, usize)>,
+    found: &mut Found,
+) {
+    let line = offset + node.start_position().row + 1;
     let text = |node: Node| node.utf8_text(source).unwrap_or_default().to_owned();
-    if node.is_error() || node.is_missing() {
-        scan.unparsed.push(line);
+    if unreadable(node, offset, retry, found) {
         return;
     }
+    let scan = &mut found.scan;
     match node.kind() {
         "import_statement" => {
             for name in node.children_by_field_name("name", &mut node.walk()) {
@@ -96,7 +110,7 @@ fn visit(node: Node, source: &[u8], scan: &mut Scan) {
                     if let Some(module) = literal(plugin, source) {
                         scan.imports.push(Import::of(
                             module,
-                            plugin.start_position().row + 1,
+                            offset + plugin.start_position().row + 1,
                             ImportKind::Plugin,
                         ));
                     }
@@ -104,12 +118,54 @@ fn visit(node: Node, source: &[u8], scan: &mut Scan) {
             }
             return;
         }
+        // A docstring, or any string standing alone, names nothing.
+        "expression_statement"
+            if node.named_child_count() == 1
+                && node.named_child(0).is_some_and(|c| c.kind() == "string") =>
+        {
+            return;
+        }
+        // An annotation names a type, not a package, even as a string.
+        "type" => return,
+        "string" if !is_specifier(node, source) => {
+            if let Some(value) = literal(node, source) {
+                found.literals.push(Literal {
+                    values: vec![Some(value)],
+                    line,
+                    command: launched(node, source),
+                });
+            }
+        }
+        "list" | "tuple" => {
+            let mut cursor = node.walk();
+            let values = node
+                .named_children(&mut cursor)
+                .map(|element| literal(element, source))
+                .collect();
+            found.literals.push(Literal {
+                values,
+                line,
+                command: launched(node, source),
+            });
+        }
         _ => {}
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        visit(child, source, scan);
+        visit(child, source, offset, retry, found);
     }
+}
+
+/// Whether string `node` names the module of an import call, such as
+/// `importlib.import_module`, which is a usage site already.
+fn is_specifier(node: Node, source: &[u8]) -> bool {
+    node.parent()
+        .filter(|arguments| arguments.kind() == "argument_list")
+        .and_then(|arguments| arguments.parent())
+        .and_then(|call| call.child_by_field_name("function"))
+        .and_then(|function| function.utf8_text(source).ok())
+        .and_then(|name| name.rsplit('.').next())
+        .is_some_and(|name| matches!(name, "import_module" | "__import__" | "importorskip"))
 }
 
 /// The text of `node` when it is a plain string literal, without prefixes

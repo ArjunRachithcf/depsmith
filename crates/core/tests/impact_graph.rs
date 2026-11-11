@@ -1,7 +1,10 @@
 //! Usage sites of the affected packages in first-party code, and the files
 //! that reach them through the first-party import graph.
 use depsmith_core::{
-    impact::{usages, Affected, AffectedFile, AffectedPackage, Hop, ImportNames, UsageSite},
+    impact::{
+        usages, Affected, AffectedFile, AffectedPackage, ByNameKind, ByNameReference, Hop,
+        ImportNames, UsageSite,
+    },
     Target,
 };
 use std::{fs, path::Path};
@@ -666,6 +669,204 @@ fn a_workspace_member_that_is_itself_a_package_is_imported_by_its_directory_name
         [
             hop("svc/api/main.py", 1),
             hop("svc/core/storage/client.py", 1)
+        ]
+    );
+}
+
+fn reference(
+    file: &str,
+    line: usize,
+    package: &str,
+    name: &str,
+    kind: ByNameKind,
+) -> ByNameReference {
+    ByNameReference {
+        file: file.into(),
+        line,
+        package: package.into(),
+        name: name.into(),
+        kind,
+    }
+}
+
+#[test]
+fn packages_named_in_source_strings_are_references_that_reach_their_importers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        &[
+            ("svc/pyproject.toml", "[project]\nname = \"svc\"\n"),
+            (
+                "svc/build.py",
+                "import subprocess, sys\n\ndef build():\n    \"\"\"Run nuitka.\"\"\"\n    subprocess.run([sys.executable, \"-m\", \"nuitka\", \"--version\"])\n    subprocess.run(\"ruff check .\", shell=True)\n    return version(\"PyYAML\"), \"requests are fine\"\n",
+            ),
+            (
+                "svc/main.py",
+                "from build import build\nAPP = \"svc\"\n\ndef handler(session: \"Requests\", key=\"RUFF\"):\n    app.run(\"ruff is fast\")\n    importlib.import_module(\n        \"nuitka\"\n    )\n",
+            ),
+        ],
+    );
+    let found = usages(
+        root,
+        &target(),
+        &affected(vec![
+            package("pypi", "nuitka", &[]),
+            package("pypi", "ruff", &[]),
+            package("pypi", "pyyaml", &[]),
+            package("pypi", "requests", &[]),
+            package("pypi", "svc", &[]),
+        ]),
+        &ImportNames::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        found.sites,
+        [site("svc/main.py", 6, "nuitka", "nuitka")],
+        "an import's specifier is a usage site only"
+    );
+    assert_eq!(
+        found.by_name,
+        [
+            reference("svc/build.py", 5, "nuitka", "nuitka", ByNameKind::Source),
+            reference("svc/build.py", 6, "ruff", "ruff", ByNameKind::Source),
+            reference("svc/build.py", 7, "pyyaml", "PyYAML", ByNameKind::Source),
+        ],
+        "a docstring or a sentence names nothing"
+    );
+    assert_eq!(
+        file(&found.files, "svc/main.py").unwrap().packages,
+        ["nuitka", "pyyaml", "ruff"],
+        "a reference seeds the reverse walk"
+    );
+}
+
+#[test]
+fn pixi_tasks_name_packages_by_their_executables() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let env = "svc/.pixi/envs/default";
+    write(
+        root,
+        &[
+            (
+                "svc/pixi.toml",
+                "[workspace]\nname = \"svc\"\n\n[tasks]\nlint = \"prek run --all-files\"\nbuild = { cmd = \"python -m nuitka main.py\", depends-on = [\"lint\"] }\n\n[feature.test.tasks]\ntest = { cmd = [\"py.test\", \"-x\"] }\nall = { depends-on = [\"lint\", \"test\"] }\n\n[tasks.self-check]\ncmd = \"svc --check\"\n\n[tasks.types]\ncmd = \"dmypy run\"\n\n[feature.ci.dependencies]\npytest = \"*\"\n\n[feature.ci.tasks]\ntest = \"pixi run -e ci python -X dev -m ruff check\"\ndocs = \"\"\"\nsphinx-build docs out\npixi run test\n\"\"\"\n",
+            ),
+            (
+                &format!("{env}/conda-meta/prek-0.5.3-h0.json"),
+                r#"{"name": "prek", "files": ["bin/prek"]}"#,
+            ),
+            (
+                &format!("{env}/lib/python3.12/site-packages/pytest-8.3.0.dist-info/RECORD"),
+                "pytest/__init__.py,,\n",
+            ),
+            (
+                &format!("{env}/lib/python3.12/site-packages/pytest-8.3.0.dist-info/entry_points.txt"),
+                "[console_scripts]\npy.test = pytest:console_main\npytest = pytest:console_main\n",
+            ),
+        ],
+    );
+    let pixi = Target {
+        id: "pixi:svc/pixi.toml".into(),
+        manager: "pixi".into(),
+        manifest: "svc/pixi.toml".into(),
+    };
+    let names = ImportNames::read(root, &pixi);
+    let found = usages(
+        root,
+        &pixi,
+        &affected(vec![
+            package("conda", "prek", &[]),
+            package("pypi", "nuitka", &[]),
+            package("pypi", "pytest", &[]),
+            package("pypi", "svc", &[]),
+            package("pypi", "mypy", &[]),
+            package("pypi", "ruff", &[]),
+            package("pypi", "sphinx", &[]),
+        ]),
+        &names,
+    )
+    .unwrap();
+    assert_eq!(
+        found.by_name,
+        [
+            reference("svc/pixi.toml", 5, "prek", "prek", ByNameKind::Task),
+            reference("svc/pixi.toml", 6, "nuitka", "nuitka", ByNameKind::Task),
+            reference("svc/pixi.toml", 9, "pytest", "py.test", ByNameKind::Task),
+            reference("svc/pixi.toml", 15, "mypy", "dmypy", ByNameKind::Task),
+            reference("svc/pixi.toml", 22, "ruff", "ruff", ByNameKind::Task),
+            reference(
+                "svc/pixi.toml",
+                23,
+                "sphinx",
+                "sphinx-build",
+                ByNameKind::Task
+            ),
+        ],
+        "the target's own project is never a reference"
+    );
+}
+
+#[test]
+fn package_scripts_name_packages_through_their_installed_bins_and_wrappers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        &[
+            (
+                "web/package.json",
+                r#"{
+  "name": "web",
+  "scripts": {
+    "build": "tsc -p . && vite build",
+    "test": "vitest run",
+    "e2e": "npx playwright test",
+    "lint": "NODE_ENV=ci eslint .",
+    "unit": "cross-env CI=1 npx -p @demo/jest-preset jest --ci",
+    "check": "yarn tsc --noEmit",
+    "all": "npm run build && npm run unit && npm test"
+  }
+}"#,
+            ),
+            (
+                "web/node_modules/typescript/package.json",
+                r#"{"name": "typescript", "bin": {"tsc": "./bin/tsc", "tsserver": "./bin/tsserver"}}"#,
+            ),
+            (
+                "web/src/run.ts",
+                "await execa(\"npx\", [\"vitest\", \"run\"]);\n",
+            ),
+        ],
+    );
+    let found = js_usages(
+        root,
+        vec![
+            package("npm", "typescript", &[]),
+            package("npm", "vitest", &[]),
+            package("npm", "@playwright/test", &[]),
+            package("npm", "eslint", &[]),
+            package("npm", "jest", &[]),
+            package("npm", "@demo/jest-preset", &[]),
+        ],
+    );
+    assert_eq!(
+        found.by_name,
+        [
+            reference("web/package.json", 4, "typescript", "tsc", ByNameKind::Task),
+            reference("web/package.json", 5, "vitest", "vitest", ByNameKind::Task),
+            reference(
+                "web/package.json",
+                6,
+                "@playwright/test",
+                "playwright",
+                ByNameKind::Task
+            ),
+            reference("web/package.json", 7, "eslint", "eslint", ByNameKind::Task),
+            reference("web/package.json", 8, "jest", "jest", ByNameKind::Task),
+            reference("web/package.json", 9, "typescript", "tsc", ByNameKind::Task),
+            reference("web/src/run.ts", 1, "vitest", "vitest", ByNameKind::Source),
         ]
     );
 }

@@ -2,10 +2,13 @@
 //! first-party import graph walked in reverse from them.
 use super::{
     change::Affected,
-    imports::{Import, ImportKind, Scan},
-    js::{js_imports, Dialect},
+    imports::{Import, ImportKind, Literal, Scan},
+    js::{js_scan, Dialect},
     names::ImportNames,
-    python::python_imports,
+    python::python_scan,
+    references::{
+        first_party, npm_bins, package_scripts, pixi_tasks, ByNameKind, ByNameReference, Matcher,
+    },
     specifiers::{typed_package, Resolved, Resolver},
 };
 use crate::{Error, Result, Target};
@@ -72,6 +75,9 @@ pub struct Usages {
     pub sites: Vec<UsageSite>,
     /// Each affected file, by path.
     pub files: Vec<AffectedFile>,
+    /// Each package named without an import, by file and line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_name: Vec<ByNameReference>,
     /// What the scan could not read, with the warnings of the import names
     /// first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -107,6 +113,14 @@ pub struct Usages {
 /// unbuilt entry in `dist/` names its source in `src/`. Any other specifier
 /// names a package, matched against the affected npm packages, with
 /// `@types/x` matching `x`; `node:` built-ins never match.
+///
+/// A package named without an import is a [`ByNameReference`]: a source string
+/// whose whole value is its name or a module it provides, or a command
+/// that runs it (a list, or a string a call such as `subprocess.run`
+/// launches, naming its executable or `-m` module), which also seeds the
+/// reverse walk; and a Pixi task or `package.json` script that runs it. An
+/// executable names the packages the installed environment, `node_modules`
+/// or [`EXECUTABLES`](super::EXECUTABLES) say install it, else its own name.
 ///
 /// # Errors
 ///
@@ -152,34 +166,35 @@ pub fn usages(
             }
         })
         .unzip();
-    let scans: Vec<Scan> = sources
+    let (scans, literals): (Vec<_>, Vec<Vec<Literal>>) = sources
         .iter()
         .zip(&dialects)
         .map(
             |(file, dialect)| match std::fs::read_to_string(root.join(file)) {
                 Ok(text) => {
-                    let scan = match *dialect {
-                        Some(dialect) => js_imports(&text, dialect),
-                        None => python_imports(&text),
+                    let found = match *dialect {
+                        Some(dialect) => js_scan(&text, dialect),
+                        None => python_scan(&text),
                     };
-                    for line in &scan.unparsed {
+                    for line in &found.scan.unparsed {
                         warnings.push(format!(
                             "{}:{line}: the parser could not read this, so its imports are skipped",
                             slashed(file)
                         ));
                     }
-                    scan
+                    (found.scan, found.literals)
                 }
                 Err(e) => {
                     warnings.push(format!("{}: cannot read: {e}", slashed(file)));
-                    Scan::default()
+                    (Scan::default(), vec![])
                 }
             },
         )
-        .collect();
+        .unzip();
 
     let mut roots = vec![];
-    for project in std::iter::once(dir.to_owned()).chain(walked.projects) {
+    let projects = walked.projects;
+    for project in std::iter::once(dir.to_owned()).chain(projects.iter().cloned()) {
         if root.join(&project).join("src").is_dir() {
             roots.push(project.join("src"));
         }
@@ -268,8 +283,82 @@ pub fn usages(
     sites.sort();
     sites.dedup();
 
-    let files = affected_files(&sources, &importers, &sites);
+    // Packages named without an import: in source strings, which also
+    // seed the reverse walk, and in Pixi tasks and package scripts.
+    let mut tasks = vec![(target.manifest.clone(), pixi_tasks(root, target))];
+    if crate::npm::is_package(target) {
+        for manifest in crate::npm::manifests(root, target).unwrap_or_default() {
+            let scripts = package_scripts(root, &manifest);
+            tasks.push((manifest, scripts));
+        }
+    }
+    let manifest_dirs: Vec<PathBuf> = tasks
+        .iter()
+        .map(|(manifest, _)| manifest.parent().unwrap_or(Path::new("")).to_owned())
+        .collect();
+    let bins = npm_bins(root, &manifest_dirs);
+    let first_party = first_party(root, target, &projects);
+    let matcher = Matcher::new(
+        affected
+            .packages
+            .iter()
+            .map(|p| (p.ecosystem.as_str(), p.name.as_str())),
+        &first_party,
+        &provided,
+        Box::new(|executable: &str| {
+            let mut packages = names.executable(executable);
+            packages.extend(bins.get(executable).into_iter().flatten().cloned());
+            packages
+        }),
+    );
+    let mut references = vec![];
+    let mut seeds = sites.clone();
+    for (index, file_literals) in literals.iter().enumerate() {
+        for literal in file_literals {
+            for (package, name) in matcher.literal(literal) {
+                let imported = sites
+                    .iter()
+                    .any(|s| s.file == index && s.line == literal.line && s.package == package);
+                if imported {
+                    continue;
+                }
+                seeds.push(Site {
+                    file: index,
+                    line: literal.line,
+                    module: name.clone(),
+                    package: package.to_owned(),
+                });
+                references.push(ByNameReference {
+                    file: sources[index].clone(),
+                    line: literal.line,
+                    package: package.to_owned(),
+                    name,
+                    kind: ByNameKind::Source,
+                });
+            }
+        }
+    }
+    for (file, tasks) in tasks {
+        for (line, command) in &tasks.commands {
+            for (package, name) in matcher.command(command, &tasks.names) {
+                references.push(ByNameReference {
+                    line: *line,
+                    file: file.clone(),
+                    package: package.to_owned(),
+                    name,
+                    kind: ByNameKind::Task,
+                });
+            }
+        }
+    }
+    references.sort();
+    references.dedup();
+    seeds.sort();
+    seeds.dedup();
+
+    let files = affected_files(&sources, &importers, &seeds);
     Ok(Usages {
+        by_name: references,
         sites: sites
             .into_iter()
             .map(|site| UsageSite {

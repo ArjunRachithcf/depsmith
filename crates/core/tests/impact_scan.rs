@@ -1,6 +1,8 @@
 //! The import scanners: every module a source file imports, with its line
 //! and how it is imported, read with tree-sitter.
-use depsmith_core::impact::{js_imports, python_imports, Dialect, Import, ImportKind};
+use depsmith_core::impact::{
+    js_imports, js_strings, python_imports, python_strings, Dialect, Import, ImportKind, Literal,
+};
 
 fn import(module: &str, names: &[&str], level: usize, line: usize, kind: ImportKind) -> Import {
     Import {
@@ -218,4 +220,80 @@ fn js_imports_inside_and_after_broken_syntax_still_count_with_one_warning_each()
         spaced.imports,
         [import("jest", &[], 0, 1, ImportKind::Reference)]
     );
+}
+
+fn literal(values: &[Option<&str>], line: usize) -> Literal {
+    Literal {
+        values: values.iter().map(|v| v.map(str::to_owned)).collect(),
+        line,
+        command: false,
+    }
+}
+
+fn command(values: &[Option<&str>], line: usize) -> Literal {
+    Literal {
+        command: true,
+        ..literal(values, line)
+    }
+}
+
+#[test]
+fn python_strings_and_lists_of_them_are_literals_but_docstrings_are_not() {
+    let source = r#""""A module docstring naming nuitka."""
+import subprocess, sys
+
+def build():
+    """Build with nuitka."""
+    subprocess.run([sys.executable, "-m", "nuitka", "--version"])
+    name = f"{prefix}-yaml"
+    app: "Flask" = make()
+    return version("pyyaml"), ("ruff", "check")
+"#;
+    assert_eq!(
+        python_strings(source),
+        [
+            command(&[None, Some("-m"), Some("nuitka"), Some("--version")], 6),
+            literal(&[Some("-m")], 6),
+            literal(&[Some("nuitka")], 6),
+            literal(&[Some("--version")], 6),
+            literal(&[Some("pyyaml")], 9),
+            literal(&[Some("ruff"), Some("check")], 9),
+            literal(&[Some("ruff")], 9),
+            literal(&[Some("check")], 9),
+        ],
+        "an interpolated string or an annotation is not a literal; a launched one is a command"
+    );
+}
+
+#[test]
+fn js_strings_and_arrays_of_them_are_literals_but_templates_with_substitutions_are_not() {
+    let source = r#"import { execa } from "execa";
+await execa("npx", ["vitest", "run"]);
+const env = `jsdom`;
+const dynamic = `${name}-loader`;
+"#;
+    assert_eq!(
+        js_strings(source, Dialect::TypeScript),
+        [
+            command(&[Some("npx")], 2),
+            literal(&[Some("vitest"), Some("run")], 2),
+            literal(&[Some("vitest")], 2),
+            literal(&[Some("run")], 2),
+            literal(&[Some("jsdom")], 3),
+        ],
+        "an import's specifier is a usage site, not a literal"
+    );
+}
+
+#[test]
+fn python_imports_after_broken_syntax_still_count_with_one_warning() {
+    let scan = python_imports("import idna\nx = (\n\ndef f(:\n    pass\nimport yaml\n");
+    let modules: Vec<_> = scan.imports.iter().map(|i| i.module.as_str()).collect();
+    assert!(
+        modules.contains(&"idna") && modules.contains(&"yaml"),
+        "{scan:?}"
+    );
+    let mut lines = scan.unparsed.clone();
+    lines.dedup();
+    assert_eq!(scan.unparsed, lines, "one warning per line");
 }

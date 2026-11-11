@@ -37,6 +37,7 @@ mod imports;
 mod js;
 mod names;
 mod python;
+mod references;
 mod specifiers;
 mod tables;
 mod usage;
@@ -46,12 +47,13 @@ pub use change::{
     Reached,
 };
 pub use compare::{sides, Comparison, Sides};
-pub use imports::{Import, ImportKind, Scan};
-pub use js::{js_imports, Dialect};
+pub use imports::{Import, ImportKind, Literal, Scan};
+pub use js::{js_imports, js_strings, Dialect};
 pub use names::ImportNames;
-pub use python::python_imports;
+pub use python::{python_imports, python_strings};
+pub use references::{ByNameKind, ByNameReference};
 pub use tables::{
-    BUILD_TOOLS, COMPILER_PREFIXES, INTERPRETERS, PYTHON_IMPORT_NAMES, PYTHON_NAMESPACES,
-    PYTHON_STDLIB_MAP, RUNTIME_BARRIERS,
+    BUILD_TOOLS, COMPILER_PREFIXES, EXECUTABLES, INTERPRETERS, PYTHON_IMPORT_NAMES,
+    PYTHON_NAMESPACES, PYTHON_STDLIB_MAP, RUNTIME_BARRIERS,
 };
 pub use usage::{usages, AffectedFile, Hop, UsageSite, Usages};
