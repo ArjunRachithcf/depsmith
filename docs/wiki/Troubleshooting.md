@@ -2,19 +2,20 @@
 
 Start with `depsmith init`: it checks the native tools your targets use and
 offers to install the missing ones. `depsmith doctor` shows every native tool
-(Pixi, uv, cargo, conda-lock and its solver, Grype), where it was found, which
+(Pixi, uv, cargo, conda-lock and its solver, npm, Grype), where it was found, which
 versions have been tested, and what each adapter supports.
 
 | Message or symptom | Cause and fix |
 |---|---|
-| Exit 2, "not supported by the … adapter" / "cannot be enforced by the … adapter" | The requested option is unsupported for that target. Remove it, or follow the hint. `--cooldown-days` is rejected rather than ignored; use Pixi's `exclude-newer`. Other options that do not apply to a target (for example `--install` on a workflow) are only noted under validation. |
+| Exit 2, "not supported by the … adapter" / "cannot be enforced by the … adapter" | The requested option is unsupported for that target. Remove it, or follow the hint. `--cooldown-days` is rejected rather than ignored where it cannot be enforced (npm enforces it); use Pixi's or uv's `exclude-newer`. Other options that do not apply to a target (for example `--install` on a workflow) are only noted under validation. |
 | Exit 2, "not a direct dependency of any selected target" | `--package`/`--accept` names must be declared directly by a selected target. Check spelling; conda names are case-insensitive but distinguish `-` and `_`. |
 | "proposal is stale" | The repository changed after preparing (files, tags or the index). Prepare again. |
 | "another depsmith operation is in progress in this repository" | Another apply or recover holds `.depsmith/lock`. Wait for it; the lock is released automatically if that process died. |
 | "no pixi.lock to scan" | `scan` needs an existing lock. Create it with `pixi lock` or `depsmith update`. |
 | "The workspace does not support '<platform>' on this machine" | Editable or source PyPI packages are built for the machine running the update; add its platform to Pixi's `platforms`. |
 | "the selected root is inside a Git repository" | Select the repository root, not a subdirectory. |
-| Git layout rejected (submodules, sparse checkout, includes, …) | These layouts cannot be staged reproducibly yet. |
+| Git layout rejected (sparse checkout, includes, …) | These layouts cannot be staged reproducibly yet. |
+| "the target's directory holds paths left out of the stage" | A submodule, nested repository or symlink leaving the repository sits in the target's directory, so the stage would be incomplete. Targets elsewhere still run; see [Reviewing and applying](Reviewing-and-applying). |
 | "local dependency escapes the repository" | Local path dependencies must be inside the repository. |
 | "local path unavailable in stage" | A local dependency path is missing from the stage: it does not exist, or it is ignored and untracked. Commit it or remove the dependency. |
 | A backend "not found", or `init` exits 3 | The tool is not installed. Run `depsmith init` (or `init --fetch-tools` in CI) to install the tested release, install it yourself, or pass `--tool NAME=PATH`. cargo comes with a pinned rustup toolchain and conda-lock is installed with uv (offered first when missing). |
